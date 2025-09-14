@@ -20,8 +20,8 @@ data_setting:
   n_rand2sample_per_pos: 4 #16
 
 exp_setting:
-  exp_dir: /home/data/zwk/pyproj_DUAV_salad_6.4/exps
-  load2test: /home/data/zwk/pyproj_DUAV_salad_6.4/exps/zurich_5km2_best/epoch006.pth
+  exps_dir: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps
+  load2test: /home/data/zwk/pyproj_neuloc_v0/exps/zurich_5km2_best/epoch006.pth
   load2train: ''
   exp_name: debug_zurich
   p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/SWISSIMAGE2022_blocks132_res05m.json

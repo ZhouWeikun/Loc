@@ -40,7 +40,7 @@ import json
 def get_parse():
     parser = argparse.ArgumentParser(description='Training')
     #about exp setting
-    parser.add_argument('--exp_dir', default='.exps/',type=str, help='the dir that save experiments')
+    parser.add_argument('--exps_dir', default='.exps/',type=str, help='the dir that save experiments')
     parser.add_argument('--exp_name', default='debug',type=str, help='the experiment name that will be saved in exps dir in the root')
     parser.add_argument('--p_yaml', default='/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/opts_wingtra.yaml', type=str, help='the yaml file about the defult setting')
     parser.add_argument('--p_satinfo_json',
@@ -140,7 +140,7 @@ def get_parse():
 
     # --- 组织参数到 group_dict,为了后续保存为yaml时按分层组织 ---
     group_info = {
-        'exp_setting': ['p_yaml', 'p_satinfo_json', 'p_uavinfo_json','exp_name','exp_dir','load2train', 'load2test', 'val','val_freq', 'save_freq', 'tensorboard'],
+        'exp_setting': ['p_yaml', 'p_satinfo_json', 'p_uavinfo_json','exp_name','exps_dir','load2train', 'load2test', 'val','val_freq', 'save_freq', 'tensorboard'],
         'hardware_setting': ['gpu_ids', 'num_worker', 'batchsize', 'autocast'],
         'data_setting': ['imgsize2net', 'satimgsize2crop', 'n_rand2sample_per_pos', 'uav_da', 'sat_da', 'erasing_p'],
         'learning_setting': ['warm_epoch', 'num_epochs', 'droprate','optimizer','lr_sched'],
@@ -185,13 +185,19 @@ class Trainer(object):
             begin_epoch = 0
 
         # config logger and backup files
-        exp_name = get_unique_exp_dir(opt.exp_dir,opt.exp_name)
+            # make the dir to save the exp
+        exp_name = get_unique_exp_dir(opt.exps_dir,opt.exp_name)
         opt.exp_name = exp_name
-        os.makedirs(os.path.join(opt.exp_dir,opt.exp_name),exist_ok=True)
-        logger = get_logger("{}/{}/train.log".format(opt.exp_dir,opt.exp_name),'trainer_logger')
+        exp_dir2save = os.path.join(opt.exps_dir,opt.exp_name)
+        os.makedirs(exp_dir2save,exist_ok=True)
+            # config the logger
+        logger = get_logger("{}/{}/train.log".format(opt.exps_dir,opt.exp_name),'trainer_logger')
         self.logger = logger
         self.logger.info(f"exp ready!, exp_name={exp_name}")
+            #backup the py info
         copyfiles2checkpoints( self.opt )
+        from tool.util_save_git_info import backup_experiment
+        backup_experiment(exp_dir2save,self.opt)
 
         # config tensorborad if necessary
         writer = SummaryWriter("exps/{}/train_tensorboard.log".format(opt.exp_name)) if opt.tensorboard else None
@@ -481,7 +487,7 @@ class Trainer(object):
                 result['rotdeg_fm_north_anticlock'] = rotdeg_fm_north_anticlock
 
             suffix = f"_overlap{overlap}_radius{dataloader.dataset.sat_dataset.halfimg_radius_meter:.0f}m.mat"
-            scipy.io.savemat( f"{self.opt.exp_dir}/{self.opt.exp_name}/{os.path.basename(self.opt.load2test).replace('.pth', suffix)}" ,result)
+            scipy.io.savemat( f"{self.opt.exps_dir}/{self.opt.exp_name}/{os.path.basename(self.opt.load2test).replace('.pth', suffix)}" ,result)
 
 
 

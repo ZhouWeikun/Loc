@@ -1,8 +1,8 @@
 import subprocess
 import os
+import yaml
 
-
-def save_git_info(exp_dir):
+def backup_experiment(exp_dir,opt=None):
     """
     将当前 Git 仓库的 commit hash 和未提交的修改保存到实验目录。
     """
@@ -31,3 +31,10 @@ def save_git_info(exp_dir):
     except Exception as e:
         print(f"无法获取 Git 信息: {e}")
         print("请确保项目是一个 Git 仓库，并且已安装 Git。")
+
+    if opt is not None:  # save opts
+        grouped_params = {}
+        for group, params in opt.group_dict.items():
+            grouped_params[group] = {param: getattr(opt, param) for param in params}
+        with open(f'{exp_dir}/opts.yaml', 'w') as fp:
+            yaml.dump(grouped_params, fp, default_flow_style=False)

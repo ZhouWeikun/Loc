@@ -1,0 +1,72 @@
+data_setting:
+#  h: 224
+#  w: 224
+#  pad: 0
+
+  #version1 about data_argument:
+  DA: false
+  rr: uav
+  cj: 'no'
+  ra: satellite
+  re: satellite
+  #version2 about data_argument:
+  uav_da: ['rr',]
+  sat_da: ['ra','re']
+
+  erasing_p: 0.3
+  imgsize2net: 224
+  #satimgsize2crop：res02m:zuchwil=540,zurich=614; res03m:zuchwil=400; res05m:zurich=224
+  satimgsize2crop: 244
+  n_rand2sample_per_pos: 4 #16
+
+exp_setting:
+  exp_dir: /home/data/zwk/pyproj_DUAV_salad_6.4/exps
+  load2test: /home/data/zwk/pyproj_DUAV_salad_6.4/exps/zurich_5km2_best/epoch006.pth
+  load2train: ''
+  exp_name: debug_zurich
+  p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/SWISSIMAGE2022_blocks132_res05m.json
+  p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info.json
+  dataset_name: zurich
+#  p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/SWISSIMAGE2024_30blocks_res03m.json
+#  p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info.json
+#  dataset_name: zuchwil
+  save_freq: 1
+  tensorboard: true
+  val: True
+  val_freq: 1
+
+hardware_setting:
+  autocast: true
+  batchsize: 2 #24
+  gpu_ids: '0'
+  num_worker: 8
+
+learning_setting:
+  droprate: 0.5
+  lr_sched:
+    gamma: 0.95
+    milestones:
+    - 35
+    - 45
+    name: multistep
+  num_epochs: 50
+  optimizer:
+    lr: 0.01
+    momentum: 0.9
+    name: sgd
+    nesterov: true
+    weight_decay: 0.0005
+  warm_epoch: 0
+
+network_setting:
+  backbone: dinov3
+  block: 2
+  cls_loss: CELoss
+  feature_loss:
+  - WeightedSoftTripletLoss_v1
+  head: ''
+  head_pool: avg
+  kl_loss: KLLoss
+  norm_output: true
+  num_bottleneck: 512
+  w_classify: false

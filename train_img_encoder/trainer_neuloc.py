@@ -196,7 +196,7 @@ class Trainer(object):
         self.logger.info(f"exp ready!, exp_name={exp_name}")
             #backup the py info
         copyfiles2checkpoints( self.opt )
-        from tool.util_save_git_info import backup_experiment
+        from tool.util_backup_exp_by_git import backup_experiment
         backup_experiment(exp_dir2save,self.opt)
 
         # config tensorborad if necessary

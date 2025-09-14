@@ -47,6 +47,18 @@ def parse_git_info(file_path):
 
 
 def reproduce_code_state(exp_dir):
+    # 在 reproduce_code_state 函数的开头
+    try:
+        # 记录当前分支名或 commit hash
+        current_location = subprocess.check_output(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).strip().decode()
+        if current_location == 'HEAD':  # 如果处于分离头指针状态，记录完整的 commit hash
+            current_location = subprocess.check_output(['git', 'rev-parse', 'HEAD']).strip().decode()
+
+        with open('.reproduce_state', 'w') as f:
+            f.write(current_location)
+    except Exception:
+        print("Warning: Could not save the current git state for automatic return.")
+
     """自动化复现指定实验的代码状态。"""
     print("--- Starting Code Reproduction Process ---")
 
@@ -131,3 +143,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     reproduce_code_state(args.exp_dir)
+
+# 外部命令行调用示例
+# python util_reproduce_exp.py path_to_the_dir_contains_the_git_info.txt
+
+# 在复现完成exp后，要返回原来的工作区，直接回到上次提交状态即可
+# git reset --hard HEAD 的核心是 【清理】：它的目的是在原地不动的情况下，把你的工作区打扫干净。它只关心你当前的位置，不关心你要去哪里。
+# git checkout master 的核心是 【移动】：它的目的是把你带到 master 这个分支上去。它关心的是你的目的地，并会把那个目的地的风景（代码状态）展示给你
+# git reset --hard HEAD
+# git checkout master

@@ -10,7 +10,7 @@
     <content url="file://$MODULE_DIR$/../pyproj_pylib_zwk/uavloc_datahandler" />
     <content url="file://$MODULE_DIR$/../pyproj_pylib_zwk/uavloc_utils" />
     <content url="file://$MODULE_DIR$/../pyproj_pylib_zwk/visual_utils" />
-    <orderEntry type="jdk" jdkName="neuloc_v1" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="neuloc_v0" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PyDocumentationSettings">

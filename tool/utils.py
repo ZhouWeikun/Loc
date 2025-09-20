@@ -7,7 +7,7 @@ import numpy as np
 # import cv2
 from shutil import copyfile, copytree, rmtree
 import logging
-from models.taskflow import make_model
+from models.taskflow import make_img_encoder
 from thop import profile, clever_format
 import math
 import sys
@@ -183,7 +183,7 @@ def save_network(network, dirname, epoch_label):
     if torch.cuda.is_available:
         network.cuda()
 
-def save_network_wstate(dirname, network, optimizer, lr_scheduler, epoch_label):
+def save_param(dirname, dict2save,epoch_label):
     if not os.path.isdir('./exps/'+dirname):
         os.mkdir('./exps/'+dirname)
     if isinstance(epoch_label, int):
@@ -191,14 +191,28 @@ def save_network_wstate(dirname, network, optimizer, lr_scheduler, epoch_label):
     else:
         save_filename = 'epoch%s.pth' % epoch_label
     save_path = os.path.join('./exps', dirname, save_filename)
-    torch.save({
-        "model_state": network.cpu().state_dict(),
-        "optimizer_state": optimizer.state_dict(),
-        "scheduler_state": lr_scheduler.state_dict(),
-        "epoch": epoch_label,
-    }, save_path)
-    if torch.cuda.is_available:
-        network.cuda()
+
+    torch.save(dict2save, save_path)
+
+def load_network_wstate(load_from,network,optimizer,lr_scheduler):
+    checkpoint = torch.load(load_from)
+
+    if 'model_state' in checkpoint.keys():
+        network.load_state_dict(checkpoint["model_state"])
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        lr_scheduler.load_state_dict(checkpoint["scheduler_state"])
+        current_epoch = checkpoint["epoch"]
+    else:
+        network.load_state_dict(checkpoint)
+        current_epoch=0
+
+    # torch.save({
+    #     "model_state": network.cpu().state_dict(),
+    #     "optimizer_state": optimizer.state_dict(),
+    #     "scheduler_state": lr_scheduler.state_dict(),
+    #     "epoch": epoch_label,
+    # }, save_path)
+    return current_epoch
 
 
 class UnNormalize(object):
@@ -236,31 +250,13 @@ def check_box(images, boxes):
 # ---------------------------
 def load_network(opt):
     save_filename = opt.checkpoint
-    model = make_model(opt)
+    model = make_img_encoder(opt)
     # print('Load the model from %s' % save_filename)
     network = model
     network.load_state_dict(torch.load(save_filename))
     return network
 
-def load_network_wstate(load_from,network,optimizer,lr_scheduler):
-    checkpoint = torch.load(load_from)
 
-    if 'model_state' in checkpoint.keys():
-        network.load_state_dict(checkpoint["model_state"])
-        optimizer.load_state_dict(checkpoint["optimizer_state"])
-        lr_scheduler.load_state_dict(checkpoint["scheduler_state"])
-        current_epoch = checkpoint["epoch"]
-    else:
-        network.load_state_dict(checkpoint)
-        current_epoch=0
-
-    # torch.save({
-    #     "model_state": network.cpu().state_dict(),
-    #     "optimizer_state": optimizer.state_dict(),
-    #     "scheduler_state": lr_scheduler.state_dict(),
-    #     "epoch": epoch_label,
-    # }, save_path)
-    return current_epoch
 
 
 def toogle_grad(model, requires_grad):

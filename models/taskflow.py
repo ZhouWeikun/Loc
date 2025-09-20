@@ -2,8 +2,8 @@ import torch.nn as nn
 from .Backbone.backbone import make_backbone
 from .Head.head import make_head
 import torch
-# from train_img_encoder.util_circorr_fm_radon import RadonHandler
 import math
+# from train_img_encoder.util_circorr_fm_radon import RadonHandler
 
 
 class Model(nn.Module):
@@ -46,7 +46,7 @@ class Model(nn.Module):
         self.load_state_dict(model2_dict)
 
 
-def make_model(opt):
+def make_img_encoder(opt):
     model = Model(opt)
     # if os.path.exists(opt.load_from):
     #     model.load_params(opt.load_from)

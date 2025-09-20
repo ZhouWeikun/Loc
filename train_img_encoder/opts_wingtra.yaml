@@ -17,27 +17,29 @@ data_setting:
   imgsize2net: 224
   #satimgsize2crop：res02m:zuchwil=540,zurich=614; res03m:zuchwil=400; res05m:zurich=224
   satimgsize2crop: 244
-  n_rand2sample_per_pos: 4 #16
+  n_rand2sample_per_pos: 256 #16
 
 exp_setting:
   exps_dir: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps
-  load2test: /home/data/zwk/pyproj_neuloc_v0/exps/zurich_5km2_best/epoch006.pth
+  load2test: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/debug_zurich_9/epoch099.pth
   load2train: ''
   exp_name: debug_zurich
-  p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/SWISSIMAGE2022_blocks132_res05m.json
+  p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/blocks12_res03m.json
   p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info.json
+  p_uav_geocsv: /home/data/zwk/data_uavimgs_wingtra/Zurich/IMAGES_info/uavimgs_geo_corrected_v1.csv
   dataset_name: zurich
 #  p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/SWISSIMAGE2024_30blocks_res03m.json
 #  p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info.json
 #  dataset_name: zuchwil
   save_freq: 1
-  tensorboard: true
+  tensorboard: True
   val: True
   val_freq: 1
 
 hardware_setting:
-  autocast: true
-  batchsize: 2 #24
+  autocast: False
+  batchsize_sat: 128 #24
+  batchsize_uav: 4
   gpu_ids: '0'
   num_worker: 8
 
@@ -49,9 +51,9 @@ learning_setting:
     - 35
     - 45
     name: multistep
-  num_epochs: 50
+  num_epochs: 100
   optimizer:
-    lr: 0.01
+    lr: 0.0001
     momentum: 0.9
     name: sgd
     nesterov: true

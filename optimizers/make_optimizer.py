@@ -19,9 +19,6 @@ def make_optimizer(model,opt):
         exp_lr_scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=opt.lr_sched['milestones'], gamma=opt.lr_sched['gamma'])
 
     return optimizer,exp_lr_scheduler
-
-
-
 """
         lr = 6e-5,
         optimizer='adamw',
@@ -34,6 +31,9 @@ def make_optimizer(model,opt):
             'total_iters': 4000,
         }
 """
+
+
+
 # configure the optimizer
 def configure_optimizers(self):
     if self.optimizer.lower() == 'sgd':

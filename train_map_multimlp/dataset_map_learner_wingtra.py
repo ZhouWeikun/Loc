@@ -124,7 +124,6 @@ class SatDataset(object):
             imgsize2net=self.imgsize2net,
             mean=self.satinfo_dict['mean_normalized'], std=self.satinfo_dict['std_normalized'])
 
-
     """funcs about sampling satmap:"""
     def crop_satimg_by_nrc(self, nrc, type='tensor'):
         row = int((nrc[0] - self.nr_tiftop) * self.satmap_hw_max)
@@ -143,14 +142,12 @@ class SatDataset(object):
 
         return satimg
 
-
     def mk_rand_nrcs(self, n_rand, dtype=np.float32):
         rand_nrcs = np.random.rand(n_rand, 2).astype(dtype)
         nr = self.nr2sample_h * rand_nrcs[:, 0] + self.nr2sample_min
         nc = self.nc2sample_w * rand_nrcs[:, 1] + self.nc2sample_min
         rand_nrcs = np.stack([nr, nc], axis=1)
         return rand_nrcs
-
 
     # def transfrom_latlon_to_nrc(self, lat_lons: np.ndarray, dtype=np.float32):
     #     from transform_raster_coords import latlon_to_raster_rc
@@ -165,7 +162,7 @@ class SatDataset(object):
     #
     #     return np.stack([row_normed, col_normed], axis=-1).astype(dtype)
     def transfrom_georc_to_nrc(self, georc: np.ndarray, source_epsg_code = 2056, dtype=np.float32):
-        from transform_raster_coords import georc_to_raster_rc
+        from transform_raster_rcs import georc_to_raster_rc
         rows, cols = georc_to_raster_rc(
             geoy=georc[:, 0],
             geox=georc[:, 1],
@@ -177,15 +174,8 @@ class SatDataset(object):
         col_normed = cols / self.satmap_hw_max + self.nc_tifleft
         return np.stack([row_normed, col_normed], axis=-1).astype(dtype)
 
-
-    # def transfrom_nrc_to_latlon(self, nrcs: np.ndarray, dtype=np.float32):
-    #     from transform_raster_coords import raster_rc_to_latlon
-    #     rcs = nrcs * self.satmap_hw_max + self.nr_tiftop
-    #     lats,lons = raster_rc_to_latlon(rcs[:,0],rcs[:,1],self.geo_transform,self.epsg_code)
-    #     # latlons = np.stack([lats, lons], axis=1)
-    #     return np.stack([lats,lons], axis=-1).astype(dtype)
     def transfrom_nrc_to_georc(self, nrcs: np.ndarray,target_espg_code=2056, dtype=np.float32):
-        from transform_raster_coords import raster_rc_to_georc
+        from transform_raster_rcs import raster_rc_to_georc
         rcs = nrcs * self.satmap_hw_max + self.nr_tiftop
         geo_rs,geo_cs = raster_rc_to_georc(
         rows=rcs[:,0],

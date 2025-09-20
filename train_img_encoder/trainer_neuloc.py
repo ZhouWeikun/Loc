@@ -5,19 +5,21 @@ from __future__ import print_function, division
 import argparse
 import torch
 import tqdm
+from torch.ao.nn.quantized.functional import threshold
 from torch.cuda.amp import autocast, GradScaler
 import torch.nn.functional as F
 import time
 import scipy.io
-from optimizers.make_optimizer import make_optimizer
-from models.taskflow import make_model
+from tool.util_mk_optimizer import  make_optimizer
+from models.taskflow import make_img_encoder
 from tool.utils import save_network, copyfiles2checkpoints, get_preds, get_logger, calc_flops_params, set_seed,get_unique_exp_dir
-from tool.utils import load_network_wstate, save_network_wstate
+# from tool.utils import load_network_wstate, save_network_wstate
 import warnings
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import torchvision
 import glob
+import math
 
 from losses.loss_cl import Loss
 warnings.filterwarnings("ignore")
@@ -45,10 +47,13 @@ def get_parse():
     parser.add_argument('--p_yaml', default='/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/opts_wingtra.yaml', type=str, help='the yaml file about the defult setting')
     parser.add_argument('--p_satinfo_json',
                         default='/home/data/zwk/data_uavimgs_XianganXmu__512h_lineClassed/dataset_xmu_meta/satimg_xiangan_xmu_info.json',
-                        type=str, help='training dir path')
+                        type=str, help='')
     parser.add_argument('--p_uavinfo_json',
                         default='/home/data/zwk/data_uavimgs_XianganXmu_512h_lineClassed/dataset_xmu_meta/uavimgs_xiangan_xmu_info.json',
-                        type=str, help='training dir path')
+                        type=str, help='')
+    parser.add_argument('--p_uav_geocsv',
+                        default='/home/data/zwk/data_uavimgs_wingtra/Zurich/IMAGES_info/uavimgs_geo_corrected_v1.csv',
+                        type=str, help='')
     parser.add_argument('--dataset_name',default='xmu', type=str)
     parser.add_argument('--load2test', default="/home/data/zwk/pyproj_neuloc_v0/exps/exp_wohead_vit-b/epoch000.pth", type=str, help='path for testing') # for testing
     parser.add_argument('--load2train', default="", type=str, help='exps path for pre-loading') #for continuing training
@@ -61,21 +66,17 @@ def get_parse():
     parser.add_argument('--gpu_ids', default='0', type=str,
                         help='gpu_ids: e.g. 0  0,1,2  0,2')
     parser.add_argument('--num_worker', default = 16, type=int, help='')
-    parser.add_argument('--batchsize', default = 32, type=int, help='batchsize')
+    parser.add_argument('--batchsize_sat', default = 32, type=int, help='batchsize')
+    parser.add_argument('--batchsize_uav', default = 32, type=int, help='batchsize')
     parser.add_argument('--autocast', action='store_true', default=True, help='use mix precision')
     #about data setting,version 2:
     parser.add_argument('--imgsize2net', default=224, type=int)
     parser.add_argument('--satimgsize2crop', default=224, type=int)
-    parser.add_argument('--n_rand2sample_per_pos', default=2, type=int)
-    parser.add_argument('--uav_da', nargs='+', default=['rr'],help='rr=random_rotate,ra=random affine,re=random erasing,cj=color jitter,cda=color data argument')
-    parser.add_argument('--sat_da', nargs='+', default=['ra','re'],help='rr=random_rotate,ra=random affine,re=random erasing,cj=color jitter,cda=color data argument')
-    parser.add_argument('--erasing_p', default=0.3, type=float,help='random erasing probability, in [0,1]')
+    # parser.add_argument('--n_rand2sample_per_pos', default=2, type=int)
+    # parser.add_argument('--uav_da', nargs='+', default=['rr'],help='rr=random_rotate,ra=random affine,re=random erasing,cj=color jitter,cda=color data argument')
+    # parser.add_argument('--sat_da', nargs='+', default=['ra','re'],help='rr=random_rotate,ra=random affine,re=random erasing,cj=color jitter,cda=color data argument')
+    # parser.add_argument('--erasing_p', default=0.3, type=float,help='random erasing probability, in [0,1]')
     #about networks
-    parser.add_argument('--w_classify', default=False, action='store_true', help='')
-    parser.add_argument('--cls_loss', default="CELoss", type=str, help='loss type of representation learning')
-    parser.add_argument('--kl_loss', default="KLLoss", type=str, help='loss type of mutual learning')
-    parser.add_argument('--feature_loss', nargs='+', default=["WeightedSoftTripletLoss"],
-                        help='"InfoNceLoss","MSLoss","TripletLoss","HardMiningTripletLoss","SameDomainTripletLoss","WeightedSoftTripletLoss","ContrastiveLoss"')
     parser.add_argument('--backbone', default="ViTB-384", type=str, help='ViTB-224;ViTS-224;dinov2_vitb14;ViTB-384')
     parser.add_argument('--head', default="", type=str, help='salad;FSRA;LPN;') #"" means no head
     parser.add_argument('--block', default=2, type=int, help='') #will by used when headF=FSRA,LPN,NetVLAD,NeXtVLAD
@@ -83,6 +84,13 @@ def get_parse():
     parser.add_argument('--head_pool', default="avg", type=str, help='head pooling type for applying') #will by used when head=SingleBranch
     parser.add_argument('--wcls_token', default=False, type=bool) #will by used when head=SingleBranch
     parser.add_argument('--norm_output', default=True, type=bool)
+    parser.add_argument('--w_classify', default=False, action='store_true', help='')
+    parser.add_argument('--feature_loss', nargs='+', default=["WeightedSoftTripletLoss"],
+                        help='"InfoNceLoss","MSLoss","TripletLoss","HardMiningTripletLoss","SameDomainTripletLoss","WeightedSoftTripletLoss","ContrastiveLoss"')
+    parser.add_argument('--cls_loss', default="CELoss", type=str, help='loss type of representation learning')
+    parser.add_argument('--kl_loss', default="KLLoss", type=str, help='loss type of mutual learning')
+
+
     #about learning setting
     parser.add_argument('--num_epochs', default=50, type=int, help='total epoches for training')
     parser.add_argument('--warm_epoch', default=0, type=int,
@@ -140,9 +148,9 @@ def get_parse():
 
     # --- 组织参数到 group_dict,为了后续保存为yaml时按分层组织 ---
     group_info = {
-        'exp_setting': ['p_yaml', 'p_satinfo_json', 'p_uavinfo_json','exp_name','exps_dir','load2train', 'load2test', 'val','val_freq', 'save_freq', 'tensorboard'],
-        'hardware_setting': ['gpu_ids', 'num_worker', 'batchsize', 'autocast'],
-        'data_setting': ['imgsize2net', 'satimgsize2crop', 'n_rand2sample_per_pos', 'uav_da', 'sat_da', 'erasing_p'],
+        'exp_setting': ['p_yaml', 'p_satinfo_json', 'p_uavinfo_json','p_uav_geocsv','exp_name','exps_dir','load2train', 'load2test', 'val','val_freq', 'save_freq', 'tensorboard'],
+        'hardware_setting': ['gpu_ids', 'num_worker', 'batchsize_sat','batchsize_uav', 'autocast'],
+        'data_setting': ['imgsize2net', 'satimgsize2crop', ],
         'learning_setting': ['warm_epoch', 'num_epochs', 'droprate','optimizer','lr_sched'],
         'network_setting': ['w_classify','block', 'cls_loss', 'feature_loss', 'kl_loss', 'num_bottleneck', 'backbone', 'head', 'head_pool','wcls_token','norm_output'] # 补上 wcls_token 和 norm_output
     }
@@ -164,27 +172,58 @@ class Trainer(object):
             self.opt.use_gpu = False
         self.device = device
 
+        # config the img_encoder
+        self.img_encoder = make_img_encoder(self.opt)
+        self.img_encoder = self.img_encoder.to(self.device)
+            # freeze the para
+        for param in self.img_encoder.parameters():
+            param.requires_grad = False
+        # config the mlp
+        from models.pos_encoder import PositionalEncoder
+        self.rc_pos_encoder = PositionalEncoder(input_dims=2,include_input=True,multires=6)
+        self.rot_pos_encoder = PositionalEncoder(input_dims=2,include_input=True,multires=4)
+        self.scale_pos_encoder = PositionalEncoder(input_dims=1,include_input=True,multires=4)
+        coord_dim = self.rc_pos_encoder.out_dim+self.rot_pos_encoder.out_dim+self.scale_pos_encoder.out_dim
+        from models.ocn_mlp import LocalDecoder
+        self.decoder = LocalDecoder(dim=coord_dim,c_dim=self.img_encoder.backbone.output_channel,hidden_size=512,n_blocks=5,output_dim=1,c_opteration='mul').to(self.device)
 
     def train(self):
         opt = self.opt
-        self.img_encoder = make_model(self.opt)
-        if self.opt.use_gpu:
-            self.img_encoder = self.img_encoder.to(self.device)
-        model = self.img_encoder
-        self.optimizer_ft, self.exp_lr_scheduler = make_optimizer(self.img_encoder, self.opt)
-        optimizer,scheduler = self.optimizer_ft,self.exp_lr_scheduler
-
-        # config dataloader
-        # self.dataloader = make_dataloader_gta(self.opt,stage='train') if self.opt.dataset_name == 'gta' else make_dataloader_xmu(self.opt,stage='train')
-        self.dataloader_train,self.dataloader_test = make_dataloader_wingtra(opt)
 
         # load the ckpt for continuing train if necessray
+        from tool.util_ckpt_handler import load_param
         if opt.load2train is not None and len(opt.load2train)>0:
-            begin_epoch = load_network_wstate(opt.load2train, model, optimizer, scheduler)
+            dict2load={
+                "img_encoder": self.img_encoder,
+                "decoder": self.decoder,
+                "optimizer_state": self.optimizer,
+                # "scheduler_state": self.lr_scheduler.state_dict(),
+                "epoch": 0,
+            }
+            load_param(opt.load2train,dict2load)
+            begin_epoch = dict2load["epoch"]
         else:
             begin_epoch = 0
 
-        # config logger and backup files
+        #config the optimizer ,todo:
+        from tool.util_mk_optimizer import create_optimizer_w_temple
+        self.optimizer = create_optimizer_w_temple({"img_encoder":self.img_encoder,"mlp":self.decoder},'adam')
+        # self.optimizer, self.lr_scheduler = make_optimizer(self.img_encoder, self.opt)
+        # optimizer,scheduler = self.optimizer,self.lr_scheduler
+
+        # config the datasets:
+        from dataset_satmap_wingtra import SatDataset
+        self.sat_dataset = SatDataset(
+            p_satinfo_json=self.opt.p_satinfo_json,
+            p_uav_geocsv=self.opt.p_uav_geocsv,
+            imgsize2net=224,
+        )
+        self.sat_dataloader = torch.utils.data.DataLoader(self.sat_dataset, batch_size = self.opt.batchsize_sat,
+                                                          num_workers = self.opt.num_worker,
+                                                          pin_memory=True, shuffle=True, drop_last=False,
+                                                          persistent_workers=True)
+
+        # config the logger&writer
             # make the dir to save the exp
         exp_name = get_unique_exp_dir(opt.exps_dir,opt.exp_name)
         opt.exp_name = exp_name
@@ -194,300 +233,316 @@ class Trainer(object):
         logger = get_logger("{}/{}/train.log".format(opt.exps_dir,opt.exp_name),'trainer_logger')
         self.logger = logger
         self.logger.info(f"exp ready!, exp_name={exp_name}")
-            #backup the py info
-        copyfiles2checkpoints( self.opt )
-        from tool.util_backup_exp_by_git import backup_experiment
-        backup_experiment(exp_dir2save,self.opt)
-
-        # config tensorborad if necessary
-        writer = SummaryWriter("exps/{}/train_tensorboard.log".format(opt.exp_name)) if opt.tensorboard else None
-
-        # config loss
-        loss_dtype = torch.float16 if opt.autocast and opt.head!="" else torch.float32
-        opt.loss_dtype = loss_dtype
-        nnloss = Loss(opt)
+            # config tensorborad if necessary
+        self.writer = SummaryWriter("exps/{}/train_tensorboard.log".format(opt.exp_name)) if opt.tensorboard else None
 
         # ready to trian
         # self.val()
+        self.img_encoder.train()  # Set model to training mode
         num_epochs = opt.num_epochs
         since = time.time()
         scaler = GradScaler()
         step = 0
-        rc_radius = self.dataloader_train.dataset.sat_dataset.halfimg_radius_nrc * 0.5
+        loss_mse = torch.nn.MSELoss()
+        # rc_radius = self.dataloader_train.dataset.sat_dataset.halfimg_radius_nrc * 0.5
         for epoch in range(begin_epoch,num_epochs):
             logger.info('Epoch {}/{}'.format(epoch, num_epochs - 1))
 
-            model.train(True)  # Set model to training mode
+            for it,data in tqdm.tqdm(enumerate(self.sat_dataloader)):
+                satimg, sat_nrc, rad_roted, satimgsize_cover_ratio = data
+                # uav_imgs, uav_nrcs = next(iter(self.uav_dataloader_train))
 
-            for it,data in tqdm.tqdm(enumerate(self.dataloader_train)):
-                # time_it10 = time.time()
+                # making coords
+                from util_gen_pose_samples import generate_pose_samples_for_batch
+                from models.pos_encoder import encode_4d_coords
+                coords = torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio], 1).to(self.device)
+                coords_sample = generate_pose_samples_for_batch(
+                    p_true_batch=coords,
+                    rc_bounds=(self.sat_dataset.nr2sample_range,self.sat_dataset.nc2sample_range),
+                    num_gaussian_samples=128,
+                    rc_std_dev=self.sat_dataset.halfimg_radius_nrc*0.5,
+                    direction_std_dev_rad=np.deg2rad(45),
+                    log_scale_std_dev=0.2,
+                    num_uniform_samples=1024,
+                    scale_bounds=self.sat_dataset.satimgsize_scale_to_200m_boundary,
+                )
+                coords_sample_encoded = encode_4d_coords(coords_sample,self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder)
+                #debug:vis the samples
+                from util_gen_pose_samples import visualize_sampling_results
+                # visualize_sampling_results(
+                #     samples_tensor=coords_sample[:1],
+                #     anchors_tensor=coords[:1],
+                #     rc_std_dev=self.sat_dataset.halfimg_radius_nrc,
+                #     log_scale_std_dev=np.deg2rad(45),
+                #     direction_std_dev_rad=0.2
+                # )
 
-                # 获取输入无人机和卫星数据
-                imgs_d, imgs_s, imgs_s_rand, rcs_d, rcs_s, rcs_rand = data
-                # debug
-                # rcs_d, rcs_s, rcs_rand = None,None,None
-                # imgs_d, imgs_s, imgs_s_rand, rcs_d, rcs_rand = data
+                # making cooresponding distance
+                diff_rcs = coords.unsqueeze(1)[:,:,:2] - coords_sample[:,:,:2]
+                dists_rc = torch.norm(diff_rcs,dim=-1,keepdim=True)
+                diff_rots = coords.unsqueeze(1)[:, :, 2:3] - coords_sample[:, :, 2:3]
+                # 无论 diff_rots 的值有多大或多小，sin 和 cos 函数都会利用其周期性，将其映射到 [-1, 1] 的标准值域上。
+                # 实际上，这一步是把一个“角度”转换为了单位圆上的一个点的 (x, y) 坐标，其中 x = cos(diff_rots)，y = sin(diff_rots)。
+                # torch.atan2(y, x): atan2(y, x) 函数的作用是根据一个点的 (x, y) 坐标，计算出该点与原点连线和X轴正半轴之间的夹角。
+                # 这个函数的一个重要特性是，它的输出值域被严格限制在 (-π, π] 之间（也就是-180度到+180度）
+                dists_rot = torch.abs(torch.atan2(torch.sin(diff_rots), torch.cos(diff_rots)))
+                diff_scales = coords.unsqueeze(1)[:, :,3:] /coords_sample[:, :,3:]
+                dists_scale = torch.abs(torch.log(diff_scales)) #比例关系在对数空间中会变为加减关系
 
-                imgs = torch.concatenate([imgs_d,imgs_s,imgs_s_rand],dim=0).to(self.device)
-                # rcs = torch.concatenate([rcs_pos,rcs_pos,rcs_rand],dim=0).to(self.device)
-                n_d = imgs_d.shape[0]
+                norm_factor_rc = math.sqrt(self.sat_dataset.nr2sample_h**2+self.sat_dataset.nc2sample_w**2)
+                nrom_factor_rot = torch.pi #todo:make the threshold auto
+                nrom_factor_scale = math.log(self.sat_dataset.satimgsize_scale_to_200m_boundary[1]/self.sat_dataset.satimgsize_scale_to_200m_boundary[0])
+                dists_rc_normed = dists_rc/norm_factor_rc
+                dists_rot_normed = dists_rot/nrom_factor_rot
+                dists_scale_normed = dists_scale/nrom_factor_scale
+
+                # 1. 定义权重 (这是需要您根据实验调整的超参数)
+                w_rc = 1.0  # 位置权重，通常设为1.0作为基准
+                dist_threshold = self.sat_dataset.halfimg_radius_nrc
+                w_d = dist_threshold/dists_rc_normed # 方向权重
+                w_s = w_d # 尺度权重
+                # 2. 计算加权的平方和
+                dist_true_squared = (
+                        w_rc * (dists_rc_normed ** 2) +
+                        w_d * (dists_rot_normed ** 2) +
+                        w_s * (dists_scale_normed ** 2)
+                )
+                # 3. (可选但推荐) 取平方根，得到最终的距离
+                # 这使得 dist_true 的“单位”与 dist_pred 保持一致，损失函数更稳定
+                dist_label = torch.sqrt(dist_true_squared) + 1e-7
+
+                # making feats
+                feats = self.img_encoder(satimg.to(self.device))
+                feats = feats.unsqueeze(1).expand(-1, coords_sample_encoded.shape[1], -1)
+
+                #小批量迭代
+                # coords_sample_encoded = coords_sample_encoded.flatten(start_dim=0,end_dim=1)
+                # feats = feats.flatten(start_dim=0,end_dim=1)
+                # dist_label = dist_label.flatten(start_dim=0,end_dim=1)
+                # mini_batch_size = 4096  # 可以根据显存调整
+                # num_iterations_per_batch = num_total_samples // mini_batch_size
+                # # 4. 进入内部迭代循环
+                # for i in range(num_iterations_per_batch):
+                #     # a. 随机采样索引
+                #     indices = torch.randperm(num_total_samples, device=self.device)[:mini_batch_size]
+                #
+                #     # b. 根据索引创建 mini_batch
+                #     mini_coords = all_coords_encoded[indices]
+                #     mini_feats = all_feats[indices]
+                #     mini_labels = all_labels[indices]
+                #
+                #     # c. 梯度清零，前向传播，计算loss (和之前一样)
+                #     self.optimizer.zero_grad()
 
                 # 梯度清零
-                optimizer.zero_grad()
-                with autocast():
-                    if opt.wcls_token and opt.head!="":
-                        outputs, clses = model(imgs)
-                    else:
-                        outputs = model(imgs)
-                outputs = torch.concatenate(outputs,dim=-1) if type(outputs) == list else outputs
+                self.optimizer.zero_grad()
+                if opt.autocast:
+                    with autocast():
+                        # making feats
+                        feats = self.img_encoder(satimg.to(self.device))
+                        feats = feats.unsqueeze(1).expand(-1, coords_sample_encoded.shape[1], -1)
+                        # pred dist
+                        dist_pred = self.decoder(coords_sample_encoded, feats)
+                else:
+                    # making feats
+                    feats = self.img_encoder(satimg.to(self.device))
+                    feats = feats.unsqueeze(1).expand(-1, coords_sample_encoded.shape[1], -1)
+                    # pred_dist
+                    dist_pred = self.decoder(coords_sample_encoded, feats)
+                # loss = torch.nn.functional.smooth_l1_loss(dist_pred.squeeze(),dist_label.squeeze())
+                # loss = torch.abs(dist_pred.squeeze()-dist_label.squeeze()).sum(dim=-1).mean()
+                loss = loss_mse(dist_pred.squeeze(), dist_label.squeeze())
 
-                outputs = F.normalize(outputs,dim=-1) if opt.norm_output else outputs
-                # loss_dict = nnloss.forward(outputs[:n_d],outputs[n_d:2*n_d],outputs[2*n_d:])
-                loss_dict = nnloss.forward(outputs[:n_d], outputs[n_d:2 * n_d], outputs[2 * n_d:],rcs_d,rcs_s,rcs_rand,rc_radius) #query,pos,random
-
-                # time_netbackwad_begin = time.time()
                 # 反向传播
                 if opt.autocast:
-                    scaler.scale(loss_dict['all']).backward()
-                    scaler.step(optimizer)
+                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
                     scaler.update()
                 else:
-                    loss_dict['all'].backward()
-                    optimizer.step()
+                    loss.backward()
+                    self.optimizer.step()
 
                 # 输出loss指标
                 if it%10==0:
-                    print(f"loss_all={loss_dict['all'].item():.4f}")
-                    # time_it10 = time.time() - time_it10
-                    # print(f"time_it10={time_it10:.6f}")
-                    if opt.tensorboard:
-                        writer.add_scalars('losses', loss_dict, step)
+                    if self.writer is not None:
+                        self.writer.add_scalars('loss', loss.item(), step)
                 step += 1
 
-            scheduler.step()  # modify the learning rate
+            # modify the learning rate
+            # scheduler.step()
+
+            # save the network's para
             # if epoch % 10 == 9 and epoch >= 110:
             # if epoch % 2 == 0:
             # if (epoch == 10) or (epoch % 10 == 9 and epoch >= 110):
                 # if ((epoch > 0) and (epoch % opt.save_freq == 0)) or ( epoch % 10 == 9 and epoch >= 110 ):
-            save_network_wstate(opt.exp_name, model, optimizer, scheduler, epoch)
+            from tool.util_ckpt_handler import save_param
+            para2save = {
+                "img_encoder":self.img_encoder.state_dict(),
+                "decoder":self.decoder.state_dict(),
+                "optimizer_state": self.optimizer.state_dict(),
+                # "scheduler_state": self.lr_scheduler.state_dict(),
+                "epoch": epoch,
+                       }
+            save_param(opt.exp_name, para2save)
+            self.img_encoder.to(self.device)
+            self.decoder.to(self.device)
 
-            self.val() if opt.val and (epoch % opt.val_freq ==0) else None
+            # val
+            # self.val() if opt.val and (epoch % opt.val_freq ==0) else None
             self.img_encoder.train()
+
+            # log info
             str2log = ''
-            for k, v in loss_dict.items():
-                str2log += f'{k}={v.item():.3f}; '
+            # for k, v in loss_dict.items():
+            #     str2log += f'{k}={v.item():.3f}; '
             str2log += f'epcoh={epoch}'
-            logger.info(str2log)
-            # if opt.tensorboard:
-            #     writer.add_scalars('losses', loss_dict, epoch)
+            logger.info(f'loss={loss.item()}')
             time_elapsed = time.time() - since
             since = time.time()
             logger.info('epoch{:.0f} finished in {:.0f}m {:.0f}s'.format(epoch,time_elapsed // 60, time_elapsed % 6))
             logger.info('-' * 50)
 
+            # backup the py info, at least have trained a epoch
+            if epoch==0:
+                from tool.util_backup_exp_by_git import backup_experiment
+                backup_experiment(exp_dir2save, self.opt)
 
-    def val(self,overlap=0.25):
-        torch.cuda.empty_cache()
-        self.img_encoder.eval()
-        from datasets_custom.eval_gta import GTAEvaluator
-        if self.opt.dataset_name == 'gta':
-            if not hasattr(self, 'gta_evaluator'):
-                self.gta_evalator = GTAEvaluator(uav_transform=self.dataloader.dataset.uav_transform_test,sat_transform=self.dataloader.dataset.sat_transform_test)
-            self.gta_evalator.eval_gta(model=self.img_encoder,logger=self.logger)
-        else:
-            with torch.no_grad():
-                ###############################
-                # --- 1. 在CPU上准备和缓存所有瓦片数据 ---
-                # 这个逻辑确保 self.sat_tiles 是一个存储在CPU内存中的、巨大的瓦片张量
-                resize_transform = torchvision.transforms.Resize(self.opt.imgsize2net)
-                if not hasattr(self, 'sat_tiles') or self.sat_tiles is None:
-                    print("首次运行，正在从数据集中裁剪瓦片...")
-                    # 确保 crop_sat_unifrom 返回的是CPU上的Tensor或Numpy数组
-                    sat_tiles_cpu, rc_gallery = self.dataloader_test.dataset.sat_dataset.crop_sat_unifrom(overlap=overlap,size2clip=self.opt.satimgsize2crop)
-                    sat_tiles_cpu = resize_transform(sat_tiles_cpu.reshape(-1, *sat_tiles_cpu.shape[2:]))
-                    # 在CPU上进行变形和缓存
-                    self.sat_tiles = sat_tiles_cpu
-                    self.rc_gallery = rc_gallery
-                    print(f"已在CPU上缓存 {self.sat_tiles.shape[0]} 个瓦片。")
-                else:
-                    rc_gallery = self.rc_gallery
-                    print("检测到已缓存的瓦片，直接从CPU内存使用。")
+    def test(self):
+        self._test_ready()
 
-                # --- 2. 分批处理瓦片，每次只将一小批数据移至GPU ---
-                split_size = 32  # 这是您送入模型的批大小 (batch size)
-                feat_gallery = []
-                print("开始分批提取特征...")
-                # torch.split 会从巨大的CPU张量 self.sat_tiles 中切分出一小块 tiles_batch_cpu
-                for tiles_batch_cpu in tqdm.tqdm(torch.split(self.sat_tiles, split_size, dim=0),desc="Extracting Features"):
-                    # 关键改动：只将当前这一小批数据移动到GPU
-                    tiles_batch_gpu = tiles_batch_cpu.to(self.device)
-                    # 使用 torch.no_grad() 进行推理，可以节省显存并加速
-                    with torch.no_grad():
-                        # 将GPU上的批次送入模型
-                        output = self.img_encoder(tiles_batch_gpu, ret_sg=False)
-                    # (您的后续处理逻辑保持不变)
-                    output = output[1] if isinstance(output, list) else output
-                    # 将计算结果立即移回CPU，以释放GPU显存
-                    feat_g = output.detach().cpu()
-                    feat_g = feat_g.view(feat_g.shape[0], -1) if len(feat_g.shape) > 2 else feat_g
-                    feat_gallery.append(feat_g)
-                # --- 3. 在CPU上拼接所有批次的特征 ---
-                feat_gallery = torch.cat(feat_gallery, dim=0)
-                print("所有瓦片的特征已提取完成。")
+        for it, data in tqdm.tqdm(enumerate(self.sat_dataloader)):
+            satimg, sat_nrc, rad_roted, satimgsize_cover_ratio = data #the rot_rad are limited in [0,2pi]
+            # uav_imgs, uav_nrcs = next(iter(self.uav_dataloader_train))
 
-                # get feat_querys from uavimgs
-                feat_query,rc_query = [],[]
-                for data in tqdm.tqdm(self.dataloader_test):
-                    uavimg_q, uav_rc = data[0],data[1]
-                    output = self.img_encoder(uavimg_q.to(self.device),ret_sg=False)
-                    feat_q = output[1] if type(output)==list else output
-                    feat_q =  feat_q.view(feat_q.shape[0],-1) if len(feat_q.shape)>2 else feat_q
-                    feat_query.append(feat_q.detach().cpu())
-                    rc_query.append(uav_rc)
-                feat_query = torch.cat(feat_query,dim=0)
-                rc_query = np.concatenate(rc_query,axis=0)
+            feats = self.img_encoder(satimg.to(self.device))
+            from util_vis_4d_fields_in_2d import visualize_udf_slice_rc
+            visualize_udf_slice_rc(
+                row_range=self.sat_dataset.nr2sample_range,
+                col_range=self.sat_dataset.nc2sample_range,
+                d_val=rad_roted.item(),
+                s_val=satimgsize_cover_ratio.item(),
+                resolution=32,
+                model_func=self.decoder,
+                pos_encoders=[self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder],
+                c_feat=feats[0],
+                gt_rc=sat_nrc,
+            )
 
-                from eval_recall_fm_salad import qurey_label_fm_gallery_nrc
-                distrc_sats2uav,uav_labels_query = qurey_label_fm_gallery_nrc(rc_gallery.reshape(-1,2), rc_query, self.dataloader_test.dataset.sat_dataset.halfimg_radius_nrc)
-
-                from eval_recall_fm_salad import compute_recall_from_feat
-                d = compute_recall_from_feat(feat_query.contiguous(), feat_gallery.contiguous(), uav_labels_query, [1, 5, 20, 50, 200], faiss_gpu=False)
-                info = "Recall"
-                for k, v in d.items():
-                    info = info + f" @{k}:{v * 100:.2f} "
-                self.logger.info(info)
-
-            self.img_encoder.train()
+            from util_vis_4d_fields_in_3d import visualize_udf_3d_rc_rot
+            visualize_udf_3d_rc_rot(
+                r_range=self.sat_dataset.nr2sample_range,
+                c_range=self.sat_dataset.nc2sample_range,
+                rot_range=(0,2*math.pi),
+                resolution=64,
+                s_val=satimgsize_cover_ratio.item(),
+                model_func=self.decoder,
+                pos_encoders=[self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder],
+                c_feat=feats[0],
+                gt_pose=torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio],dim=-1).squeeze().numpy()
+            )
 
 
-    def _test_ready(self):
-        opt = self.opt
-        # load the training config to update opt
-        suffix = '.yaml'
-        pattern = os.path.join(os.path.dirname(opt.load2test), f'*{suffix}')
-        config_path = glob.glob(pattern)[0]
-        with open(config_path, 'r') as stream:
-            config = yaml.load(stream, Loader=yaml.FullLoader)
-        for group_dict_key, group_dict in config.items():
-            if group_dict_key == 'network_setting':
-                for cfg, value in group_dict.items():
-                    setattr(opt, cfg, value)
-            else:
-                for cfg, value in group_dict.items():
-                    if not hasattr(opt, cfg):
-                        setattr(opt, cfg, value)
-
-        self.img_encoder = make_model(self.opt)
-        if self.opt.use_gpu:
-            self.mdoel = self.img_encoder.to(self.device)
-        # model.load_state_dict(torch.load(opt.checkpoint)) #org version
-        checkpoint = torch.load(opt.load2test)
-        self.img_encoder.load_state_dict(checkpoint["model_state"]) if "model_state" in checkpoint else self.mdoel.load_state_dict(checkpoint)
-        self.img_encoder.eval()
-        self.dataloader_train,self.dataloader_test = make_dataloader_wingtra(opt)
-        return self.img_encoder, self.dataloader_test
 
 
-    def test(self,overlap=0.5,with_sg=False,save_res=False ):
-        model, dataloader = self._test_ready()
 
-        # get feat_refs from satimg
-        # --- 1. 装载所有瓦片至cpu ---
-        # 确保 crop_sat_unifrom 返回的是CPU上的Tensor或Numpy数组
-        sat_tiles, rc_gallery = self.dataloader_test.dataset.sat_dataset.crop_sat_unifrom(overlap=overlap)
-        # 在CPU上进行变形和缓存
-        sat_tiles = sat_tiles.reshape(-1, *sat_tiles.shape[2:])
-        print(f"已在CPU上缓存 {sat_tiles.shape[0]} 个瓦片。")
-        # --- 2. 分批处理瓦片，每次只将一小批数据移至GPU ---
-        split_size = 32  # 这是您送入模型的批大小 (batch size)
-        feat_gallery = []
-        sg_gallery = []
-        print("开始分批提取特征...")
-        for tiles_batch_cpu in tqdm.tqdm(torch.split(sat_tiles, split_size, dim=0), desc="Extracting Features"):
-            tiles_batch_gpu = tiles_batch_cpu.to(self.device)
-            with torch.no_grad():
-                if with_sg:
-                    output, output_sgs = model(tiles_batch_gpu, ret_sg=True)
-                    sg_gallery.append(output_sgs)
-                else:
-                    output = model(tiles_batch_gpu, ret_sg=False)
-            output = output[1] if isinstance(output, list) else output
-            # 将计算结果立即移回CPU，以释放GPU显存
-            feat_g = output.detach().cpu()
-            feat_g = feat_g.view(feat_g.shape[0], -1) if len(feat_g.shape) > 2 else feat_g
-            feat_gallery.append(feat_g)
-        # --- 3. 在CPU上拼接所有批次的特征 ---
-        feat_gallery = torch.cat(feat_gallery, dim=0)
-        print("所有瓦片的特征已提取完成。")
-
-        # get feat_querys from uavimgs
-        feat_query,rc_query = [],[]
-        sg_query = []
-        for data in tqdm.tqdm(dataloader):
-            uavimg_q, uav_rc = data[0].to(self.device),data[1]
-            if with_sg:
-                output,output_sgs = model(uavimg_q,ret_sg=True)
-                sg_gallery.append(output_sgs)
-            else:
-                output = model(uavimg_q, ret_sg=False)
-            feat_q = output[1] if type(output)==list else output
-            feat_q =  feat_q.view(feat_q.shape[0],-1) if len(feat_q.shape)>2 else feat_q
-            feat_query.append(feat_q.detach().cpu())
-            rc_query.append(uav_rc)
-            sg_query.append(output_sgs) if with_sg else None
-        feat_query = torch.cat(feat_query,dim=0)
-        rc_query = np.concatenate(rc_query,axis=0)
-
-        # get georc_info
-        georc_gallary = dataloader.dataset.sat_dataset.transform_nrc_to_georc(rc_gallery.reshape(-1,2)) #todo:
-        sg_gallery = torch.cat(sg_gallery, dim=0).detach().cpu() if with_sg else None
-        georc_query = dataloader.dataset.sat_dataset.transform_nrc_to_georc(rc_query)
-        sg_query = torch.cat(sg_query, dim=0).detach().cpu() if with_sg else None
-
-        # get gt_label fro perd
-        from eval_recall_fm_salad import qurey_label_fm_gallery_nrc
-        distrc_sats2uav, uav_labels_query = qurey_label_fm_gallery_nrc(rc_gallery.reshape(-1, 2), rc_query, dataloader.dataset.sat_dataset.halfimg_radius_nrc)
-        rotdeg_fm_north_anticlock = dataloader.uav_dataset.rotdeg_fm_north_anticlock if hasattr(dataloader.dataset.uav_dataset,'rotdeg_fm_north_anticlock') else None
-
-        # log the recall
-        from eval_recall_fm_salad import compute_recall_from_feat
-        d = compute_recall_from_feat(feat_query.contiguous(), feat_gallery.contiguous(), uav_labels_query,[1, 5, 20, 50, 200], faiss_gpu=False)
-        info = "Recall"
-        for k, v in d.items():
-            info = info + f" @{k}:{v * 100:.2f} "
-        self.logger.info(info) if hasattr(self, "logger") else None
-        # write the recall to a txt
-        p_txt2write = os.path.join(os.path.dirname(self.opt.load2test), f"recall_overlap{overlap}.txt")
-        info2wirte = 'p_json=' + self.opt.p_satinfo_json
-        info2wirte += f'\nn_refs={feat_gallery.shape[0]}'
-        info2wirte += f'\nsatimgsize2crop={self.opt.satimgsize2crop}'
-        info2wirte += f'\nrecall_m={dataloader.dataset.sat_dataset.halfimg_radius_meter}'
-        # info2wirte += f'\nsample_overlap={overlap}'
-        info2wirte += info
-        with open(p_txt2write, 'a', encoding='utf-8') as f:
-            f.write(info2wirte)
-
-        if save_res:
-            # save the result matrix:
-            result = {'gallery_feat': feat_gallery.detach().cpu().numpy(),
-                      'gallery_rc': rc_gallery,
-                      'gallery_georc': georc_gallary,
-                      'gallery_hw':np.array(rc_gallery.shape[:2]),
-                      'query_feat': feat_query.detach().cpu().numpy(),
-                      'query_rc': rc_query,
-                      'query_latlon': georc_query,
-                      'query_label': uav_labels_query,
-                      'query_dist': distrc_sats2uav,
-                      'radius_rc': dataloader.dataset.sat_dataset.halfimg_radius_nrc,
-                      'radius_meter': dataloader.dataset.sat_dataset.halfimg_radius_meter,
-                      }
-            if with_sg:
-                result['gallery_sg'] = sg_gallery
-                result['query_sg'] = sg_query
-                result['rotdeg_fm_north_anticlock'] = rotdeg_fm_north_anticlock
-
-            suffix = f"_overlap{overlap}_radius{dataloader.dataset.sat_dataset.halfimg_radius_meter:.0f}m.mat"
-            scipy.io.savemat( f"{self.opt.exps_dir}/{self.opt.exp_name}/{os.path.basename(self.opt.load2test).replace('.pth', suffix)}" ,result)
+        # # get feat_refs from satimg
+        # # --- 1. 装载所有瓦片至cpu ---
+        # # 确保 crop_sat_unifrom 返回的是CPU上的Tensor或Numpy数组
+        # sat_tiles, rc_gallery = self.dataloader_test.dataset.sat_dataset.crop_sat_unifrom(overlap=overlap)
+        # # 在CPU上进行变形和缓存
+        # sat_tiles = sat_tiles.reshape(-1, *sat_tiles.shape[2:])
+        # print(f"已在CPU上缓存 {sat_tiles.shape[0]} 个瓦片。")
+        # # --- 2. 分批处理瓦片，每次只将一小批数据移至GPU ---
+        # split_size = 32  # 这是您送入模型的批大小 (batch size)
+        # feat_gallery = []
+        # sg_gallery = []
+        # print("开始分批提取特征...")
+        # for tiles_batch_cpu in tqdm.tqdm(torch.split(sat_tiles, split_size, dim=0), desc="Extracting Features"):
+        #     tiles_batch_gpu = tiles_batch_cpu.to(self.device)
+        #     with torch.no_grad():
+        #         if with_sg:
+        #             output, output_sgs = img_encoder(tiles_batch_gpu, ret_sg=True)
+        #             sg_gallery.append(output_sgs)
+        #         else:
+        #             output = img_encoder(tiles_batch_gpu, ret_sg=False)
+        #     output = output[1] if isinstance(output, list) else output
+        #     # 将计算结果立即移回CPU，以释放GPU显存
+        #     feat_g = output.detach().cpu()
+        #     feat_g = feat_g.view(feat_g.shape[0], -1) if len(feat_g.shape) > 2 else feat_g
+        #     feat_gallery.append(feat_g)
+        # # --- 3. 在CPU上拼接所有批次的特征 ---
+        # feat_gallery = torch.cat(feat_gallery, dim=0)
+        # print("所有瓦片的特征已提取完成。")
+        #
+        # # get feat_querys from uavimgs
+        # feat_query,rc_query = [],[]
+        # sg_query = []
+        # for data in tqdm.tqdm(dataloader):
+        #     uavimg_q, uav_rc = data[0].to(self.device),data[1]
+        #     if with_sg:
+        #         output,output_sgs = img_encoder(uavimg_q,ret_sg=True)
+        #         sg_gallery.append(output_sgs)
+        #     else:
+        #         output = img_encoder(uavimg_q, ret_sg=False)
+        #     feat_q = output[1] if type(output)==list else output
+        #     feat_q =  feat_q.view(feat_q.shape[0],-1) if len(feat_q.shape)>2 else feat_q
+        #     feat_query.append(feat_q.detach().cpu())
+        #     rc_query.append(uav_rc)
+        #     sg_query.append(output_sgs) if with_sg else None
+        # feat_query = torch.cat(feat_query,dim=0)
+        # rc_query = np.concatenate(rc_query,axis=0)
+        #
+        # # get georc_info
+        # georc_gallary = dataloader.dataset.sat_dataset.transform_nrc_to_georc(rc_gallery.reshape(-1,2)) #todo:
+        # sg_gallery = torch.cat(sg_gallery, dim=0).detach().cpu() if with_sg else None
+        # georc_query = dataloader.dataset.sat_dataset.transform_nrc_to_georc(rc_query)
+        # sg_query = torch.cat(sg_query, dim=0).detach().cpu() if with_sg else None
+        #
+        # # get gt_label fro perd
+        # from eval_recall_fm_salad import qurey_label_fm_gallery_nrc
+        # distrc_sats2uav, uav_labels_query = qurey_label_fm_gallery_nrc(rc_gallery.reshape(-1, 2), rc_query, dataloader.dataset.sat_dataset.halfimg_radius_nrc)
+        # rotdeg_fm_north_anticlock = dataloader.uav_dataset.rotdeg_fm_north_anticlock if hasattr(dataloader.dataset.uav_dataset,'rotdeg_fm_north_anticlock') else None
+        #
+        # # log the recall
+        # from eval_recall_fm_salad import compute_recall_from_feat
+        # d = compute_recall_from_feat(feat_query.contiguous(), feat_gallery.contiguous(), uav_labels_query,[1, 5, 20, 50, 200], faiss_gpu=False)
+        # info = "Recall"
+        # for k, v in d.items():
+        #     info = info + f" @{k}:{v * 100:.2f} "
+        # self.logger.info(info) if hasattr(self, "logger") else None
+        # # write the recall to a txt
+        # p_txt2write = os.path.join(os.path.dirname(self.opt.load2test), f"recall_overlap{overlap}.txt")
+        # info2wirte = 'p_json=' + self.opt.p_satinfo_json
+        # info2wirte += f'\nn_refs={feat_gallery.shape[0]}'
+        # info2wirte += f'\nsatimgsize2crop={self.opt.satimgsize2crop}'
+        # info2wirte += f'\nrecall_m={dataloader.dataset.sat_dataset.halfimg_radius_meter}'
+        # # info2wirte += f'\nsample_overlap={overlap}'
+        # info2wirte += info
+        # with open(p_txt2write, 'a', encoding='utf-8') as f:
+        #     f.write(info2wirte)
+        #
+        # if save_res:
+        #     # save the result matrix:
+        #     result = {'gallery_feat': feat_gallery.detach().cpu().numpy(),
+        #               'gallery_rc': rc_gallery,
+        #               'gallery_georc': georc_gallary,
+        #               'gallery_hw':np.array(rc_gallery.shape[:2]),
+        #               'query_feat': feat_query.detach().cpu().numpy(),
+        #               'query_rc': rc_query,
+        #               'query_latlon': georc_query,
+        #               'query_label': uav_labels_query,
+        #               'query_dist': distrc_sats2uav,
+        #               'radius_rc': dataloader.dataset.sat_dataset.halfimg_radius_nrc,
+        #               'radius_meter': dataloader.dataset.sat_dataset.halfimg_radius_meter,
+        #               }
+        #     if with_sg:
+        #         result['gallery_sg'] = sg_gallery
+        #         result['query_sg'] = sg_query
+        #         result['rotdeg_fm_north_anticlock'] = rotdeg_fm_north_anticlock
+        #
+        #     suffix = f"_overlap{overlap}_radius{dataloader.dataset.sat_dataset.halfimg_radius_meter:.0f}m.mat"
+        #     scipy.io.savemat( f"{self.opt.exps_dir}/{self.opt.exp_name}/{os.path.basename(self.opt.load2test).replace('.pth', suffix)}" ,result)
 
 
 
@@ -495,9 +550,9 @@ if __name__ == '__main__':
     torch.manual_seed(666)
     np.random.seed(2025)
     trainer = Trainer()
-    trainer.train()
+    # trainer.train()
     # trainer.val()
-    # trainer.test(overlap=0.5)
+    trainer.test()
     # trainer.test_xy()
     # trainer.output_test_res()
     # trainer.test_rot()

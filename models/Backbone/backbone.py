@@ -44,11 +44,11 @@ class Backbone(nn.Module):
         elif backbone=="Pvtv2b2":
             backbone_model = timm.create_model("pvt_v2_b2", pretrained=True)
             output_channel = 512
-        elif backbone=="ViTB-224":
+        elif ('vitb'in backbone.lower()) and  ('224'in backbone):
             output_channel = 768
             # using the weights from official vit-b, offline
             model_name = 'vit_base_patch16_224'  # 请确认这个名称是否正确
-            local_weights_path = "/home/data/zwk/pyproj_DUAV_salad_6.4/ckpts/vit_base_patch16_224.augreg2_in21k_ft_in1k_ckpt/pytorch_model.bin"  # <--- 修改成你的实际路径
+            local_weights_path = "/home/data/zwk/ckpt_vitb224/vit_base_patch16_224.augreg2_in21k_ft_in1k_ckpt/pytorch_model.bin"  # <--- 修改成你的实际路径
             backbone_model = timm.create_model(
                 model_name,
                 pretrained=False,  # 设置为 False

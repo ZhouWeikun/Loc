@@ -146,3 +146,4 @@ train_skzm/
 train_map_mutimlp_skzm/exps/
 train_map_singlemlp/exps/
 train_img_encoder/exps
+.reproduce_state

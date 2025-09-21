@@ -166,7 +166,7 @@ class SatDataset(object):
         self.satimgsize_scale_to_200m_boundary = self.satimgsize2crop_boundary*self.geo_res_m/200
 
         #  define the range when sampling the satmap:
-        self.satmap_edge_pixs = self.satimgsize2crop_boundary[1]+1
+        self.satmap_edge_pixs = self.satimgsize2crop_boundary[1]+224
         self.nr2sample_min = self.satmap_edge_pixs / self.satmap_hw_max
         self.nc2sample_min = self.nr2sample_min
         self.nr2sample_max = (self.satmap_h - self.satmap_edge_pixs) / self.satmap_hw_max

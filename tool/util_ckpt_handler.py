@@ -14,8 +14,9 @@ def save_param(dirname, dict2save):
     torch.save(dict2save, save_path)
 
 
-def load_param(load_from, dict2loac):
+def load_param(load_from, dict2load):
     checkpoint = torch.load(load_from)
-    for k, v in dict2loac.items():
-        dict2loac[k] = v
+    for k, v in dict2load.items():
+        dict2load[k] = v
         v.load_state_dict(checkpoint[k])
+

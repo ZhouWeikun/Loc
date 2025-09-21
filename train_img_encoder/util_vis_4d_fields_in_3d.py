@@ -107,6 +107,8 @@ def visualize_udf_3d_rc_rot(r_range, c_range, rot_range, resolution, s_val,
 
     predicted_distances = torch.cat(results).numpy().flatten()
 
+
+
     print("4. Plotting the 3D isosurface...")
     fig = go.Figure()
 
@@ -134,18 +136,30 @@ def visualize_udf_3d_rc_rot(r_range, c_range, rot_range, resolution, s_val,
             fig.add_trace(go.Scatter3d(
                 x=[gt_c], y=[gt_r], z=[np.rad2deg(gt_d)],
                 mode='markers',
-                marker=dict(color='red', size=20, symbol='cross'),
+                marker=dict(color='red', size=8, symbol='cross'),
                 name='Ground Truth'
             ))
 
+
+    # --- 新增逻辑：绘制预测的最小值点 ---
+    min_index = np.argmin(predicted_distances)
+    min_dist_value = predicted_distances[min_index]
+    # 从grid_points中找到对应的 (r, c, rot) 坐标
+    pred_r, pred_c, pred_rot = grid_points[min_index]
+
+    fig.add_trace(go.Scatter3d(
+        x=[pred_c], y=[pred_r], z=[np.rad2deg(pred_rot)],
+        mode='markers',
+        marker=dict(color='cyan', size=8, symbol='diamond'),  # 使用青色菱形标记
+        name=f'Predicted Minimum (Dist: {min_dist_value:.4f})'
+    ))
+
+    # (fig.update_layout 部分与之前相同)
     fig.update_layout(
         title=f'UDF 3D Visualization (Image Coordinate System)',
         scene=dict(
             xaxis_title='Column (col)',
-            yaxis=dict(
-                title='Row (row)',
-                autorange='reversed' # <--- 反转Y轴方向
-            ),
+            yaxis=dict(title='Row (row)', autorange='reversed'),
             zaxis_title='Rotation (degrees)',
             aspectratio=dict(x=1, y=1, z=1)
         )

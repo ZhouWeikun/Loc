@@ -21,7 +21,7 @@ data_setting:
 
 exp_setting:
   exps_dir: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps
-  load2test: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/debug_zurich_9/epoch099.pth
+  load2test: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/debug_zurich_31/epoch098.pth
   load2train: ''
   exp_name: debug_zurich
   p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/blocks12_res03m.json

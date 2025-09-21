@@ -173,8 +173,7 @@ class Trainer(object):
         self.device = device
 
         # config the img_encoder
-        self.img_encoder = make_img_encoder(self.opt)
-        self.img_encoder = self.img_encoder.to(self.device)
+        self.img_encoder = make_img_encoder(self.opt).to(self.device)
             # freeze the para
         for param in self.img_encoder.parameters():
             param.requires_grad = False
@@ -186,6 +185,45 @@ class Trainer(object):
         coord_dim = self.rc_pos_encoder.out_dim+self.rot_pos_encoder.out_dim+self.scale_pos_encoder.out_dim
         from models.ocn_mlp import LocalDecoder
         self.decoder = LocalDecoder(dim=coord_dim,c_dim=self.img_encoder.backbone.output_channel,hidden_size=512,n_blocks=5,output_dim=1,c_opteration='mul').to(self.device)
+
+    def _test_ready(self):
+        opt = self.opt
+        # load the training config to update opt
+        suffix = '.yaml'
+        pattern = os.path.join(os.path.dirname(opt.load2test), f'*{suffix}')
+        config_path = glob.glob(pattern)[0]
+        with open(config_path, 'r') as stream:
+            config = yaml.load(stream, Loader=yaml.FullLoader)
+        for group_dict_key, group_dict in config.items():
+            if group_dict_key == 'network_setting':
+                for cfg, value in group_dict.items():
+                    setattr(opt, cfg, value)
+            else:
+                for cfg, value in group_dict.items():
+                    if not hasattr(opt, cfg):
+                        setattr(opt, cfg, value)
+
+        #laod the ckpt
+        from tool.util_ckpt_handler import load_param
+        para2load= {
+            "img_encoder": self.img_encoder,
+            "decoder": self.decoder,
+        }
+        load_param(opt.load2test,para2load)
+        self.img_encoder.eval()
+        self.decoder.eval()
+
+        # config the datalaoder
+        from dataset_satmap_wingtra import SatDataset
+        self.sat_dataset = SatDataset(
+            p_satinfo_json=self.opt.p_satinfo_json,
+            p_uav_geocsv=self.opt.p_uav_geocsv,
+            imgsize2net=224,
+        )
+        self.sat_dataloader = torch.utils.data.DataLoader(self.sat_dataset, batch_size = 1,
+                                                          num_workers = self.opt.num_worker,
+                                                          pin_memory=True, shuffle=True, drop_last=False,
+                                                          persistent_workers=True)
 
     def train(self):
         opt = self.opt
@@ -211,7 +249,7 @@ class Trainer(object):
         # self.optimizer, self.lr_scheduler = make_optimizer(self.img_encoder, self.opt)
         # optimizer,scheduler = self.optimizer,self.lr_scheduler
 
-        # config the datasets:
+        # config the datalaoder:
         from dataset_satmap_wingtra import SatDataset
         self.sat_dataset = SatDataset(
             p_satinfo_json=self.opt.p_satinfo_json,
@@ -251,30 +289,52 @@ class Trainer(object):
             for it,data in tqdm.tqdm(enumerate(self.sat_dataloader)):
                 satimg, sat_nrc, rad_roted, satimgsize_cover_ratio = data
                 # uav_imgs, uav_nrcs = next(iter(self.uav_dataloader_train))
-
-                # making coords
-                from util_gen_pose_samples import generate_pose_samples_for_batch
-                from models.pos_encoder import encode_4d_coords
                 coords = torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio], 1).to(self.device)
-                coords_sample = generate_pose_samples_for_batch(
-                    p_true_batch=coords,
-                    rc_bounds=(self.sat_dataset.nr2sample_range,self.sat_dataset.nc2sample_range),
-                    num_gaussian_samples=128,
-                    rc_std_dev=self.sat_dataset.halfimg_radius_nrc*0.5,
-                    direction_std_dev_rad=np.deg2rad(45),
-                    log_scale_std_dev=0.2,
-                    num_uniform_samples=1024,
-                    scale_bounds=self.sat_dataset.satimgsize_scale_to_200m_boundary,
+
+                # making coords,verison1:
+                from util_gen_coord_samples_hierarchical import generate_pose_samples_hierarchical,get_stratified_sampling_configs,visualize_hierarchical_samples
+                config_sampling = get_stratified_sampling_configs(
+                    base_rc_std = self.sat_dataset.halfimg_radius_nrc,
+                    base_dir_std_rad = np.deg2rad(10),
+                    base_log_s_std = 0.05,
                 )
-                coords_sample_encoded = encode_4d_coords(coords_sample,self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder)
-                #debug:vis the samples
-                from util_gen_pose_samples import visualize_sampling_results
-                # visualize_sampling_results(
+                coords_sample  = generate_pose_samples_hierarchical(
+                    p_true_batch=coords,
+                    rc_bounds=(self.sat_dataset.nr2sample_range, self.sat_dataset.nc2sample_range),
+                    scale_bounds=self.sat_dataset.satimgsize_scale_to_200m_boundary,
+                    sampling_configs=config_sampling, # <--- 传入动态生成的配置
+                    num_uniform_samples=512
+                )
+                # debug:vis the coord_samples
+                # visualize_hierarchical_samples(
+                #     p_true=coords[0],
+                #     rc_bounds=(self.sat_dataset.nr2sample_range, self.sat_dataset.nc2sample_range),
+                #     sampling_configs=config_sampling,
+                #     all_samples=coords_sample[0],
+                #     num_uniform_samples=512,
+                # )
+
+                # making coords,verison0:
+                # from util_gen_coord_samples import generate_pose_samples
+                # from models.pos_encoder import encode_4d_coords
+                # coords_sample = generate_pose_samples(
+                #     p_true_batch=coords,
+                #     rc_bounds=(self.sat_dataset.nr2sample_range,self.sat_dataset.nc2sample_range),
+                #     num_gaussian_samples=128,
+                #     rc_std_dev=self.sat_dataset.halfimg_radius_nrc*0.5,
+                #     direction_std_dev_rad=np.deg2rad(10),
+                #     log_scale_std_dev=0.1,
+                #     num_uniform_samples=1024,
+                #     scale_bounds=self.sat_dataset.satimgsize_scale_to_200m_boundary,
+                # )
+                # #debug:vis the samples
+                # from util_gen_coord_samples import visualize_samples
+                # visualize_samples(
                 #     samples_tensor=coords_sample[:1],
                 #     anchors_tensor=coords[:1],
                 #     rc_std_dev=self.sat_dataset.halfimg_radius_nrc,
-                #     log_scale_std_dev=np.deg2rad(45),
-                #     direction_std_dev_rad=0.2
+                #     log_scale_std_dev=np.deg2rad(10),
+                #     direction_std_dev_rad=0.1
                 # )
 
                 # making cooresponding distance
@@ -298,8 +358,8 @@ class Trainer(object):
 
                 # 1. 定义权重 (这是需要您根据实验调整的超参数)
                 w_rc = 1.0  # 位置权重，通常设为1.0作为基准
-                dist_threshold = self.sat_dataset.halfimg_radius_nrc
-                w_d = dist_threshold/dists_rc_normed # 方向权重
+                dist_threshold_accpetable = self.sat_dataset.halfimg_radius_nrc
+                w_d = dist_threshold_accpetable/norm_factor_rc # 方向权重
                 w_s = w_d # 尺度权重
                 # 2. 计算加权的平方和
                 dist_true_squared = (
@@ -312,8 +372,17 @@ class Trainer(object):
                 dist_label = torch.sqrt(dist_true_squared) + 1e-7
 
                 # making feats
+                from models.pos_encoder import encode_4d_coords
+                coords_sample_encoded = encode_4d_coords(coords_sample,self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder)
                 feats = self.img_encoder(satimg.to(self.device))
                 feats = feats.unsqueeze(1).expand(-1, coords_sample_encoded.shape[1], -1)
+
+                # pred_dist
+                dist_pred = self.decoder(coords_sample_encoded, feats)
+                # loss
+                # loss = torch.nn.functional.smooth_l1_loss(dist_pred.squeeze(),dist_label.squeeze())
+                # loss = torch.abs(dist_pred.squeeze()-dist_label.squeeze()).sum(dim=-1).mean()
+                loss = loss_mse(dist_pred.squeeze(), dist_label.squeeze())
 
                 #小批量迭代
                 # coords_sample_encoded = coords_sample_encoded.flatten(start_dim=0,end_dim=1)
@@ -334,24 +403,25 @@ class Trainer(object):
                 #     # c. 梯度清零，前向传播，计算loss (和之前一样)
                 #     self.optimizer.zero_grad()
 
+
                 # 梯度清零
                 self.optimizer.zero_grad()
-                if opt.autocast:
-                    with autocast():
-                        # making feats
-                        feats = self.img_encoder(satimg.to(self.device))
-                        feats = feats.unsqueeze(1).expand(-1, coords_sample_encoded.shape[1], -1)
-                        # pred dist
-                        dist_pred = self.decoder(coords_sample_encoded, feats)
-                else:
-                    # making feats
-                    feats = self.img_encoder(satimg.to(self.device))
-                    feats = feats.unsqueeze(1).expand(-1, coords_sample_encoded.shape[1], -1)
-                    # pred_dist
-                    dist_pred = self.decoder(coords_sample_encoded, feats)
-                # loss = torch.nn.functional.smooth_l1_loss(dist_pred.squeeze(),dist_label.squeeze())
-                # loss = torch.abs(dist_pred.squeeze()-dist_label.squeeze()).sum(dim=-1).mean()
-                loss = loss_mse(dist_pred.squeeze(), dist_label.squeeze())
+                # if opt.autocast:
+                #     with autocast():
+                #         # making feats
+                #         feats = self.img_encoder(satimg.to(self.device))
+                #         feats = feats.unsqueeze(1).expand(-1, coords_sample_encoded.shape[1], -1)
+                #         # pred dist
+                #         dist_pred = self.decoder(coords_sample_encoded, feats)
+                # else:
+                #     # making feats
+                #     feats = self.img_encoder(satimg.to(self.device))
+                #     feats = feats.unsqueeze(1).expand(-1, coords_sample_encoded.shape[1], -1)
+                #     # pred_dist
+                #     dist_pred = self.decoder(coords_sample_encoded, feats)
+                # # loss = torch.nn.functional.smooth_l1_loss(dist_pred.squeeze(),dist_label.squeeze())
+                # # loss = torch.abs(dist_pred.squeeze()-dist_label.squeeze()).sum(dim=-1).mean()
+                # loss = loss_mse(dist_pred.squeeze(), dist_label.squeeze())
 
                 # 反向传播
                 if opt.autocast:
@@ -365,7 +435,7 @@ class Trainer(object):
                 # 输出loss指标
                 if it%10==0:
                     if self.writer is not None:
-                        self.writer.add_scalars('loss', loss.item(), step)
+                        self.writer.add_scalar('loss', loss, step)
                 step += 1
 
             # modify the learning rate
@@ -394,14 +464,14 @@ class Trainer(object):
 
             # log info
             str2log = ''
-            # for k, v in loss_dict.items():
-            #     str2log += f'{k}={v.item():.3f}; '
             str2log += f'epcoh={epoch}'
             logger.info(f'loss={loss.item()}')
             time_elapsed = time.time() - since
             since = time.time()
             logger.info('epoch{:.0f} finished in {:.0f}m {:.0f}s'.format(epoch,time_elapsed // 60, time_elapsed % 6))
             logger.info('-' * 50)
+            if self.writer is not None:
+                self.writer.add_scalar('loss', loss, epoch)
 
             # backup the py info, at least have trained a epoch
             if epoch==0:
@@ -441,9 +511,6 @@ class Trainer(object):
                 c_feat=feats[0],
                 gt_pose=torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio],dim=-1).squeeze().numpy()
             )
-
-
-
 
 
         # # get feat_refs from satimg
@@ -550,7 +617,7 @@ if __name__ == '__main__':
     torch.manual_seed(666)
     np.random.seed(2025)
     trainer = Trainer()
-    # trainer.train()
+    trainer.train()
     # trainer.val()
     trainer.test()
     # trainer.test_xy()

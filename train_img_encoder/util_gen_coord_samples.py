@@ -2,9 +2,9 @@ import torch
 import matplotlib.pyplot as plt
 import math  # 用于获取 pi
 from typing import Dict, Tuple, Optional
+import numpy as np
 
-
-def generate_pose_samples_for_batch(
+def generate_pose_samples(
         p_true_batch: torch.Tensor,
         rc_bounds: Tuple[Tuple[float, float], Tuple[float, float]],
         scale_bounds: Tuple[float, float],  # <-- 修正1: 提升为必需参数
@@ -81,7 +81,7 @@ def generate_pose_samples_for_batch(
     return final_samples
 
 
-def visualize_sampling_results(
+def visualize_samples(
         samples_tensor: torch.Tensor,
         anchors_tensor: torch.Tensor,
         rc_std_dev: float,
@@ -167,40 +167,3 @@ def visualize_sampling_results(
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
-
-
-from matplotlib.patches import Ellipse
-from scipy.stats import norm
-import numpy as np
-if __name__ == '__main__':
-    # --- 参数定义 ---
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    RC_STD_DEV = 150.0
-    LOG_SCALE_STD_DEV = 0.2
-    DIRECTION_STD_DEV_RAD = math.pi / 4
-
-    p_true_batch_tensor = torch.tensor([
-        [768.2, 1024.5, math.pi / 4, 1.5],
-        [300.0, 500.0, math.pi * 1.5, 0.2]
-    ], device=device, dtype=torch.float32)
-
-    bounds_rc = ((0, 1080), (0, 1920))
-
-    # --- 1. 生成样本 ---
-    final_samples_tensor = generate_pose_samples_for_batch(
-        p_true_batch=p_true_batch_tensor,
-        rc_bounds=bounds_rc,
-        num_gaussian_samples=5000,
-        rc_std_dev=RC_STD_DEV,
-        direction_std_dev_rad=DIRECTION_STD_DEV_RAD,
-        log_scale_std_dev=LOG_SCALE_STD_DEV,
-    )
-
-    # --- 2. 调用优化后的可视化函数 ---
-    visualize_sampling_results(
-        samples_tensor=final_samples_tensor,
-        anchors_tensor=p_true_batch_tensor,
-        rc_std_dev=RC_STD_DEV,
-        log_scale_std_dev=LOG_SCALE_STD_DEV,
-        direction_std_dev_rad=DIRECTION_STD_DEV_RAD
-    )

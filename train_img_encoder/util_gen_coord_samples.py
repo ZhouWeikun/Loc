@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import math  # 用于获取 pi
 from typing import Dict, Tuple, Optional
 import numpy as np
+from math import pi
 
 def generate_pose_samples(
         p_true_batch: torch.Tensor,
@@ -46,7 +47,8 @@ def generate_pose_samples(
     # 2. 方向采样 (加性高斯 + 周期处理)
     sampled_d_rad_gauss = torch.randn(batch_size, num_gaussian_samples, device=device,
                                       dtype=dtype) * direction_std_dev_rad + d_t_rad_batch
-    sampled_d_rad_gauss = (sampled_d_rad_gauss % two_pi + two_pi) % two_pi
+    # sampled_d_rad_gauss = (sampled_d_rad_gauss % two_pi + two_pi) % two_pi #将角度范围归一化到 [0, 2pi] ---
+    sampled_d_rad_gauss = (sampled_d_rad_gauss + pi) % two_pi - pi  # 将角度范围归一化到 [-pi, pi] ---
 
     # 3. 尺度采样 (乘性高斯, 即对数正态)
     epsilon = 1e-8

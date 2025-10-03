@@ -1,64 +1,12 @@
 import math
-
-import numpy as np
 import torch
 import torch.nn as nn
-
-
-# Code adapted from OpenGlue, MIT license
-# https://github.com/ucuapps/OpenGlue/blob/main/models/superglue/optimal_transport.py
-def log_otp_solver(log_a, log_b, M, num_iters: int = 20, reg: float = 1.0) -> torch.Tensor:
-    r"""Sinkhorn matrix scaling algorithm for Differentiable Optimal Transport problem.
-    This function solves the optimization problem and returns the OT matrix for the given parameters.
-    Args:
-        log_a : torch.Tensor
-            Source weights
-        log_b : torch.Tensor
-            Target weights
-        M : torch.Tensor
-            metric cost matrix
-        num_iters : int, default=100
-            The number of iterations.
-        reg : float, default=1.0
-            regularization value
-    """
-    M = M / reg  # regularization
-
-    u, v = torch.zeros_like(log_a), torch.zeros_like(log_b)
-
-    for _ in range(num_iters):
-        u = log_a - torch.logsumexp(M + v.unsqueeze(1), dim=2).squeeze()
-        v = log_b - torch.logsumexp(M + u.unsqueeze(2), dim=1).squeeze()
-
-    return M + u.unsqueeze(2) + v.unsqueeze(1)
-
-
-def get_matching_probs_org(S,dustbin_score=1.0, num_iters=3, reg=1.0):
-    """sinkhorn"""
-    batch_size, m, n = S.size()
-    # augment scores matrix
-    S_aug = torch.empty(batch_size, m + 1, n, dtype=S.dtype, device=S.device)
-    S_aug[:, :m, :n] = S
-    S_aug[:, m, :] = dustbin_score
-    # prepare normalized source and target log-weights
-    norm = -torch.tensor(math.log(n + m), device=S.device)
-    log_a, log_b = norm.expand(m + 1).contiguous(), norm.expand(n).contiguous()
-    log_a[-1] = log_a[-1] + math.log(n - m)
-
-    log_a, log_b = log_a.expand(batch_size, -1), log_b.expand(batch_size, -1)
-    log_P = log_otp_solver(
-        log_a,
-        log_b,
-        S_aug,
-        num_iters=num_iters,
-        reg=reg
-    )
-    return log_P - norm
-
+import numpy as np
 
 # Code adapted from OpenGlue, MIT license
 # https://github.com/ucuapps/OpenGlue/blob/main/models/superglue/superglue.py
-def get_matching_probs(S, with_distbin=True,dustbin_score=1.0, num_iters=3, reg=1.0):
+# todo:needs to finish
+def get_matching_probs_modified(S, with_distbin=True,dustbin_score=1.0, num_iters=3, reg=1.0):
     """sinkhorn"""
     batch_size, m, n = S.size()
     if with_distbin:
@@ -116,12 +64,64 @@ def get_matching_probs_modified(S, num_iters=3, reg=1.0):
 
     return log_P
 
+
+# Code adapted from OpenGlue, MIT license
+# https://github.com/ucuapps/OpenGlue/blob/main/models/superglue/optimal_transport.py
+def log_otp_solver(log_a, log_b, M, num_iters: int = 20, reg: float = 1.0) -> torch.Tensor:
+    r"""Sinkhorn matrix scaling algorithm for Differentiable Optimal Transport problem.
+    This function solves the optimization problem and returns the OT matrix for the given parameters.
+    Args:
+        log_a : torch.Tensor
+            Source weights
+        log_b : torch.Tensor
+            Target weights
+        M : torch.Tensor
+            metric cost matrix
+        num_iters : int, default=100
+            The number of iterations.
+        reg : float, default=1.0
+            regularization value
+    """
+    M = M / reg  # regularization
+
+    u, v = torch.zeros_like(log_a), torch.zeros_like(log_b)
+
+    for _ in range(num_iters):
+        u = log_a - torch.logsumexp(M + v.unsqueeze(1), dim=2).squeeze()
+        v = log_b - torch.logsumexp(M + u.unsqueeze(2), dim=1).squeeze()
+
+    return M + u.unsqueeze(2) + v.unsqueeze(1)
+
+
+def get_matching_probs(S,dustbin_score=1.0, num_iters=3, reg=1.0):
+    """sinkhorn"""
+    batch_size, m, n = S.size()
+    # augment scores matrix
+    S_aug = torch.empty(batch_size, m + 1, n, dtype=S.dtype, device=S.device)
+    S_aug[:, :m, :n] = S
+    S_aug[:, m, :] = dustbin_score
+    # prepare normalized source and target log-weights
+    norm = -torch.tensor(math.log(n + m), device=S.device)
+    log_a, log_b = norm.expand(m + 1).contiguous(), norm.expand(n).contiguous()
+    log_a[-1] = log_a[-1] + math.log(n - m)
+
+    log_a, log_b = log_a.expand(batch_size, -1), log_b.expand(batch_size, -1)
+    log_P = log_otp_solver(
+        log_a,
+        log_b,
+        S_aug,
+        num_iters=num_iters,
+        reg=reg
+    )
+    return log_P - norm
+
+
 class SALAD(nn.Module):
     """
     This class represents the Sinkhorn Algorithm for Locally Aggregated Descriptors (SALAD) model.
 
     Attributes:
-        num_channels (int): The number of channels of the inputs (d).
+        input_feat_dim (int): The number of channels of the inputs (d).
         num_clusters (int): The number of clusters in the model (m).
         cluster_dim (int): The number of channels of the clusters (l).
         token_dim (int): The dimension of the global scene token (g).
@@ -129,23 +129,25 @@ class SALAD(nn.Module):
     """
 
     def __init__(self,
-                 num_channels=768, #org=1536
+                 input_feat_dim=768, #org=1536
                  num_clusters=32, #64
                  cluster_dim=64, #128
                  token_dim=256, #the ouput dim of golbal_token
                  dropout=0.3,
-                 img_hw=(224,224),
+                 img_hw = (224,224),
                  pathchsize = 14,
                  with_dustbin=True,
+                 hidden_layer_dim=512,
                  ) -> None:
         super().__init__()
 
-        self.num_channels = num_channels
+        self.input_feat_dim = input_feat_dim
         self.num_clusters = num_clusters
         self.cluster_dim = cluster_dim
         self.token_dim = token_dim
         self.token_hw = (int(img_hw[0]/pathchsize),int(img_hw[1]/pathchsize))
         self.with_dustbin = with_dustbin
+        self.hidden_layer_dim = hidden_layer_dim
 
         if dropout > 0:
             dropout = nn.Dropout(dropout)
@@ -159,23 +161,23 @@ class SALAD(nn.Module):
         # 而输入tokens经过self.score得到的则是'描述每一个token的聚合权重的attenation_map'，attenation_map有多个(数目=num_clusters，attenation_map展平后的维度=输入token的数目)，对应多个问题下的不同关注点
         # MLP for global scene token g, compress the dim of token
         self.token_features = nn.Sequential(
-            nn.Linear(self.num_channels, 512),
+            nn.Linear(self.input_feat_dim, self.hidden_layer_dim),
             nn.ReLU(),
-            nn.Linear(512, self.token_dim)
+            nn.Linear(self.hidden_layer_dim, self.token_dim)
         )
         # MLP for local features f_i, compress the dim of token
         self.cluster_features = nn.Sequential(
-            nn.Conv2d(self.num_channels, 512, 1),
+            nn.Conv2d(self.input_feat_dim, self.hidden_layer_dim, 1),
             dropout,
             nn.ReLU(),
-            nn.Conv2d(512, self.cluster_dim, 1)
+            nn.Conv2d(self.hidden_layer_dim, self.cluster_dim, 1)
         )
         # MLP for score matrix S
         self.score = nn.Sequential(
-            nn.Conv2d(self.num_channels, 512, 1),
+            nn.Conv2d(self.input_feat_dim, self.hidden_layer_dim, 1),
             dropout,
             nn.ReLU(),
-            nn.Conv2d(512, self.num_clusters, 1),
+            nn.Conv2d(self.hidden_layer_dim, self.num_clusters, 1),
         )
         # Dustbin parameter z
         self.dust_bin = nn.Parameter(torch.tensor(0.)) #todo:改为0初始化看看,org=1.
@@ -193,14 +195,14 @@ class SALAD(nn.Module):
         t = x[:, 0]
         x = x[:, 1:]
         # Reshape to (B, C, H, W)
-        x = x.reshape((x.shape[0], self.token_hw[0],  self.token_hw[1], self.num_channels)).permute(0, 3, 1, 2)
+        x = x.reshape((x.shape[0], self.token_hw[0],  self.token_hw[1], self.input_feat_dim)).permute(0, 3, 1, 2)
 
         f = self.cluster_features(x).flatten(2)
         p = self.score(x).flatten(2)
         t = self.token_features(t)
 
         # Sinkhorn algorithm
-        p = get_matching_probs_org(p,self.dust_bin,3)
+        p = get_matching_probs(p,self.dust_bin,3)
         p = torch.exp(p)
         # Normalize to maintain mass
         p = p[:, :-1, :] if self.with_dustbin else p #这个地方可以可视化热力图？ [n_batch,num_clusters,num_tokens]

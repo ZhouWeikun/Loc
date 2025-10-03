@@ -41,6 +41,7 @@ udf_func = mock_udf_func
 
 # --- 3. 可视化主函数 (Main Visualization Function with Optional GT) ---
 
+
 def visualize_udf_slice_rc(row_range, col_range, resolution, s_val, d_val,
                            model_func, pos_encoders, c_feat, gt_rc=None, batch_size=4096):
     """
@@ -90,12 +91,24 @@ def visualize_udf_slice_rc(row_range, col_range, resolution, s_val, d_val,
     result_grid = predicted_distances.reshape((resolution, resolution))
 
     print("4. Plotting the results...")
-    fig, ax = plt.subplots(figsize=(10, 8))
+    print("4. Plotting the results...")
 
-    im = ax.imshow(result_grid,
-                   origin='upper',  # <--- 改动 1
-                   cmap='viridis_r',
-                   extent=[col_range[0], col_range[1], row_range[1], row_range[0]])  # <--- 改动 2
+    # --- 新增：找到预测的最小值及其坐标 ---
+    # 找到最小值在扁平化数组中的索引
+    min_idx_flat = np.argmin(result_grid)
+    # 将扁平化索引转换回二维网格索引 (row_idx, col_idx)
+    min_row_idx, min_col_idx = np.unravel_index(min_idx_flat, result_grid.shape)
+
+    # 使用二维索引从坐标数组中找到对应的真实 (row, col) 坐标
+    est_r = row_coords[min_row_idx]
+    est_c = col_coords[min_col_idx]
+    min_dist_val = result_grid[min_row_idx, min_col_idx]
+    print(f"Predicted minimum distance: {min_dist_val:.4f} at (row={est_r:.2f}, col={est_c:.2f})")
+    # -----------------------------------
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    im = ax.imshow(result_grid, origin='upper', cmap='viridis_r',
+                   extent=[col_range[0], col_range[1], row_range[1], row_range[0]])
 
     cbar = fig.colorbar(im)
     cbar.set_label('Predicted Distance (Lower is Better)', rotation=270, labelpad=20)
@@ -107,6 +120,11 @@ def visualize_udf_slice_rc(row_range, col_range, resolution, s_val, d_val,
         ax.scatter(gt_c, gt_r, color='red', marker='x', s=100, label=f'Ground Truth ({gt_r}, {gt_c})')
         ax.legend()  # 只有在有GT点时才显示图例
 
+        # --- 新增：在图上标记预测的最小值点 ---
+        ax.scatter(est_c, est_r, color='cyan', marker='*', s=100, edgecolor='blue',
+                   label=f'Estimated Min ({est_r:.2f}, {est_c:.2f})\nDist={min_dist_val:.4f}')
+        # -----------------------------------
+
     ax.set_title(f'UDF Visualization\n(Fixed Scale={s_val:.2f}, Fixed Rotation={np.rad2deg(d_val):.2f}°)')
     ax.set_xlabel('Column (col)')
     ax.set_ylabel('Row (row)')
@@ -114,6 +132,97 @@ def visualize_udf_slice_rc(row_range, col_range, resolution, s_val, d_val,
     ax.grid(True, linestyle='--', alpha=0.5)
 
     plt.show()
+
+
+class FieldViser2D:
+    """
+    一个用于可视化UDF场切片的类。
+    它将坐标生成、模型推理和结果绘图的逻辑分离开来。
+    """
+    # def __init__(self,  batch_size: int = 4096):
+    #     """
+    #     初始化Visualizer。
+    #
+    #     Args:
+    #         model_func (callable): 要评估的模型函数。
+    #         pos_encoders (list of callables): 位置编码器列表 [rc_encoder, rot_encoder, scale_encoder]。
+    #         c_feat (torch.Tensor): 条件特征张量。
+    #         batch_size (int): 模型推理的批处理大小。
+    #     """
+    #     self.batch_size = batch_size
+
+    def mk_grid_nrcs(self,row_range, col_range,d_val,s_val, resolution=64):
+        self.row_range= row_range
+        self.col_range = col_range
+        self.resolution = resolution
+        self.row_coords = np.linspace(row_range[0], row_range[1], resolution)
+        self.col_coords = np.linspace(col_range[0], col_range[1], resolution)
+
+        row_coords = np.linspace(row_range[0], row_range[1], resolution)
+        col_coords = np.linspace(col_range[0], col_range[1], resolution)
+        row_grid, col_grid = np.meshgrid(row_coords, col_coords, indexing='ij')
+        grid_points = np.stack([row_grid.ravel(), col_grid.ravel()], axis=1)
+
+        num_points = len(grid_points)
+        rc_vals = torch.from_numpy(grid_points).float()
+        d_vals = torch.full((num_points, 1), d_val, dtype=torch.float32)
+        s_vals = torch.full((num_points, 1), s_val, dtype=torch.float32)
+        all_poses = torch.concatenate([rc_vals, d_vals, s_vals], dim=-1)
+        return all_poses
+
+    def vis(self,result_grid,gt_rc=None,extreme='min'):
+        result_grid = result_grid.reshape((self.resolution, self.resolution))
+        print("4. Plotting the results...")
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        im = ax.imshow(result_grid,
+                       origin='upper',  # <--- 改动 1
+                       cmap='viridis_r',
+                       extent=[self.col_range[0], self.col_range[1], self.row_range[1], self.row_range[0]])  # <--- 改动 2
+
+        cbar = fig.colorbar(im)
+        cbar.set_label('Predicted Distance (Lower is Better)', rotation=270, labelpad=20)
+
+        # --- 这里是关键改动 ---
+        # 只有当 gt_r 和 gt_c 都被提供时，才绘制真值点
+        if gt_rc is not None:
+            gt_r, gt_c = gt_rc[0][0], gt_rc[0][1]
+            ax.scatter(gt_c, gt_r, color='red', marker='x', s=100, label=f'Ground Truth ({gt_r}, {gt_c})')
+            ax.legend()  # 只有在有GT点时才显示图例
+
+            # --- 关键改动 2: 查找并绘制最值点 ---
+            if extreme in ['min', 'max']:
+                if extreme == 'min':
+                    # 找到最小值的扁平索引
+                    flat_idx = np.argmin(result_grid)
+                    extreme_val = result_grid.min()
+                    label_prefix = 'Predicted Min'
+                    marker_color = 'cyan'
+                else:  # find_extreme == 'max'
+                    # 找到最大值的扁平索引
+                    flat_idx = np.argmax(result_grid)
+                    extreme_val = result_grid.max()
+                    label_prefix = 'Predicted Max'
+                    marker_color = 'magenta'
+
+                # 将扁平索引转换为2D的(行, 列)索引
+                row_idx, col_idx = np.unravel_index(flat_idx, result_grid.shape)
+
+                # 使用我们之前保存的坐标轴，将2D索引映射回真实的(row, col)坐标
+                extreme_r = self.row_coords[row_idx]
+                extreme_c = self.col_coords[col_idx]
+
+                # 在图上绘制最值点
+                ax.scatter(extreme_c, extreme_r, color=marker_color, marker='*', s=250,
+                           label=f'{label_prefix} ({extreme_val:.4f})\nat ({extreme_r:.2f}, {extreme_c:.2f})')
+
+        ax.set_title('UDF Visualization}')
+        ax.set_xlabel('Column (col)')
+        ax.set_ylabel('Row (row)')
+        ax.set_aspect('equal', adjustable='box')
+        ax.grid(True, linestyle='--', alpha=0.5)
+
+        plt.show()
 
 
 # --- 4. 执行可视化 (演示两种情况) ---

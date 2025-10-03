@@ -29,12 +29,14 @@ class DINOv2(nn.Module):
             norm_layer = False,
             return_token = False,
             reshape_output = False, #new added
+            local_ckpt_dir = '/root/.cache/torch/hub/facebookresearch_dinov2_main', #new added
     ):
         super().__init__()
 
         assert model_name in DINOV2_ARCHS.keys(), f'Unknown model name {model_name}'
-        if os.path.exists('/root/.cache/torch/hub/facebookresearch_dinov2_main'):
-            self.model = torch.hub.load('/root/.cache/torch/hub/facebookresearch_dinov2_main', model_name,source='local')
+        if local_ckpt_dir is None:
+            if os.path.exists(local_ckpt_dir):
+                self.model = torch.hub.load(local_ckpt_dir, model_name,source='local')
         else:
             self.model = torch.hub.load('facebookresearch/dinov2', model_name)
         self.num_channels = DINOV2_ARCHS[model_name]
@@ -43,7 +45,6 @@ class DINOv2(nn.Module):
         self.return_token = return_token
         self.reshape_output = reshape_output
 
-    import os
 
     def forward(self, x):
         """
@@ -73,7 +74,6 @@ class DINOv2(nn.Module):
 
         if self.norm_layer:
             x = self.model.norm(x)
-
 
         if self.reshape_output:
             t = x[:, 0]

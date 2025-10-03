@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="gdal_base" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="neuloc_v0" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="neuloc_wisp" project-jdk-type="Python SDK" />
 </project>

@@ -12,31 +12,22 @@ class Model(nn.Module):
         self.backbone = make_backbone(opt)
         opt.in_planes = self.backbone.output_channel
         self.opt = opt
-        if opt.head != "":
+        if (type(opt.head)==str) and (len(opt.head)>0):
             self.head = make_head(opt)
 
-    def forward(self, image,ret_sg=False,ret_cls_token=False):
+    def forward(self, image,ret_patch_token=False,ret_cls_token=False):
         features = self.backbone(image)
-        res = self.head(features) if self.opt.head != "" else None
-        cls_token = features[:, 0]
+        res = self.head(features) if hasattr(self, 'head') else features
 
-        #ready to return sg:
-        if ret_sg:
-            if not hasattr(self, 'radon'):
-                self.radon = RadonHandler(device=features.device)
-            with torch.no_grad():
-                featmaps = features[:, 1:].permute(0, 2, 1).contiguous()
-                featmaps = featmaps.reshape(featmaps.shape[0],-1,int(math.sqrt(featmaps.shape[2])),int(math.sqrt(featmaps.shape[2])))
-                featmaps_mean = featmaps.mean(dim=1, keepdim=True)
-                sgs = self.radon.forward(featmaps_mean).squeeze()
-                return res,sgs
-        if self.opt.head == "":
-            return cls_token
+        if (not ret_patch_token) and (not ret_cls_token):
+            return res
+        elif ret_cls_token and (not ret_patch_token):
+            return (res,features[:, 0])
+        elif not ret_cls_token and ret_patch_token:
+            return (res,features[:, 1:])
         else:
-            if ret_cls_token:
-                return res,cls_token
-            else:
-                return res
+            return (res, features[:, 0], features[:, 1:])
+
 
     def load_params(self, load_from):
         pretran_model = torch.load(load_from)

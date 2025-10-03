@@ -9,6 +9,8 @@ import numpy as np
 import torch
 from torchvision import transforms
 import math,random
+import  torchvision.transforms as T
+
 
 def mk_transform(
         mean,
@@ -66,6 +68,7 @@ def mk_transform(
     transform2ret = transforms.Compose(transform_list)
     return transform2ret
 
+
 def mk_sat_tensor_transform(
         imgsize2net=224,
         rand_affine = False,
@@ -113,6 +116,36 @@ def mk_sat_tensor_transform(
     transform2ret = transforms.Compose(transform_list)
     return transform2ret
 
+from multiprocessing import Pool
+# --- 工作进程初始化函数 ---
+# 在每个子进程启动时会执行一次
+def _init_corpping_worker(satmaps_tensor_list, scale_transform_obj):
+    """将共享的大数据加载到每个工作进程的全局变量中"""
+    global shared_satmaps, shared_transform
+    shared_satmaps = satmaps_tensor_list
+    shared_transform = scale_transform_obj
+
+
+# --- 单个任务的工作函数 ---
+# 这个函数是每个子进程要执行的核心任务
+def _process_single_crop(args):
+    """处理单个坐标的裁剪、缩放和旋转任务"""
+    # 从全局变量中获取共享数据
+    global shared_satmaps, shared_transform
+
+    # 解析传入的、每个任务都不同的参数
+    rb, cb, size, rot_deg = args
+
+    # 1. 随机选择源图像并裁剪
+    source_tensor = random.choice(shared_satmaps)
+    re, ce = rb + size, cb + size
+    crop = source_tensor[:, rb:re, cb:ce]
+
+    # 2. 缩放和旋转
+    crop = shared_transform(crop)
+    crop = T.functional.rotate(crop, float(rot_deg))
+
+    return crop
 
 class SatDataset(object):
     def __init__(self,
@@ -157,12 +190,20 @@ class SatDataset(object):
         # if p_uav_geocsv is not None:
         df = pd.read_csv(p_uav_geocsv)
         h_cover_m =  df['h_cover_m']
-        aff2d_corrected = df['aff2d_corrected']
-        h_cover_m = h_cover_m[aff2d_corrected]
-        # self.satimgsize2crop_correspond2uav = torch.tensor( h_cover_m/self.geo_res_m,dtype=torch.float32)
-        self.satimgsize2crop_correspond2uav = np.array(h_cover_m/self.geo_res_m)
-        self.satimgsize2crop_boundary = np.array([self.satimgsize2crop_correspond2uav.min(),self.satimgsize2crop_correspond2uav.max()])
+        aff2d_corrected_mask = df['aff2d_corrected']
+        h_cover_m = h_cover_m[aff2d_corrected_mask]
+        # filtering by the scale
+        scale_ref_m = 200
+        satimgsize_scale_to_200m = np.array(h_cover_m/self.geo_res_m)*self.geo_res_m/scale_ref_m
+        lower_bound = np.percentile( satimgsize_scale_to_200m, 2)
+        upper_bound = np.percentile( satimgsize_scale_to_200m, 99)
+        scale_mask = (satimgsize_scale_to_200m>lower_bound) * (satimgsize_scale_to_200m<upper_bound)
+        # config the satimgsize2crop
+        self.satimgsize2crop_correspond2uav = np.array(h_cover_m[scale_mask] / self.geo_res_m)
         self.satimgsize2crop = self.satimgsize2crop_correspond2uav.mean()
+        self.satimgsize2crop_boundary = np.array(
+            [self.satimgsize2crop_correspond2uav.min(), self.satimgsize2crop_correspond2uav.max()])
+        self.satimgsize_scale_to_200m = satimgsize_scale_to_200m[scale_mask]
         self.satimgsize_scale_to_200m_boundary = self.satimgsize2crop_boundary*self.geo_res_m/200
 
         #  define the range when sampling the satmap:
@@ -184,6 +225,8 @@ class SatDataset(object):
         self.halfimg_radius_nrc = self.satimgsize2crop // 2. / self.satmap_hw_max
         self.halfimg_radius_meter = self.get_halfimg_radius_meter(satimgsize2crop // 2)
 
+        self.ret_positive=True
+
     """funcs about sampling satmap:"""
     def crop_satimg_by_nrc(self, nrc, satimgsize2crop=224, type='tensor'):
         row = int((nrc[0] - self.nr_tiftop) * self.satmap_hw_max)
@@ -196,12 +239,97 @@ class SatDataset(object):
         row_end = row + halfimg_width
 
         if type == 'tensor':
-            satmaps_tensor = random.choice(self.satmaps_tensor)
-            satimg = satmaps_tensor[:, int(row_begin):int(row_end),int(col_begin):int(col_end)]  # chw for sat_img_tensor
+            if self.ret_positive:
+                satmaps_tensor = random.sample(self.satmaps_tensor, 2)
+                satimg0 = satmaps_tensor[0][:, int(row_begin):int(row_end), int(col_begin):int(col_end)]
+                satimg1 = satmaps_tensor[1][:, int(row_begin):int(row_end), int(col_begin):int(col_end)]
+                satimg = torch.stack([satimg0, satimg1])
+            else:
+                satmaps_tensor = random.choice(self.satmaps_tensor)
+                satimg = satmaps_tensor[:, int(row_begin):int(row_end),int(col_begin):int(col_end)]  # chw for sat_img_tensor
         else:
             satmap = random.choice(self.satmaps)
             satimg = satmap.crop((int(col_begin), int(row_begin), int(col_end), int(row_end)))
         return satimg
+
+    def crop_satimgs_by_4d_coords(self,coords):
+        if not hasattr(self,'scale_transform'):
+            self.scale_transform = T.Compose([transforms.Resize(self.imgsize2net,antialias=True)])
+
+        satimgsize2crop_list = coords[:,-1] * 200. / self.geo_res_m
+        row_list = (coords[:,0] - self.nr_tiftop) * self.satmap_hw_max
+        col_list = (coords[:,1] - self.nc_tifleft) * self.satmap_hw_max
+
+        halfimg_width = (satimgsize2crop_list / 2)
+        if type(coords) == torch.Tensor:
+            rows_begin = (row_list - halfimg_width).int()
+            cols_begin = (col_list - halfimg_width).int()
+            rows_begin = rows_begin.detach().cpu().numpy()
+            cols_begin = cols_begin.detach().cpu().numpy()
+            satimgsize2crop_list = satimgsize2crop_list.int().detach().cpu().numpy()
+            rot_list = torch.rad2deg(coords[:,2]).detach().cpu().numpy()
+        else:
+            rows_begin = (row_list - halfimg_width)
+            cols_begin = (col_list - halfimg_width)
+            rot_list = np.rad2deg(coords[:,2])
+
+        cropped_images = []
+        for i in range(len(coords)):
+            # 为批次中的每个样本随机选择一张卫星图
+            source_tensor = random.choice(self.satmaps_tensor)
+
+            rb, cb = rows_begin[i], cols_begin[i]
+            re, ce = rb + satimgsize2crop_list[i], cb + satimgsize2crop_list[i]
+            crop = source_tensor[:, rb:re, cb:ce]
+            crop = self.scale_transform(crop)
+            crop = T.functional.rotate(crop, float(rot_list[i]))
+            cropped_images.append(crop)
+        cropped_images = torch.stack(cropped_images, dim=0)
+        return cropped_images
+        #debug:
+        # from matplotlib import pyplot as plt
+        # img2vis = self.denormalize_img(crop)
+        # plt.imshow(img2vis)
+        # plt.show()
+
+    def crop_satimgs_by_4d_coords_multi_process(self,coords,num_workers=None):
+        """
+        coords: tensor with shape (n,4)
+        """
+        if num_workers is None:
+            num_workers = os.cpu_count()//2
+        if not hasattr(self,'scale_transform'):
+            self.scale_transform = T.Compose([T.Resize(self.imgsize2net,antialias=True)])
+
+        # --- 1. 向量化计算 ---
+        satimgsize2crop_list = coords[:,-1] * 200. / self.geo_res_m
+        row_list = (coords[:,0] - self.nr_tiftop) * self.satmap_hw_max
+        col_list = (coords[:,1] - self.nc_tifleft) * self.satmap_hw_max
+        halfimg_width = (satimgsize2crop_list / 2)
+
+        # 统一转换为 numpy 以便打包参数
+        rows_begin = (row_list - halfimg_width).int().cpu().numpy()
+        cols_begin = (col_list - halfimg_width).int().cpu().numpy()
+        sizes = satimgsize2crop_list.int().cpu().numpy()
+        rot_list = torch.rad2deg(coords[:, 2]).cpu().numpy()
+
+        # --- 2. 准备传递给每个任务的参数列表 ---
+        task_args = list(zip(rows_begin, cols_begin, sizes, rot_list))
+
+        # --- 3. 使用多进程池替代 for 循环 ---
+        # initializer 会在每个子进程启动时调用 _init_corpping_worker
+        # initargs 是传递给 _init_corpping_worker 的参数，避免了在主循环中重复传递大对象
+        with Pool(processes=num_workers,
+                  initializer=_init_corpping_worker,
+                  initargs=(self.satmaps_tensor, self.scale_transform)) as pool:
+
+            # pool.map 会将 task_args 列表中的每一项作为参数传递给 _process_single_crop
+            # 并行执行，然后按顺序收集结果
+            results = pool.map(_process_single_crop, task_args)
+
+        # --- 4. 收集结果 ---
+        cropped_images = torch.stack(results, dim=0)
+        return cropped_images
 
     def mk_rand_nrcs(self, n_rand, dtype=np.float32):
         rand_nrcs = np.random.rand(n_rand, 2).astype(dtype)
@@ -275,6 +403,7 @@ class SatDataset(object):
 
         return sat_tiles, nrcs_girdcoord_center
 
+
     """funcs about getting item:"""
     def __getitem__(self,index):
         sat_nrc_rand = self.mk_rand_nrcs(1)[0]
@@ -293,14 +422,12 @@ class SatDataset(object):
         angle_roted = self.sat_rotater.angle
         rad_roted = torch.deg2rad(torch.tensor([angle_roted],dtype=torch.float32))
         # normalize the rad from [-pi,pi] to [0,2pi]
-        two_pi = 2 * math.pi
-        rad_roted = (rad_roted % two_pi + two_pi) % two_pi
         return  satimg_rand,sat_nrc_rand,rad_roted,satimgsize_len_ratio_to_200m
         # debug
-        img2vis = self.denormalize_img(satimg_rand)
-        from matplotlib import pyplot as plt
-        plt.imshow(img2vis)
-        plt.show()
+        # img2vis = self.denormalize_img(satimg_rand[1])
+        # from matplotlib import pyplot as plt
+        # plt.imshow(img2vis)
+        # plt.show()
         # img2vis = self.crop_satimg_by_nrc(sat_nrc_rand,satimgsize2crop=satimgsize2crop, type='np')
         # from matplotlib import pyplot as plt
         # plt.imshow(img2vis)
@@ -309,7 +436,7 @@ class SatDataset(object):
     def __len__(self):
         return   int((self.satmap_h * self.satmap_w) / (self.satimgsize2crop ** 2))
 
-    """funcs about loc:"""
+    """funcs about fine loc:"""
     def sample_sats_in_rect(self, nrc_topleft, nrc_buttonright, n2sample_h=128, n2sample_w=128, satimgsize2crop=224, type2clip='tensor'):
         halfimg_width = satimgsize2crop/2
         half_img_h = halfimg_width / self.satmap_hw_max
@@ -493,7 +620,6 @@ if __name__ == '__main__':
     for i in range(5):
         try:
             data = sat_dataset[i]
-            print(f"成功加载样本 {i} | 图像形状: {image.shape} | 标签: {label}")
         except Exception as e:
             print(f"加载样本 {i} 时出错: {e}")
             # 在这里中断或记录错误，然后去检查对应的文件或标注是否有问题

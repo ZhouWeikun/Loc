@@ -1,15 +1,14 @@
 # import optparse
 # import os
 import torch.nn as nn
-import timm
+# import timm
 from .RKNet import RKNet
-from .cvt import get_cvt_models
+# from .cvt import get_cvt_models
 import torch
 
 def make_backbone(opt):
     backbone_model = Backbone(opt)
     return backbone_model
-
 
 class Backbone(nn.Module):
     def __init__(self, opt):
@@ -161,7 +160,7 @@ class Backbone(nn.Module):
 
     def forward(self, image):
         features = self.backbone.forward_features(image)
-        if type(features)==dict: #for handling dinov3
+        if ('dino'in self.opt.backbone) and ("v3" in self.opt.backbone): #for handling dinov3
             x_norm_clstoken = features["x_norm_clstoken"]
             x_norm_patchtokens = features["x_norm_patchtokens"]
             features = torch.concatenate([x_norm_clstoken.unsqueeze(1), x_norm_patchtokens], dim=1)

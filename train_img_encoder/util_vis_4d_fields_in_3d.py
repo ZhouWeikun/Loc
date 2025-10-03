@@ -126,7 +126,7 @@ def visualize_udf_3d_rc_rot(r_range, c_range, rot_range, resolution, s_val,
         surface_count=5,
         opacity=0.2,
         caps=dict(x_show=False, y_show=False, z_show=False),
-        colorbar=dict(title='Predicted Distance')
+        colorbar=dict(title='Pred Distance')
     ))
 
     # Add ground truth marker if provided
@@ -137,9 +137,8 @@ def visualize_udf_3d_rc_rot(r_range, c_range, rot_range, resolution, s_val,
                 x=[gt_c], y=[gt_r], z=[np.rad2deg(gt_d)],
                 mode='markers',
                 marker=dict(color='red', size=8, symbol='cross'),
-                name='Ground Truth'
+                name='GT'
             ))
-
 
     # --- 新增逻辑：绘制预测的最小值点 ---
     min_index = np.argmin(predicted_distances)
@@ -151,10 +150,20 @@ def visualize_udf_3d_rc_rot(r_range, c_range, rot_range, resolution, s_val,
         x=[pred_c], y=[pred_r], z=[np.rad2deg(pred_rot)],
         mode='markers',
         marker=dict(color='cyan', size=8, symbol='diamond'),  # 使用青色菱形标记
-        name=f'Predicted Minimum (Dist: {min_dist_value:.4f})'
+        # name=f'pred_min_dist: {min_dist_value:.3f})'
+        name = 'Pred'
     ))
 
     # (fig.update_layout 部分与之前相同)
+    # fig.update_layout(
+    #     title=f'UDF 3D Visualization (Image Coordinate System)',
+    #     scene=dict(
+    #         xaxis_title='Column (col)',
+    #         yaxis=dict(title='Row (row)', autorange='reversed'),
+    #         zaxis_title='Rotation (degrees)',
+    #         aspectratio=dict(x=1, y=1, z=1)
+    #     )
+    # )
     fig.update_layout(
         title=f'UDF 3D Visualization (Image Coordinate System)',
         scene=dict(
@@ -162,9 +171,22 @@ def visualize_udf_3d_rc_rot(r_range, c_range, rot_range, resolution, s_val,
             yaxis=dict(title='Row (row)', autorange='reversed'),
             zaxis_title='Rotation (degrees)',
             aspectratio=dict(x=1, y=1, z=1)
+        ),
+        # 将图例移动到左上角
+        legend=dict(
+            x=0.01,  # 靠近左边缘
+            y=0.99,  # 靠近上边缘
+            xanchor='left',
+            yanchor='top',
+            bgcolor='rgba(255, 255, 255, 0.6)',  # 使用半透明背景
+            bordercolor='white',
+            borderwidth=1
         )
     )
     fig.show()
+
+    fig.show()
+
 
 
 # --- 4. How to call the function ---

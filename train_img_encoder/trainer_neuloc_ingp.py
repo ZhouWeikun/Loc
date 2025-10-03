@@ -18,6 +18,7 @@ import warnings
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import torchvision
+import torch.nn.functional as F
 import glob
 import math
 
@@ -179,12 +180,20 @@ class Trainer(object):
             param.requires_grad = False
         # config the mlp
         from models.pos_encoder import PositionalEncoder
-        self.rc_pos_encoder = PositionalEncoder(input_dims=2,include_input=True,multires=10)
-        self.rot_pos_encoder = PositionalEncoder(input_dims=2,include_input=True,multires=6)
-        self.scale_pos_encoder = PositionalEncoder(input_dims=1,include_input=True,multires=6)
+        self.rc_pos_encoder = PositionalEncoder(input_dims=2,include_input=True,multires=6)
+        self.rot_pos_encoder = PositionalEncoder(input_dims=2,include_input=True,multires=4)
+        self.scale_pos_encoder = PositionalEncoder(input_dims=1,include_input=True,multires=4)
         coord_dim = self.rc_pos_encoder.out_dim+self.rot_pos_encoder.out_dim+self.scale_pos_encoder.out_dim
-        from models.ocn_mlp import LocalDecoder
-        self.decoder = LocalDecoder(dim=coord_dim,c_dim=self.img_encoder.backbone.output_channel,hidden_size=512,n_blocks=5,output_dim=1,c_opteration='mul',norm_type='none').to(self.device)
+        from models.ocn_mlp import LocalDecoder,LocalDecoderFiLM
+        self.decoder = LocalDecoderFiLM(dim=self.img_encoder.backbone.output_channel,c_dim=self.img_encoder.backbone.output_channel,hidden_size=1024,n_blocks=3,output_dim=1,norm_type='none',leaky=True).to(self.device)
+
+        from app.nerf.main_nerf import NeRFAppConfig
+        from wisp.config._tyro import parse_args_tyro_v1
+        self.grid_args = parse_args_tyro_v1(NeRFAppConfig,'/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/nerf_hash.yaml')
+        from wisp.config import instantiate
+        blas = instantiate(self.grid_args.blas, pointcloud=None)
+        self.grid = instantiate(self.grid_args.grid, blas=blas).to(self.device)  # A grid keeps track of both features and occupancy
+
 
     def _test_ready(self):
         opt = self.opt
@@ -208,6 +217,7 @@ class Trainer(object):
         para2load= {
             "img_encoder": self.img_encoder,
             "decoder": self.decoder,
+            'grid':self.grid,
         }
         load_param(opt.load2test,para2load)
         self.img_encoder.eval()
@@ -224,6 +234,12 @@ class Trainer(object):
                                                           num_workers = self.opt.num_worker,
                                                           pin_memory=True, shuffle=True, drop_last=False,
                                                           persistent_workers=True)
+        from app.nerf.main_nerf import NeRFAppConfig
+        from wisp.config._tyro import parse_args_tyro_v1
+        args = parse_args_tyro_v1(NeRFAppConfig,'/home/data/zwk/cache/kaolin-wisp/app/nerf/configs/nerf_hash.yaml')
+        from wisp.config import instantiate
+        blas = instantiate(args.blas, pointcloud=None)
+        self.grid = instantiate(args.grid, blas=blas).to(self.device)  # A grid keeps track of both features and occupancy
 
     def train(self):
         opt = self.opt
@@ -245,7 +261,7 @@ class Trainer(object):
 
         #config the optimizer ,todo:
         from tool.util_mk_optimizer import create_optimizer_w_temple
-        self.optimizer = create_optimizer_w_temple({"img_encoder":self.img_encoder,"mlp":self.decoder},'adam')
+        self.optimizer = create_optimizer_w_temple({"img_encoder":self.img_encoder,"mlp":self.decoder,"grid":self.grid},'adam')
         # self.optimizer, self.lr_scheduler = make_optimizer(self.img_encoder, self.opt)
         # optimizer,scheduler = self.optimizer,self.lr_scheduler
 
@@ -291,20 +307,20 @@ class Trainer(object):
                 # uav_imgs, uav_nrcs = next(iter(self.uav_dataloader_train))
                 coords = torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio], 1).to(self.device)
 
-                # making coords,verison1:
+                # 1.making coords,verison1:
                 from util_gen_coord_samples_hierarchical import generate_pose_samples_hierarchical,get_stratified_sampling_configs,visualize_hierarchical_samples
                 config_sampling = get_stratified_sampling_configs(
                     base_rc_std = self.sat_dataset.halfimg_radius_nrc,
                     base_dir_std_rad = np.deg2rad(10),
                     base_log_s_std = 0.05,
                 )
-                coords_sample  = generate_pose_samples_hierarchical(
+                coords_sampled  = generate_pose_samples_hierarchical(
                     p_true_batch=coords,
                     rc_bounds=(self.sat_dataset.nr2sample_range, self.sat_dataset.nc2sample_range),
                     scale_bounds=self.sat_dataset.satimgsize_scale_to_200m_boundary,
                     sampling_configs=config_sampling, # <--- 传入动态生成的配置
                     num_uniform_samples=512
-                )
+                ).to(self.device)
                 # debug:vis the coord_samples
                 # visualize_hierarchical_samples(
                 #     p_true=coords[0],
@@ -337,16 +353,17 @@ class Trainer(object):
                 #     direction_std_dev_rad=0.1
                 # )
 
-                # making cooresponding distance
-                diff_rcs = coords.unsqueeze(1)[:,:,:2] - coords_sample[:,:,:2]
+
+                # 2.making cooresponding label:
+                diff_rcs = coords.unsqueeze(1)[:,:,:2] - coords_sampled[:,:,:2]
                 dists_rc = torch.norm(diff_rcs,dim=-1,keepdim=True)
-                diff_rots = coords.unsqueeze(1)[:, :, 2:3] - coords_sample[:, :, 2:3]
+                diff_rots = coords.unsqueeze(1)[:, :, 2:3] - coords_sampled[:, :, 2:3]
                 # 无论 diff_rots 的值有多大或多小，sin 和 cos 函数都会利用其周期性，将其映射到 [-1, 1] 的标准值域上。
                 # 实际上，这一步是把一个“角度”转换为了单位圆上的一个点的 (x, y) 坐标，其中 x = cos(diff_rots)，y = sin(diff_rots)。
                 # torch.atan2(y, x): atan2(y, x) 函数的作用是根据一个点的 (x, y) 坐标，计算出该点与原点连线和X轴正半轴之间的夹角。
                 # 这个函数的一个重要特性是，它的输出值域被严格限制在 (-π, π] 之间（也就是-180度到+180度）
                 dists_rot = torch.abs(torch.atan2(torch.sin(diff_rots), torch.cos(diff_rots)))
-                diff_scales = coords.unsqueeze(1)[:, :,3:] /coords_sample[:, :,3:]
+                diff_scales = coords.unsqueeze(1)[:, :,3:] /coords_sampled[:, :,3:]
                 dists_scale = torch.abs(torch.log(diff_scales)) #比例关系在对数空间中会变为加减关系
 
                 norm_factor_rc = math.sqrt(self.sat_dataset.nr2sample_h**2+self.sat_dataset.nc2sample_w**2)
@@ -356,32 +373,36 @@ class Trainer(object):
                 dists_rot_normed = dists_rot/nrom_factor_rot
                 dists_scale_normed = dists_scale/nrom_factor_scale
 
-                # 1. 定义权重 (这是需要您根据实验调整的超参数)
+                # 2.1 定义权重 (这是需要您根据实验调整的超参数)
                 w_rc = 1.0  # 位置权重，通常设为1.0作为基准
                 dist_threshold_accpetable = self.sat_dataset.halfimg_radius_nrc
-                w_d = dist_threshold_accpetable/norm_factor_rc * 0.5# 方向权重
+                w_d = dist_threshold_accpetable/norm_factor_rc*0.5 # 方向权重
                 w_s = w_d*0.5 # 尺度权重
-                # 2. 计算加权的平方和
+                # 2.2 计算加权的平方和
                 dist_true_squared = (
                         w_rc * (dists_rc_normed ** 2) +
                         w_d * (dists_rot_normed ** 2) +
                         w_s * (dists_scale_normed ** 2)
                 )
-                # 3. (可选但推荐) 取平方根，得到最终的距离
+                # 2.3 (可选但推荐) 取平方根，得到最终的距离
                 # 这使得 dist_true 的“单位”与 dist_pred 保持一致，损失函数更稳定
                 dist_label = torch.sqrt(dist_true_squared) + 1e-7
 
-                # making feats
+
+                #3.结果预测
+                # get feats from hash
+                gird_feats = self.feats_fm_grid(coords_sampled)
+                # get out put from mlp
                 from models.pos_encoder import encode_4d_coords
-                coords_sample_encoded = encode_4d_coords(coords_sample,self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder)
-                feats = self.img_encoder(satimg.to(self.device))
-                feats = feats.unsqueeze(1).expand(-1, coords_sample_encoded.shape[1], -1)
+                coords_sample_encoded = encode_4d_coords(coords_sampled, self.rc_pos_encoder, self.rot_pos_encoder, self.scale_pos_encoder)
+                feats_q = self.img_encoder(satimg.to(self.device))
+                feats_q = feats_q.unsqueeze(1).expand(-1, coords_sample_encoded.shape[1], -1)
 
                 # pred_dist
-                dist_pred = self.decoder(coords_sample_encoded, feats)
+                dist_pred = self.decoder(F.normalize(feats_q,dim=-1), F.normalize(gird_feats,dim=-1))
                 # dist_pred = torch.relu(dist_pred)
 
-                # 3. 创建权重张量 (weights tensor)
+                # get loss
                 sigma = self.sat_dataset.halfimg_radius_nrc*2  # 您提到的“UDF距离阈值”，这是关键的调节参数！
                 base_weight = 1.0
                 bonus_weight = 2.0  # 这使得在 dist_label=0 处的总权重为 1.0 + 9.0 = 10.0
@@ -413,7 +434,6 @@ class Trainer(object):
                 #     # c. 梯度清零，前向传播，计算loss (和之前一样)
                 #     self.optimizer.zero_grad()
 
-
                 # 梯度清零
                 self.optimizer.zero_grad()
                 # if opt.autocast:
@@ -442,6 +462,13 @@ class Trainer(object):
                     loss.backward()
                     self.optimizer.step()
 
+                if it%10==0:
+                    grid_feats_grad = self.grid.codebook.feats.grad
+                    if grid_feats_grad is not None:
+                        # 检查梯度的数值大小
+                        print("Grid feats grad L2 norm:", torch.linalg.norm(grid_feats_grad).item())
+                        print("Grid feats value.max():",gird_feats.max().item() )
+
                 # 输出loss指标
                 if it%10==0:
                     if self.writer is not None:
@@ -460,13 +487,14 @@ class Trainer(object):
                 para2save = {
                     "img_encoder":self.img_encoder.state_dict(),
                     "decoder":self.decoder.state_dict(),
+                    "grid":self.grid.state_dict(),
                     "optimizer_state": self.optimizer.state_dict(),
                     # "scheduler_state": self.lr_scheduler.state_dict(),
                     "epoch": epoch,
                            }
                 save_param(opt.exp_name, para2save)
-                self.img_encoder.to(self.device)
-                self.decoder.to(self.device)
+                # self.img_encoder.to(self.device)
+                # self.decoder.to(self.device)
 
             # val
             # self.val() if opt.val and (epoch % opt.val_freq ==0) else None
@@ -490,38 +518,87 @@ class Trainer(object):
 
     def test(self):
         self._test_ready()
+        from util_vis_4d_fields_in_2d import FieldViser2D
+        self.viser_2d = FieldViser2D()
 
         for it, data in tqdm.tqdm(enumerate(self.sat_dataloader)):
             satimg, sat_nrc, rad_roted, satimgsize_cover_ratio = data #the rot_rad are limited in [0,2pi]
             # uav_imgs, uav_nrcs = next(iter(self.uav_dataloader_train))
-
-            feats = self.img_encoder(satimg.to(self.device))
-            from util_vis_4d_fields_in_2d import visualize_udf_slice_rc
-            visualize_udf_slice_rc(
+            gird_coords=self.viser_2d.mk_grid_nrcs(
                 row_range=self.sat_dataset.nr2sample_range,
                 col_range=self.sat_dataset.nc2sample_range,
-                d_val=rad_roted.item(),
-                s_val=satimgsize_cover_ratio.item(),
-                resolution=32,
-                model_func=self.decoder,
-                pos_encoders=[self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder],
-                c_feat=feats[0],
-                gt_rc=sat_nrc,
-            )
-
-            from util_vis_4d_fields_in_3d import visualize_udf_3d_rc_rot
-            visualize_udf_3d_rc_rot(
-                r_range=self.sat_dataset.nr2sample_range,
-                c_range=self.sat_dataset.nc2sample_range,
-                rot_range=(0,2*math.pi),
                 resolution=64,
-                s_val=satimgsize_cover_ratio.item(),
-                model_func=self.decoder,
-                pos_encoders=[self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder],
-                c_feat=feats[0],
-                gt_pose=torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio],dim=-1).squeeze().numpy()
+                d_val=rad_roted[0].item(),
+                s_val=satimgsize_cover_ratio[0].item(),
             )
+            feats_gird = self.feats_fm_grid(gird_coords.to(self.device))
+            feats_q = self.img_encoder(satimg.to(self.device))
+            pred = self.decoder(F.normalize(feats_q,dim=-1), F.normalize(feats_gird,dim=-1))
+            self.viser_2d.vis(pred.detach().cpu().numpy(),gt_rc=sat_nrc.cpu().numpy())
 
+            # feats = self.img_encoder(satimg.to(self.device))
+            # from util_vis_4d_fields_in_2d import visualize_udf_slice_rc
+            # visualize_udf_slice_rc(
+            #     row_range=self.sat_dataset.nr2sample_range,
+            #     col_range=self.sat_dataset.nc2sample_range,
+            #     d_val=rad_roted.item(),
+            #     s_val=satimgsize_cover_ratio.item(),
+            #     resolution=32,
+            #     model_func=self.decoder,
+            #     pos_encoders=[self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder],
+            #     c_feat=feats[0],
+            #     gt_rc=sat_nrc,
+            # )
+
+            # from util_vis_4d_fields_in_3d import visualize_udf_3d_rc_rot
+            # visualize_udf_3d_rc_rot(
+            #     r_range=self.sat_dataset.nr2sample_range,
+            #     c_range=self.sat_dataset.nc2sample_range,
+            #     rot_range=(0,2*math.pi),
+            #     resolution=64,
+            #     s_val=satimgsize_cover_ratio.item(),
+            #     model_func=self.decoder,
+            #     pos_encoders=[self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder],
+            #     c_feat=feats[0],
+            #     gt_pose=torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio],dim=-1).squeeze().numpy()
+            # )
+
+    def feats_fm_grid(self,coords):
+        scales = coords[...,-1]
+        if len(coords.shape) == 3:
+            n,m,_ = coords.shape
+            coords_flatten = coords.flatten(start_dim=0, end_dim=1)
+        else:
+            coords_flatten = coords
+
+        grid_nrc_coords = coords_flatten[:, :2] * 2 - 1.
+        grid_rot_coords = coords_flatten[:, 2:3] / (2 * torch.pi) - 1.
+        grid_rot_coords *= (180/self.grid_args.grid.max_grid_res)
+        gird_3d_coords = torch.concatenate([grid_nrc_coords, grid_rot_coords], dim=-1)
+        n_gird_lod = len(self.grid.active_lods)
+        gird_feats = self.grid.interpolate(gird_3d_coords.to(self.device), n_gird_lod - 1)
+        #   aggerate the multiscale feats
+        normalized_scales = (scales - self.sat_dataset.satimgsize_scale_to_200m_boundary[0]) / (
+                    self.sat_dataset.satimgsize_scale_to_200m_boundary[1] -
+                    self.sat_dataset.satimgsize_scale_to_200m_boundary[0])
+        center_indices = (normalized_scales * (n_gird_lod - 1)).squeeze()
+        m_indices = torch.arange(n_gird_lod, device=normalized_scales.device)  # 形状: [M]
+        dist_sq = (center_indices.unsqueeze(1) - m_indices.unsqueeze(0)) ** 2
+        sigma = 1.0
+        scale_weights = torch.exp(-dist_sq / (2 * sigma ** 2))
+        scale_weights = scale_weights / torch.sum(scale_weights, dim=-1, keepdim=True)  # 形状: [N, M]
+        gird_feats = (gird_feats.reshape(gird_3d_coords.shape[0], n_gird_lod, -1) * scale_weights.unsqueeze(-1).to( self.device)).sum(dim=-2)
+
+        if len(coords.shape) == 3:
+            gird_feats = gird_feats.reshape(n, m, gird_feats.shape[-1])
+        return gird_feats
+
+def print_grad(grad, tensor_name=""):
+    """一个简单的 hook 函数，用来打印梯度的状态"""
+    if grad is not None:
+        print(f"✅ Tensor '{tensor_name}' received grad. Norm: {torch.linalg.norm(grad)}")
+    else:
+        print(f"❌ Tensor '{tensor_name}' received NO grad (None).")
 
         # # get feat_refs from satimg
         # # --- 1. 装载所有瓦片至cpu ---

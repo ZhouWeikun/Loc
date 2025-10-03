@@ -2,8 +2,14 @@ import torch
 from torch import nn
 # from pytorch_metric_learning.distances import LpDistance, DotProductSimilarity
 from mertic_learning import LpDistance,DotProductSimilarity
-from mertic_learning import pos_inf, neg_inf
+# from mertic_learning import pos_inf, neg_inf
 #todo:decoupling from mertic_learning
+
+def pos_inf(dtype):
+    return torch.finfo(dtype).max
+
+def neg_inf(dtype):
+    return torch.finfo(dtype).min
 
 """
 version 0: 
@@ -44,7 +50,7 @@ class WeightedSoftTripletLoss_v0(nn.Module):
         loss = torch.log(1 + torch.exp(self.alpha  * (dist_hardp - dist_hardn))).mean() #(dist_hardp - dist_hardn) large -> loss large
 
         """
-        acturally, loss = torch.log(1 + torch.exp(self.alpha  * -(x))) = -log(sigmoid(-(alpha  * (x))))
+        acturally, loss = torch.log(1 + torch.exp(self.alpha  * -(dist_hardn - dist_hardp))) = -log(sigmoid(-(alpha  * (dist_hardn - dist_hardp))))
         dist_hardn - dist_hardp large -> loss small
         loss = torch.log(1 + torch.exp(-self.alpha * (dist_hardn-dist_hardp))).mean()
         torch.stack([dist_hardn-dist_hardp,torch.log(1 + torch.exp(-self.alpha * (dist_hardn-dist_hardp)))],dim=-1)
@@ -55,7 +61,7 @@ class WeightedSoftTripletLoss_v0(nn.Module):
 
 
 """
-version 1: add rand_samples as negative references based  on version 0
+version 1: add rand_samples as negative references based on version 0
 """
 class WeightedSoftTripletLoss_v1(nn.Module):
     # writed by zwk
@@ -80,7 +86,6 @@ class WeightedSoftTripletLoss_v1(nn.Module):
         feats_r = torch.concatenate([feats_q,feats_p])
         feats_c = torch.concatenate([feats_q,feats_p,feats_rand])
         fdist_mat = self.eucdist_computer(feats_r,feats_c)
-        # fcos_mat = self.cossim_computer(feats_r,feats_c)
 
         # hard minning
         N = len(ids)
@@ -90,6 +95,135 @@ class WeightedSoftTripletLoss_v1(nn.Module):
         loss = torch.log(1 + torch.exp(self.alpha  * (dist_hardp - dist_hardn))).mean() #(dist_hardp - dist_hardn) large -> loss large
 
         return loss
+
+
+class MSLoss_fm_mat(nn.Module):
+    # writed by zwk
+    def __init__(self,dtype=torch.float32,slope_pos=7.5, slope_neg=7.5,tau=0.5, **kwargs):
+        super(MSLoss_fm_mat, self).__init__()
+        self.pos_ignore = torch.tensor(pos_inf(dtype),dtype=dtype)
+        self.neg_ignore = torch.tensor(neg_inf(dtype),dtype=dtype)
+        self.alpha = slope_pos
+        self.beta = slope_neg
+        self.tau = tau
+
+    def forward(self, feat_mat,
+                pos_mask,
+                metric='dist',
+                ):
+        """
+        Args:
+            feats_q:feats from uavimgs, [B,C,H,W]
+            feats_p:feats from satimgs_positive, [B,C,H,W]
+            feats_rand:feats from satimgs_random, [B,C,H,W]
+        """
+
+        neg_mask = ~pos_mask
+        pos_mat = feat_mat.clone()
+        neg_mat = feat_mat.clone()
+
+        if metric=='dist':
+            # hard minning:
+            pos_mat[neg_mask] = self.neg_ignore #fill the neg with -inf
+            neg_mat[pos_mask] = self.pos_ignore #fill the pos with +inf
+
+            pos_most_hard_per_row = torch.max(pos_mat,dim=-1)   #find the maximum distance of positive value in every row
+            neg_most_hard_per_row = torch.min(neg_mat,dim=-1)   #find the minimum distance of negative value in every row
+            hard_pos_mask = torch.gt(feat_mat, neg_most_hard_per_row[0].unsqueeze(1)) * pos_mask #getting the hard_pos_mask by comparing the neg_most_hard_per_row to the pos
+            hard_neg_mask = torch.lt(feat_mat, pos_most_hard_per_row[0].unsqueeze(1)) * neg_mask #getting the hard_neg_mask by comparing the pos_most_hard_per_row to the neg
+
+            # compute MS-loss:
+                # loss for hard_pos
+            hard_pos2compute_loss = feat_mat.masked_fill(~hard_pos_mask,self.neg_ignore) #fill the easy_pos_samples with -inf
+            hard_pos2compute_loss = torch.cat([hard_pos2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
+            loss_pos = 1/self.alpha * torch.logsumexp(self.alpha * (hard_pos2compute_loss - self.tau), dim=-1, keepdim=True).mean()
+                # loss for hard_neg
+            hard_neg2compute_loss = feat_mat.masked_fill(~hard_neg_mask,self.pos_ignore)
+            hard_neg2compute_loss = torch.cat([hard_neg2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
+            loss_neg = 1/self.beta * torch.logsumexp(-self.beta * (hard_neg2compute_loss - self.tau), dim=-1, keepdim=True).mean()
+        else:
+            pos_mat[neg_mask] = self.pos_ignore
+            neg_mat[pos_mask] = self.neg_ignore
+
+            pos_most_min_per_row = torch.min(pos_mat, dim=-1)
+            neg_most_max_per_row = torch.max(neg_mat, dim=-1)
+            hard_pos_mask = torch.lt(feat_mat, neg_most_max_per_row[0].unsqueeze(1)) * pos_mask
+            hard_neg_mask = torch.gt(feat_mat, pos_most_min_per_row[0].unsqueeze(1)) * neg_mask
+
+            hard_pos2compute_loss = feat_mat.masked_fill(~hard_pos_mask,self.neg_ignore)
+            hard_pos2compute_loss = torch.cat([hard_pos2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
+            loss_pos = torch.logsumexp(self.alpha * (self.tau-hard_pos2compute_loss), dim=-1, keepdim=True).mean()
+
+            hard_neg2compute_loss = feat_mat.masked_fill(~hard_neg_mask,self.pos_ignore)
+            hard_neg2compute_loss = torch.cat([hard_neg2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
+            loss_neg = torch.logsumexp(-self.beta * (hard_neg2compute_loss-self.tau), dim=-1, keepdim=True).mean()
+
+        return loss_pos+loss_neg
+
+
+class SWTLoss_fm_mat(nn.Module):
+    # writed by zwk
+    def __init__(self, dtype=torch.float32, slope_pos=5,slope_neg=5,decoupling=False, **kwargs):
+        super(SWTLoss_fm_mat, self).__init__()
+        self.pos_ignore = torch.tensor(pos_inf(dtype), dtype=dtype)
+        self.neg_ignore = torch.tensor(neg_inf(dtype), dtype=dtype)
+        self.alpha = slope_pos
+        self.beta = slope_neg
+        self.decoupling = decoupling
+
+    def forward(self, feat_mat,
+                pos_mask,
+                metric='dist',
+                ):
+
+        neg_mask = ~pos_mask
+        pos_mat = feat_mat.clone()
+        neg_mat = feat_mat.clone()
+
+        if metric == 'dist':
+            # hard minning:
+            pos_mat[neg_mask] = self.neg_ignore  # fill the neg with -inf
+            neg_mat[pos_mask] = self.pos_ignore  # fill the pos with +inf
+
+            pos_most_hard_per_row = torch.max(pos_mat,dim=-1)  # find the maximum distance of positive value in every row
+            neg_most_hard_per_row = torch.min(neg_mat,dim=-1)  # find the minimum distance of negative value in every row
+
+            if not self.decoupling:
+                return torch.log(1 + torch.exp( self.alpha * (pos_most_hard_per_row[0] - neg_most_hard_per_row[0]))).mean()  # (dist_hardp - dist_hardn) large -> loss large
+            #todo:issue to fix
+            hard_pos_mask = torch.gt(feat_mat, neg_most_hard_per_row[0].unsqueeze(1)) * pos_mask #getting the hard_pos_mask by comparing the neg_most_hard_per_row to the pos
+            hard_neg_mask = torch.lt(feat_mat, pos_most_hard_per_row[0].unsqueeze(1)) * neg_mask #getting the hard_neg_mask by comparing the pos_most_hard_per_row to the neg
+
+                # loss for hard_pos
+            delta_pos2compute_loss = feat_mat - neg_most_hard_per_row[0].unsqueeze(1)
+            hard_pos2compute_loss = delta_pos2compute_loss.masked_fill(~hard_pos_mask, self.neg_ignore)
+            hard_pos2compute_loss = torch.cat([hard_pos2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
+                # loss_pos = torch.logsumexp(self.alpha * hard_pos2compute_loss, dim=-1, keepdim=True).mean()
+            loss_per_row_pos = torch.logsumexp(self.alpha * hard_pos2compute_loss, dim=-1)
+            non_zero_mask_pos = loss_per_row_pos > 0
+                # If there are any rows with loss, compute their mean
+            if non_zero_mask_pos.sum() > 0:
+                loss_pos = loss_per_row_pos[non_zero_mask_pos].mean()
+            else:
+                # Handle the case where all samples in the batch are easy
+                loss_pos = torch.tensor(0.0, device=feat_mat.device)
+
+                # loss for hard_neg
+            delta_neg2compute_loss = pos_most_hard_per_row[0].unsqueeze(1) - feat_mat
+            hard_neg2compute_loss = delta_neg2compute_loss.masked_fill(~hard_neg_mask,self.pos_ignore)
+            hard_neg2compute_loss = torch.cat([hard_neg2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
+                # loss_neg = torch.logsumexp(-self.beta * hard_neg2compute_loss, dim=-1, keepdim=True).mean()
+            loss_per_row_neg = torch.logsumexp(-self.beta * hard_neg2compute_loss, dim=-1)
+            non_zero_mask_neg = loss_per_row_neg > 0
+                # If there are any rows with loss, compute their mean
+            if non_zero_mask_neg.sum() > 0:
+                loss_neg = loss_per_row_neg[non_zero_mask_neg].mean()
+            else:
+                # Handle the case where all samples in the batch are easy
+                loss_neg = torch.tensor(0.0, device=feat_mat.device)
+        else:
+            raise NotImplementedError("This function has not been implemented yet, baby is looking forward to it!")
+        return loss_neg + loss_pos
 
 
 """
@@ -140,6 +274,9 @@ class WeightedSoftTripletLoss_v2(nn.Module):
         loss = torch.log(1 + torch.exp(self.alpha  * (dist_hardp - dist_hardn) * hard_neg_weights )).mean() #(dist_hardp - dist_hardn) large -> loss large
 
         return loss
+
+
+
 
 
 """

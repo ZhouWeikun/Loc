@@ -2,7 +2,7 @@ import torch.nn as nn
 from .SingleBranch import SingleBranch, SingleBranchCNN, SingleBranchSwin
 from .FSRA import FSRA, FSRA_CNN, FSRA_wo_CLS
 from .LPN import LPN, LPN_CNN
-from .GeM import GeM
+from .GeM_fm_DUAV import GeM
 from .NetVLAD import NetVLAD
 from .salad import SALAD
 
@@ -36,7 +36,7 @@ class Head(nn.Module):
             head_model = LPN_CNN(opt)
         elif head == "GeM":
             head_model = GeM(opt)
-        elif "salad" in head.lower():
+        elif (head is not None) and ("salad" in head.lower()):
             head_model = SALAD()
         else:
             raise NameError("{} not in the head list!!!".format(head))

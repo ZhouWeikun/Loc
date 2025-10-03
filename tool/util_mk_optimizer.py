@@ -12,7 +12,7 @@ OPTIMIZER_TEMPLATES = {
             # mlp：从头训练，适度正则化以防过拟合
             {'param_source': 'mlp', 'lr': 1e-2, 'weight_decay': 1e-4},
             # hash_grid：对 embedding 做轻微 L2 正则，避免完全为 0，但不要太大
-            # {'param_source': 'hash_grid', 'lr': 5e-3, 'weight_decay': 1e-6},
+            {'param_source': 'grid', 'lr': 5e-3, 'weight_decay': 1e-6},
         ]
     },
     'adamw': {
@@ -27,7 +27,7 @@ OPTIMIZER_TEMPLATES = {
             # mlp：用更强的正则（防止从头训练的 MLP 过拟合）
             {'param_source': 'mlp', 'lr': 1e-3, 'weight_decay': 1e-4},
             # hash_grid：轻度 L2（若观测到 embedding 被压扁或性能下降，降到 1e-7 或 0）
-            # {'param_source': 'hash_grid', 'lr': 5e-3, 'weight_decay': 1e-6},
+            {'param_source': 'grid', 'lr': 5e-2, 'weight_decay': 1e-6},
         ]
     },
     'adam': {
@@ -39,7 +39,9 @@ OPTIMIZER_TEMPLATES = {
             {'param_source': 'no_decay', 'lr': 5e-5, 'weight_decay': 0.0},
             {'param_source': 'img_encoder', 'lr': 5e-5, 'weight_decay': 1e-6},
             {'param_source': 'mlp', 'lr': 1e-3, 'weight_decay': 1e-4},
-            # {'param_source': 'hash_grid', 'lr': 5e-3, 'weight_decay': 1e-6},
+            {'param_source': 'grid', 'lr': 1e-1, 'weight_decay': 1e-16},
+            {'param_source': 'grid_mlp', 'lr': 1e-2, 'weight_decay': 1e-6},
+            {'param_source': 'aggregator', 'lr': 1e-4, 'weight_decay': 1e-6},
         ]
     }
 }

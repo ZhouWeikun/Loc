@@ -1,20 +1,17 @@
+import torch
+import torch.nn.functional as F
 import torch.nn as nn
-from .utils import ClassBlock, Pooling, vector2image
 
-
-
-class GeM(nn.Module):
-    def __init__(self, opt) -> None:
+class GeMPool(nn.Module):
+    """Implementation of GeM as in https://github.com/filipradenovic/cnnimageretrieval-pytorch
+    we add flatten and norm so that we can use it as one aggregation layer.
+    """
+    def __init__(self, p=3, eps=1e-6):
         super().__init__()
-        self.opt = opt
-        self.classifier = ClassBlock(
-            opt.in_planes, opt.nclasses, opt.droprate, num_bottleneck=opt.num_bottleneck)
-        self.pool = Pooling(opt.h//16*opt.w//16, "gem")
+        self.p = nn.Parameter(torch.ones(1)*p)
+        self.eps = eps
 
-    def forward(self, features):# (N,(H*W+1),C)
-        local_feature = features[:, 1:]
-        local_feature = local_feature.transpose(1,2).contiguous()
-        # local_feature = vector2image(local_feature,dim = 2)
-        global_feature = self.pool(local_feature)
-        cls, feature = self.classifier(global_feature)
-        return [cls, feature]
+    def forward(self, x):
+        x = F.avg_pool2d(x.clamp(min=self.eps).pow(self.p), (x.size(-2), x.size(-1))).pow(1./self.p)
+        x = x.flatten(1)
+        return F.normalize(x, p=2, dim=1)

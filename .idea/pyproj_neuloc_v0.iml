@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$/../cache/kaolin-wisp" />
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/train_map_mutimlp_skzm" />
       <excludeFolder url="file://$MODULE_DIR$/train_skzm" />
@@ -10,7 +11,7 @@
     <content url="file://$MODULE_DIR$/../pyproj_pylib_zwk/uavloc_datahandler" />
     <content url="file://$MODULE_DIR$/../pyproj_pylib_zwk/uavloc_utils" />
     <content url="file://$MODULE_DIR$/../pyproj_pylib_zwk/visual_utils" />
-    <orderEntry type="jdk" jdkName="neuloc_v0" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="neuloc_wisp" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PyDocumentationSettings">

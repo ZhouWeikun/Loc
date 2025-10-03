@@ -25,13 +25,13 @@ def get_stratified_sampling_configs(
     # 未来如果想调整策略，只需修改这里即可。
     strategy_definition = [
         # 1. “碗底” (Bottom): 极小标准差，精细刻画最低点
-        {'name': 'bottom', 'num_samples': 64, 'rc_multiplier': 1.0, 'dir_multiplier': 1, 'scale_multiplier': 1},
+        {'name': 'bottom', 'num_samples': 4, 'rc_multiplier': 1.0, 'dir_multiplier': 1, 'scale_multiplier': 1},
 
         # 2. “碗壁” (Slope): 中等标准差，学习UDF坡度
-        {'name': 'slope', 'num_samples': 128, 'rc_multiplier': 10, 'dir_multiplier': 2, 'scale_multiplier': 1.2},
+        {'name': 'slope', 'num_samples': 0, 'rc_multiplier': 10, 'dir_multiplier': 2, 'scale_multiplier': 1.2},
 
         # 3. “边缘” (Rim): 较大标准差，学习过渡区域
-        {'name': 'rim', 'num_samples': 128, 'rc_multiplier': 20, 'dir_multiplier': 4, 'scale_multiplier': 1.4},
+        {'name': 'rim', 'num_samples': 0, 'rc_multiplier': 20, 'dir_multiplier': 4, 'scale_multiplier': 1.4},
     ]
 
     # 根据传入的基准值和策略定义，动态生成最终配置
@@ -94,6 +94,8 @@ def generate_pose_samples_hierarchical(
         rc_std = config['rc_std_dev']
         dir_std = config['direction_std_dev_rad']
         log_s_std = config['log_scale_std_dev']
+        if num_samples == 0:
+            continue
 
         # --- ★★★ 核心修改: 自适应标准差逻辑 (仅针对RC维度) ★★★ ---
         # 1. 计算每个真值点到四个边界的距离
@@ -129,7 +131,8 @@ def generate_pose_samples_hierarchical(
 
         # 2. 方向采样 (加性高斯 + 周期处理)
         sampled_d_rad = torch.randn(batch_size, num_samples, device=device, dtype=dtype) * dir_std + d_t_rad_batch
-        sampled_d_rad = (sampled_d_rad % two_pi + two_pi) % two_pi
+        # sampled_d_rad = (sampled_d_rad % two_pi + two_pi) % two_pi #将角度范围归一化到 [0, 2pi] ---
+        sampled_d_rad = (sampled_d_rad + pi) % two_pi - pi #将角度范围归一化到 [-pi, pi] ---
 
         # 3. 尺度采样 (对数正态)
         # --- ★★★ 新增: 尺度的自适应标准差 (在对数空间中) ★★★ ---
@@ -164,16 +167,31 @@ def generate_pose_samples_hierarchical(
     if num_uniform_samples == 0:
         return final_gaussian_samples
 
-    sampled_r_uni = (r_max - r_min) * torch.rand(num_uniform_samples, device=device, dtype=dtype) + r_min
-    sampled_c_uni = (c_max - c_min) * torch.rand(num_uniform_samples, device=device, dtype=dtype) + c_min
-    sampled_d_rad_uni = two_pi * torch.rand(num_uniform_samples, device=device, dtype=dtype)
-    sampled_s_uni = (s_max - s_min) * torch.rand(num_uniform_samples, device=device, dtype=dtype) + s_min
-    uniform_samples = torch.column_stack((sampled_r_uni, sampled_c_uni, sampled_d_rad_uni, sampled_s_uni))
-    expanded_uniform_samples = uniform_samples.unsqueeze(0).expand(batch_size, -1, -1)
+    # sampled_r_uni = (r_max - r_min) * torch.rand(num_uniform_samples, device=device, dtype=dtype) + r_min
+    # sampled_c_uni = (c_max - c_min) * torch.rand(num_uniform_samples, device=device, dtype=dtype) + c_min
+    # sampled_d_rad_uni = (two_pi * torch.rand(num_uniform_samples, device=device, dtype=dtype)) - pi
+    # sampled_s_uni = (s_max - s_min) * torch.rand(num_uniform_samples, device=device, dtype=dtype) + s_min
+    # uniform_samples = torch.column_stack((sampled_r_uni, sampled_c_uni, sampled_d_rad_uni, sampled_s_uni))
+    # expanded_uniform_samples = uniform_samples.unsqueeze(0).expand(batch_size, -1, -1)
 
-    final_samples = torch.cat([final_gaussian_samples, expanded_uniform_samples], dim=1)
+    # --- v4 修改点: 独立的全局均匀采样 ---
+    # 1. 一次性生成所有批次所需的所有独立随机点
+    total_uniform_samples = batch_size * num_uniform_samples
+    sampled_r_uni = (r_max - r_min) * torch.rand(total_uniform_samples, device=device, dtype=dtype) + r_min
+    sampled_c_uni = (c_max - c_min) * torch.rand(total_uniform_samples, device=device, dtype=dtype) + c_min
+    sampled_d_rad_uni = (two_pi * torch.rand(total_uniform_samples, device=device, dtype=dtype)) - pi
+    sampled_s_uni = (s_max - s_min) * torch.rand(total_uniform_samples, device=device, dtype=dtype) + s_min
+    # 2. 将扁平的点列表组合起来
+    uniform_samples_flat = torch.column_stack((sampled_r_uni, sampled_c_uni, sampled_d_rad_uni, sampled_s_uni))
+    # 3. 使用 .view() 将其重塑为批次结构
+    # 形状从 [B * num_uniform, 4] 变为 [B, num_uniform, 4]
+    uniform_samples_batch = uniform_samples_flat.view(batch_size, num_uniform_samples, 4)
+    # --- 修改结束 ---
+
+    final_samples = torch.cat([final_gaussian_samples, uniform_samples_batch], dim=1)
 
     return final_samples
+
 
 
 import matplotlib.pyplot as plt
@@ -238,21 +256,21 @@ def plot_1d_histogram(ax, p_true, all_samples, sampling_configs, dim, label, tit
 
 # --- 主可视化函数 ---
 def visualize_hierarchical_samples(
-        p_true: torch.Tensor,
-        rc_bounds: Tuple[Tuple[float, float], Tuple[float, float]],
-        sampling_configs: List[Dict[str, Any]],
-        all_samples: torch.Tensor,
-        num_uniform_samples: int
+      p_true: torch.Tensor,
+      rc_bounds: Tuple[Tuple[float, float], Tuple[float, float]],
+      sampling_configs: List[Dict[str, Any]],
+      all_samples: torch.Tensor,
+      num_uniform_samples: int
 ):
     """
     创建一个包含多个子图的仪表盘，全面可视化4D采样点。
+    - 适配 [-pi, pi] 角度范围。
     """
 
-    # 创建一个 3x2 的子图网格
     fig, axes = plt.subplots(3, 2, figsize=(12, 18))
     fig.suptitle('Comprehensive Sampling Visualization Dashboard', fontsize=16)
 
-    # --- 绘制 2D 散点图 ---
+    # ... 绘制 "Spatial Distribution (C vs R)" 的代码保持不变 ...
     # 1. Column vs Row
     plot_2d_scatter(axes[0, 0], p_true, all_samples, sampling_configs, num_uniform_samples,
                     x_dim=1, y_dim=0, x_label="Column (X)", y_label="Row (Y)", title="Spatial Distribution (C vs R)")
@@ -262,29 +280,48 @@ def visualize_hierarchical_samples(
     axes[0, 0].invert_yaxis()
     axes[0, 0].set_aspect('equal', adjustable='box')
 
-    # 2. Rotation vs Scale
+
+    # --- ★★★ 修改点 1: Rotation vs Scale 图 ★★★ ---
     plot_2d_scatter(axes[0, 1], p_true, all_samples, sampling_configs, num_uniform_samples,
                     x_dim=2, y_dim=3, x_label="Rotation (rad)", y_label="Scale",
                     title="Pose Distribution (Rot vs Scale)")
+    # --- 新增: 设置X轴范围和刻度 ---
+    pi = math.pi
+    axes[0, 1].set_xlim(-pi, pi)
+    rot_ticks = [-pi, -pi/2, 0, pi/2, pi]
+    rot_tick_labels = ['-π', '-π/2', '0', 'π/2', 'π']
+    axes[0, 1].set_xticks(rot_ticks)
+    axes[0, 1].set_xticklabels(rot_tick_labels)
 
-    # 3. Column vs Rotation
+
+    # --- ★★★ 修改点 2: Column vs Rotation 图 ★★★ ---
     plot_2d_scatter(axes[1, 0], p_true, all_samples, sampling_configs, num_uniform_samples,
                     x_dim=1, y_dim=2, x_label="Column (X)", y_label="Rotation (rad)", title="C vs Rot")
+    # --- 新增: 设置Y轴范围和刻度 ---
+    axes[1, 0].set_ylim(-pi, pi)
+    axes[1, 0].set_yticks(rot_ticks)
+    axes[1, 0].set_yticklabels(rot_tick_labels)
 
-    # 4. Column vs Scale
+
+    # ... 绘制 "Column vs Scale" 的代码保持不变 ...
     plot_2d_scatter(axes[1, 1], p_true, all_samples, sampling_configs, num_uniform_samples,
                     x_dim=1, y_dim=3, x_label="Column (X)", y_label="Scale", title="C vs Scale")
 
-    # --- 绘制 1D 直方图 ---
-    # 5. Rotation Distribution
+
+    # --- ★★★ 修改点 3: Rotation Distribution 直方图 ★★★ ---
     plot_1d_histogram(axes[2, 0], p_true, all_samples, sampling_configs,
                       dim=2, label="Rotation (rad)", title="Rotation Distribution by Layer")
+    # --- 新增: 设置X轴范围和刻度 ---
+    axes[2, 0].set_xlim(-pi, pi)
+    axes[2, 0].set_xticks(rot_ticks)
+    axes[2, 0].set_xticklabels(rot_tick_labels)
 
-    # 6. Scale Distribution
+
+    # ... 绘制 "Scale Distribution" 的代码保持不变 ...
     plot_1d_histogram(axes[2, 1], p_true, all_samples, sampling_configs,
                       dim=3, label="Scale", title="Scale Distribution by Layer")
 
-    # 调整布局并显示图表
+    # ... 布局和显示部分保持不变 ...
     fig.legend(*axes[0, 1].get_legend_handles_labels(), loc='lower center', ncol=5, bbox_to_anchor=(0.5, 0.0))
-    plt.tight_layout(rect=[0, 0.05, 1, 0.96])  # 调整布局，为总标题和图例留出空间
+    plt.tight_layout(rect=[0, 0.05, 1, 0.96])
     plt.show()

@@ -10,6 +10,8 @@ from torch.cuda.amp import autocast, GradScaler
 import torch.nn.functional as F
 import time
 import scipy.io
+from triton.language import dtype
+
 from tool.util_mk_optimizer import  make_optimizer
 from models.taskflow import make_img_encoder
 from tool.utils import save_network, copyfiles2checkpoints, get_preds, get_logger, calc_flops_params, set_seed,get_unique_exp_dir
@@ -176,16 +178,19 @@ class UDFComputer(object):
         # self.w_s = self.w_d * 0.5  # 尺度权重
         # weight definity,version1:
         self.w_rc = 0.5  # 位置权重，通常设为1.0作为基准
-        self.w_r = 0.3  # 位置权重，通常设为1.0作为基准
-        self.w_s = 0.2  # 尺度权重
+        self.w_r = 0.4  # 位置权重，通常设为1.0作为基准
+        self.w_s = 0.1  # 尺度权重
         rc_dist_threshold_accpetable = self.sat_dataset.halfimg_radius_nrc
-        self.weight_rc_dist_func = lambda x:torch.sigmoid(10*x/rc_dist_threshold_accpetable-5) #weight in [0,1],assuming x/rc_dist_threshold_accpetable mapping rc_dist_threshold_accpetable to 1
+        # self.weight_rc_dist_func = lambda x:torch.sigmoid(10*x/rc_dist_threshold_accpetable-5) #weight in [0,1],assuming x/rc_dist_threshold_accpetable mapping rc_dist_threshold_accpetable to 1
+        # self.neg_weight_fm_nrc_dist = lambda x:torch.sigmoid(7.5*x/rc_dist_threshold_accpetable-3.75) #x/rc_dist_threshold_accpetable -> mapping rc_dist_threshold_accpetable to 1
+        self.neg_weight_fm_nrc_dist = lambda x:torch.sigmoid(8.5*x/rc_dist_threshold_accpetable-4.68) #x/rc_dist_threshold_accpetable -> mapping rc_dist_threshold_accpetable to 1
+
         self.udf_threshold_accpetable = rc_dist_threshold_accpetable
 
-    def compute_udf_fm_diff(self, dists_rc,dists_rot,dists_scale):
+    def compute_udf_fm_diff(self, dists_rc, dists_rot, dists_scale=None):
         dists_rc_normed = dists_rc / self.norm_factor_rc
         dists_rot_normed = dists_rot / self.nrom_factor_rot
-        dists_scale_normed = dists_scale / self.nrom_factor_scale
+        dists_scale_normed = dists_scale / self.nrom_factor_scale if dists_scale is not None else None
 
         # 计算加权的平方和,version0
         # dist_total_sq = (
@@ -193,23 +198,28 @@ class UDFComputer(object):
         #         self.w_d * (dists_rot_normed ** 2) +
         #         self.w_s * (dists_scale_normed ** 2)
         # )
-
         # 计算加权的平方和, version1
-        proximity_weight = 1 - self.weight_rc_dist_func(dists_rc_normed)
-        dist_coarse_sq = dists_rc_normed ** 2
-        dist_fine_sq = (
-                self.w_rc * (dists_rc_normed ** 2) +
-                self.w_r * (dists_rot_normed ** 2) +
-                self.w_s * (dists_scale_normed ** 2)
-        )
-        dist_total_sq = (1 - proximity_weight) * dist_coarse_sq + proximity_weight * dist_fine_sq
-        # 计算加权的平方和, version2,todo:to be improved
-        # dist_total_sq = dists_rc_normed ** 2 \
-        #                     + (1-self.weight_rc_dist_func(dists_rc_normed)) * (dists_rot_normed ** 2) + self.weight_rc_dist_func(dists_rc_normed) \
-        #                     + (1-self.weight_rc_dist_func(dists_rc_normed)) * (dists_scale_normed ** 2) + self.weight_rc_dist_func(dists_rc_normed)
+        # proximity_weight = 1 - self.weight_rc_dist_func(dists_rc_normed)
+        # dist_coarse_sq = dists_rc_normed ** 2
+        # dist_fine_sq = (
+        #         self.w_rc * (dists_rc_normed ** 2) +
+        #         self.w_r * (dists_rot_normed ** 2) +
+        #         self.w_s * (dists_scale_normed ** 2)
+        # )
+        # dist_total_sq = (1 - proximity_weight) * dist_coarse_sq + proximity_weight * dist_fine_sq
+        # 计算加权的平方和, version2,todo:to be improved,需要保证每一项随dist增加都是单调不减的
+        rc_err = dists_rc_normed
+        neg_weight = self.neg_weight_fm_nrc_dist(dists_rc_normed)
+        rot_err = dists_rot_normed + (1-dists_rot_normed)*neg_weight
+        rot_term = torch.clamp(rot_err, max=1.0) # min(1.,scale_err)
+        if dists_scale is not None:
+            scale_err = dists_scale_normed + (1-dists_scale_normed)*neg_weight
+            scale_term = torch.clamp(scale_err, max=1.0) # min(1.,scale_err)
+            dist_total_sq = self.w_rc * rc_err ** 2 + self.w_r * rot_term ** 2 + self.w_s * scale_term ** 2
+        else:
+            dist_total_sq =  self.w_rc * rc_err**2 + self.w_r * rot_term**2
 
-        # 取平方根，得到最终的距离
-        # 这使得 dist_true 的“单位”与 dist_pred 保持一致，损失函数更稳定
+        #  取平方根，得到最终的距离,这使得 dist_true 的“单位”与 dist_pred 保持一致，损失函数更稳定
         dist_label = torch.sqrt(dist_total_sq) + 1e-7
         return dist_label
 
@@ -408,7 +418,7 @@ class Trainer(object):
                 s_dist_mat = gt_coords[:,3].unsqueeze(1) / coords_flatten[:,3].unsqueeze(0)
                 s_dist_mat = torch.abs(torch.log(s_dist_mat)).squeeze() #比例关系在对数空间中会变为加减关系
                 udf_dist_mat = self.udf_compter.compute_udf_fm_diff(rc_dist_mat,r_dist_mat,s_dist_mat)
-                positive_mat = udf_dist_mat < self.sat_dataset.halfimg_radius_nrc*0.65
+                positive_mat = udf_dist_mat < self.sat_dataset.halfimg_radius_nrc
 
                 feats_q = self.img_encoder(satimgs_q.to(self.device))
                 feats_q = self.aggregator(feats_q[:,1:,:].permute(0,2,1).reshape(satimgs_q.shape[0],self.feat_q_dim,14,14)) #for patchsize=16,imgszie=224
@@ -495,208 +505,278 @@ class Trainer(object):
                 from tool.util_backup_exp_by_git import backup_experiment
                 backup_experiment(exp_dir2save, self.opt)
 
-    def test(self):
+    def test_xy(self):
         self._test_ready()
         from util_vis_4d_fields_in_2d import FieldViser2D
         self.viser_2d = FieldViser2D()
-        from models.pos_encoder import encode_4d_coords
 
         with torch.no_grad():
-            for it, data in tqdm.tqdm(enumerate(self.sat_dataloader)):
-                satimg, sat_nrc, rad_roted, satimgsize_cover_ratio = data #the rot_rad are limited in [0,2pi]
-                # uav_imgs, uav_nrcs = next(iter(self.uav_dataloader_train))
-                gird_coords=self.viser_2d.mk_grid_nrcs(
-                    row_range=self.sat_dataset.nr2sample_range,
-                    col_range=self.sat_dataset.nc2sample_range,
-                    resolution=64,
-                    d_val=rad_roted[0].item(),
-                    s_val=satimgsize_cover_ratio[0].item(),
+            # get satimgs_gallery:
+                # get satimgs_gallery,v0:
+            # coords_gallery = self.viser_2d.mk_grid_nrcs(
+            #     row_range=self.sat_dataset.nr2sample_range,
+            #     col_range=self.sat_dataset.nc2sample_range,
+            #     resolution=64,
+            #     d_val=0,
+            #     s_val=self.sat_dataset.satimgsize_scale_to_200m_mean,
+            # )
+            # satimgs_gallery = self.sat_dataset.crop_satimgs_by_4d_coords(coords_gallery)
+            # satimgs_gallery_flatten = satimgs_gallery.flatten(start_dim=0,end_dim=1)
+                # get satimgs_gallery,v1:
+            overlap = 0.5
+            sat_tiles, nrcs_grid = self.sat_dataset.crop_sat_unifrom(size2clip=self.sat_dataset.satimgsize2crop_mean,overlap=overlap)
+            nrcs_grid_flatten = torch.from_numpy(nrcs_grid).flatten(start_dim=0,end_dim=1)
+            coords_gallery_flatten = torch.cat([nrcs_grid_flatten,torch.zeros(nrcs_grid_flatten.shape[0],1),torch.ones(nrcs_grid_flatten.shape[0],1)*self.sat_dataset.satimgsize_scale_to_200m_mean], dim=1)
+            satimgs_gallery_flatten = self.sat_dataset.scale_transform(sat_tiles.flatten(start_dim=0,end_dim=1))
+
+            nrcs_q = torch.from_numpy(self.sat_dataset.mk_rand_nrcs(128))
+            coords_q = torch.concatenate([nrcs_q,torch.zeros(nrcs_q.shape[0],1),torch.ones(nrcs_q.shape[0],1)*self.sat_dataset.satimgsize_scale_to_200m_mean],dim=-1)
+            satimgs_q = self.sat_dataset.crop_satimgs_by_4d_coords(coords_q)
+
+            # feat_fm_agg = True
+            # batchsize=256
+            # feat_galllery = []
+            # for batch in torch.split(satimgs_gallery_flatten, batchsize,dim=0):
+            #     feat = self.img_encoder(batch.to(self.device))
+            #     if feat_fm_agg:
+            #         feat = self.aggregator(feat[:, 1:, :].permute(0, 2, 1).reshape(feat.shape[0], self.feat_q_dim, 14, 14))
+            #     else:
+            #         feat = feat[:,0,:]
+            #     feat_galllery.append(feat.detach().cpu())
+            # feat_galllery = torch.cat(feat_galllery)
+            # feat_q = self.img_encoder(satimgs_q.to(self.device))
+            # if feat_fm_agg:
+            #     feat_q = self.aggregator(feat_q[:, 1:, :].permute(0, 2, 1).reshape(feat_q.shape[0], self.feat_q_dim, 14, 14)).detach().cpu()
+            # else:
+            #     feat_q = feat_q[:, 0, :].detach().cpu()
+            def get_feats(feat_fm_agg=True):
+                batchsize = 256
+                feat_galllery = []
+                for batch in torch.split(satimgs_gallery_flatten, batchsize, dim=0):
+                    feat = self.img_encoder(batch.to(self.device))
+                    if feat_fm_agg:
+                        feat = self.aggregator(
+                            feat[:, 1:, :].permute(0, 2, 1).reshape(feat.shape[0], self.feat_q_dim, 14, 14))
+                    else:
+                        feat = feat[:, 0, :]
+                    feat_galllery.append(feat.detach().cpu())
+                feat_galllery = torch.cat(feat_galllery)
+                feat_q = self.img_encoder(satimgs_q.to(self.device))
+                if feat_fm_agg:
+                    feat_q = self.aggregator(
+                        feat_q[:, 1:, :].permute(0, 2, 1).reshape(feat_q.shape[0], self.feat_q_dim, 14, 14)).detach().cpu()
+                else:
+                    feat_q = feat_q[:, 0, :].detach().cpu()
+                return feat_galllery, feat_q
+            feat_galllery_agg, feat_q_agg = get_feats(feat_fm_agg=True)
+            # feat_galllery_dino, feat_q_dino = get_feats(feat_fm_agg=False)
+
+            pred_agg = torch.norm(feat_q_agg.unsqueeze(1) - feat_galllery_agg.unsqueeze(0), dim=-1, p=2)
+            pred_v_agg, pred_id_agg = torch.sort(pred_agg.squeeze(), dim=-1, descending=False)
+            # pred_dino = torch.norm(feat_q_dino.unsqueeze(1) - feat_galllery_dino.unsqueeze(0), dim=-1, p=2)
+            # pred_v_dino, pred_id_dino = torch.sort(pred_dino.squeeze(), dim=-1, descending=False)
+
+            from eval_recall_fm_salad import qurey_label_fm_gallery_nrc,compute_recall_by_label
+            distrc_sats2uav, uav_labels_query = qurey_label_fm_gallery_nrc(nrcs_grid_flatten,nrcs_q,self.sat_dataset.halfimg_radius_nrc)
+            compute_recall_by_label(uav_labels_query, pred_id_agg[:,:200], k_values=[1, 5, 10, 20, 50])
+
+            vis = False
+            if vis:
+                gt2gallery_dist_mat = torch.norm(nrcs_q.unsqueeze(1)-nrcs_grid_flatten.unsqueeze(0),dim=-1,p=2)
+                gt_ids_flatten = torch.argmin(gt2gallery_dist_mat,dim=-1)
+                gt_rows = gt_ids_flatten // nrcs_grid.shape[1]
+                gt_cols = gt_ids_flatten % nrcs_grid.shape[1]
+                gt_ids = torch.stack([gt_rows, gt_cols], dim=0).T
+                gt_ids_np = gt_ids.detach().cpu().numpy()
+
+                id_seled = 0
+                from util_vis_retrieval_in_2d import visualize_response_map,calculate_peak_saliency,visualize_response_map_3d
+                visualize_response_map(
+                    response_map = pred_agg[id_seled].reshape(sat_tiles.shape[:2]).detach().cpu().numpy(),
+                    ground_truth_idx = (gt_ids_np[id_seled][0],gt_ids_np[id_seled][1]),
+                    mark_extreme = 'min',
+                    # cmap = 'coolwarm',
                 )
-                feats_grid = self.feats_fm_grid(gird_coords.to(self.device))
-                coords_encoded = encode_4d_coords(
-                    torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio], dim=-1)
-                    , self.rc_pos_encoder, self.rot_pos_encoder, self.scale_pos_encoder)
-                # feats_grid = self.grid_mlp(torch.concatenate([feats_grid, coords_encoded.expand(feats_grid.shape[0],-1).to(feats_grid.device)], dim=-1))
-                feats_grid = self.grid_mlp(s=feats_grid,c=torch.concatenate([feats_grid, coords_encoded.expand(feats_grid.shape[0],-1).to(feats_grid.device)], dim=-1))
-                feats_q = self.img_encoder(satimg.to(self.device))
-                # pred = F.normalize(feats_grid,dim=-1)@F.normalize(feats_q,dim=-1).T
-                pred = torch.norm(feats_q.squeeze()-feats_grid.squeeze(),dim=-1,p=2)
-                v,id = torch.sort(pred.squeeze(), dim=-1,descending=False)
-                dist_v,dist_id = torch.sort(torch.norm(sat_nrc-gird_coords[:,:2],dim=-1), dim=-1,descending=False)
-                # v[0]**2/1024=loss_mse,v[0]= the min norm
-                # loss_mse = v[0]**2/feats_q.shape[-1]
-                self.viser_2d.vis(pred.squeeze().detach().cpu().numpy(),gt_rc=sat_nrc.cpu().numpy(),extreme='min')
 
-                # feats = self.img_encoder(satimg.to(self.device))
-                # from util_vis_4d_fields_in_2d import visualize_udf_slice_rc
-                # visualize_udf_slice_rc(
-                #     row_range=self.sat_dataset.nr2sample_range,
-                #     col_range=self.sat_dataset.nc2sample_range,
-                #     d_val=rad_roted.item(),
-                #     s_val=satimgsize_cover_ratio.item(),
-                #     resolution=32,
-                #     model_func=self.decoder,
-                #     pos_encoders=[self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder],
-                #     c_feat=feats[0],
-                #     gt_rc=sat_nrc,
-                # )
 
-                # from util_vis_4d_fields_in_3d import visualize_udf_3d_rc_rot
-                # visualize_udf_3d_rc_rot(
-                #     r_range=self.sat_dataset.nr2sample_range,
-                #     c_range=self.sat_dataset.nc2sample_range,
-                #     rot_range=(0,2*math.pi),
-                #     resolution=64,
-                #     s_val=satimgsize_cover_ratio.item(),
-                #     model_func=self.decoder,
-                #     pos_encoders=[self.rc_pos_encoder,self.rot_pos_encoder,self.scale_pos_encoder],
-                #     c_feat=feats[0],
-                #     gt_pose=torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio],dim=-1).squeeze().numpy()
-                # )
+    def test_xy_rot(self):
+        self._test_ready()
+        from util_vis_4d_fields_in_2d import FieldViser2D
+        self.viser_2d = FieldViser2D()
 
-    def feats_fm_grid(self,coords):
-        if len(coords.shape) == 3:
-            n,m,_ = coords.shape
-            coords_flatten = coords.flatten(start_dim=0, end_dim=1)
-        else:
-            coords_flatten = coords
-        scales = coords_flatten[..., -1]
+        def get_feats(satimgs_flatten, feat_fm_agg=True):
+            batchsize = 512
+            feat_galllery = []
+            for batch in torch.split(satimgs_flatten, batchsize, dim=0):
+                feat = self.img_encoder(batch.to(self.device))
+                if feat_fm_agg:
+                    feat = self.aggregator(
+                        feat[:, 1:, :].permute(0, 2, 1).reshape(feat.shape[0], self.feat_q_dim, 14, 14))
+                else:
+                    feat = feat[:, 0, :]
+                feat_galllery.append(feat.detach().cpu())
+            feat_galllery = torch.cat(feat_galllery)
+            return feat_galllery
 
-        grid_nrc_coords = coords_flatten[:, :2] * 2 - 1.
-        grid_rot_coords = coords_flatten[:, 2:3] / (2 * torch.pi) - 1.
-        grid_rot_coords *= (180/self.grid_args.grid.max_grid_res)
-        gird_3d_coords = torch.concatenate([grid_nrc_coords, grid_rot_coords], dim=-1)
-        n_gird_lod = len(self.grid.active_lods)
-        feats_grid = self.grid.interpolate(gird_3d_coords.to(self.device), n_gird_lod - 1)
-        #   aggerate the multiscale feats
-        # normalized_scales = (scales - self.sat_dataset.satimgsize_scale_to_200m_boundary[0]) / (
-        #             self.sat_dataset.satimgsize_scale_to_200m_boundary[1] -
-        #             self.sat_dataset.satimgsize_scale_to_200m_boundary[0])
-        normalized_scales = (self.sat_dataset.satimgsize_scale_to_200m_boundary[1] - scales) / (
-                self.sat_dataset.satimgsize_scale_to_200m_boundary[1] - self.sat_dataset.satimgsize_scale_to_200m_boundary[0])
-        center_indices = (normalized_scales * (n_gird_lod - 1)).squeeze()
-        m_indices = torch.arange(n_gird_lod, device=normalized_scales.device)  # 形状: [M]
+        with torch.no_grad():
+            overlap = 0.5
+            suffix = f"_overlap{overlap}_radius{self.sat_dataset.halfimg_radius_meter:.0f}m.mat"
+            p2gallery_mat = f"{os.path.dirname(self.opt.load2test)}/{os.path.basename(self.opt.load2test).replace('.pth', suffix)}"
+            if os.path.exists(p2gallery_mat):
+                gallery_mat = scipy.io.loadmat(p2gallery_mat)
+                feat_gallery_roted = torch.tensor(p2gallery_mat['feat_gallery']).flatten(start_dim=0, end_dim=1)
+                nrcs_gallery =  torch.tensor(gallery_mat['feat_gallery'])
+                rots_ref = torch.tensor(gallery_mat['rots_ref'])
 
-        dist = torch.abs(center_indices.unsqueeze(1) - m_indices.unsqueeze(0))
-        epsilon = 1e-8
-        # scale_weights = 1.0 / (dist + epsilon)
-        p = 0.5  #p=2时，权重随距离二次方衰减（衰减更快）;p=0.5时，衰减更慢
-        scale_weights = 1.0 / (dist.pow(p) + epsilon)
-        scale_weights = scale_weights / torch.sum(scale_weights, dim=-1, keepdim=True)
+            else:
+                # get satimgs_gallery,v1
 
-        feats_grid = (feats_grid.reshape(gird_3d_coords.shape[0], n_gird_lod, -1) * scale_weights.unsqueeze(-1).to( self.device)).sum(dim=-2)
+                sat_gallary, nrcs_gallery = self.sat_dataset.crop_sat_unifrom(size2clip=self.sat_dataset.satimgsize2crop_mean,overlap=overlap)
+                nrcs_gallery_flatten = torch.from_numpy(nrcs_gallery).flatten(start_dim=0,end_dim=1)
 
-        if len(coords.shape) == 3:
-            feats_grid = feats_grid.reshape(n, m, feats_grid.shape[-1])
-        return feats_grid
+                # coords_gallery_flatten = torch.cat([nrcs_grid_flatten,torch.zeros(nrcs_grid_flatten.shape[0],1),torch.ones(nrcs_grid_flatten.shape[0],1)*self.sat_dataset.satimgsize_scale_to_200m_mean], dim=1)
+                satimgs_gallery_flatten = self.sat_dataset.scale_transform(sat_gallary.flatten(start_dim=0,end_dim=1))
 
-        # # get feat_refs from satimg
-        # # --- 1. 装载所有瓦片至cpu ---
-        # # 确保 crop_sat_unifrom 返回的是CPU上的Tensor或Numpy数组
-        # sat_tiles, rc_gallery = self.dataloader_test.dataset.sat_dataset.crop_sat_unifrom(overlap=overlap)
-        # # 在CPU上进行变形和缓存
-        # sat_tiles = sat_tiles.reshape(-1, *sat_tiles.shape[2:])
-        # print(f"已在CPU上缓存 {sat_tiles.shape[0]} 个瓦片。")
-        # # --- 2. 分批处理瓦片，每次只将一小批数据移至GPU ---
-        # split_size = 32  # 这是您送入模型的批大小 (batch size)
-        # feat_gallery = []
-        # sg_gallery = []
-        # print("开始分批提取特征...")
-        # for tiles_batch_cpu in tqdm.tqdm(torch.split(sat_tiles, split_size, dim=0), desc="Extracting Features"):
-        #     tiles_batch_gpu = tiles_batch_cpu.to(self.device)
-        #     with torch.no_grad():
-        #         if with_sg:
-        #             output, output_sgs = img_encoder(tiles_batch_gpu, ret_sg=True)
-        #             sg_gallery.append(output_sgs)
-        #         else:
-        #             output = img_encoder(tiles_batch_gpu, ret_sg=False)
-        #     output = output[1] if isinstance(output, list) else output
-        #     # 将计算结果立即移回CPU，以释放GPU显存
-        #     feat_g = output.detach().cpu()
-        #     feat_g = feat_g.view(feat_g.shape[0], -1) if len(feat_g.shape) > 2 else feat_g
-        #     feat_gallery.append(feat_g)
-        # # --- 3. 在CPU上拼接所有批次的特征 ---
-        # feat_gallery = torch.cat(feat_gallery, dim=0)
-        # print("所有瓦片的特征已提取完成。")
-        #
-        # # get feat_querys from uavimgs
-        # feat_query,rc_query = [],[]
-        # sg_query = []
-        # for data in tqdm.tqdm(dataloader):
-        #     uavimg_q, uav_rc = data[0].to(self.device),data[1]
-        #     if with_sg:
-        #         output,output_sgs = img_encoder(uavimg_q,ret_sg=True)
-        #         sg_gallery.append(output_sgs)
-        #     else:
-        #         output = img_encoder(uavimg_q, ret_sg=False)
-        #     feat_q = output[1] if type(output)==list else output
-        #     feat_q =  feat_q.view(feat_q.shape[0],-1) if len(feat_q.shape)>2 else feat_q
-        #     feat_query.append(feat_q.detach().cpu())
-        #     rc_query.append(uav_rc)
-        #     sg_query.append(output_sgs) if with_sg else None
-        # feat_query = torch.cat(feat_query,dim=0)
-        # rc_query = np.concatenate(rc_query,axis=0)
-        #
-        # # get georc_info
-        # georc_gallary = dataloader.dataset.sat_dataset.transform_nrc_to_georc(rc_gallery.reshape(-1,2)) #todo:
-        # sg_gallery = torch.cat(sg_gallery, dim=0).detach().cpu() if with_sg else None
-        # georc_query = dataloader.dataset.sat_dataset.transform_nrc_to_georc(rc_query)
-        # sg_query = torch.cat(sg_query, dim=0).detach().cpu() if with_sg else None
-        #
-        # # get gt_label fro perd
-        # from eval_recall_fm_salad import qurey_label_fm_gallery_nrc
-        # distrc_sats2uav, uav_labels_query = qurey_label_fm_gallery_nrc(rc_gallery.reshape(-1, 2), rc_query, dataloader.dataset.sat_dataset.halfimg_radius_nrc)
-        # rotdeg_fm_north_anticlock = dataloader.uav_dataset.rotdeg_fm_north_anticlock if hasattr(dataloader.dataset.uav_dataset,'rotdeg_fm_north_anticlock') else None
-        #
-        # # log the recall
-        # from eval_recall_fm_salad import compute_recall_from_feat
-        # d = compute_recall_from_feat(feat_query.contiguous(), feat_gallery.contiguous(), uav_labels_query,[1, 5, 20, 50, 200], faiss_gpu=False)
-        # info = "Recall"
-        # for k, v in d.items():
-        #     info = info + f" @{k}:{v * 100:.2f} "
-        # self.logger.info(info) if hasattr(self, "logger") else None
-        # # write the recall to a txt
-        # p_txt2write = os.path.join(os.path.dirname(self.opt.load2test), f"recall_overlap{overlap}.txt")
-        # info2wirte = 'p_json=' + self.opt.p_satinfo_json
-        # info2wirte += f'\nn_refs={feat_gallery.shape[0]}'
-        # info2wirte += f'\nsatimgsize2crop={self.opt.satimgsize2crop}'
-        # info2wirte += f'\nrecall_m={dataloader.dataset.sat_dataset.halfimg_radius_meter}'
-        # # info2wirte += f'\nsample_overlap={overlap}'
-        # info2wirte += info
-        # with open(p_txt2write, 'a', encoding='utf-8') as f:
-        #     f.write(info2wirte)
-        #
-        # if save_res:
-        #     # save the result matrix:
-        #     result = {'gallery_feat': feat_gallery.detach().cpu().numpy(),
-        #               'gallery_rc': rc_gallery,
-        #               'gallery_georc': georc_gallary,
-        #               'gallery_hw':np.array(rc_gallery.shape[:2]),
-        #               'query_feat': feat_query.detach().cpu().numpy(),
-        #               'query_rc': rc_query,
-        #               'query_latlon': georc_query,
-        #               'query_label': uav_labels_query,
-        #               'query_dist': distrc_sats2uav,
-        #               'radius_rc': dataloader.dataset.sat_dataset.halfimg_radius_nrc,
-        #               'radius_meter': dataloader.dataset.sat_dataset.halfimg_radius_meter,
-        #               }
-        #     if with_sg:
-        #         result['gallery_sg'] = sg_gallery
-        #         result['query_sg'] = sg_query
-        #         result['rotdeg_fm_north_anticlock'] = rotdeg_fm_north_anticlock
-        #
-        #     suffix = f"_overlap{overlap}_radius{dataloader.dataset.sat_dataset.halfimg_radius_meter:.0f}m.mat"
-        #     scipy.io.savemat( f"{self.opt.exps_dir}/{self.opt.exp_name}/{os.path.basename(self.opt.load2test).replace('.pth', suffix)}" ,result)
+                from dataset_transform_making import RandomRotationWithAngle
+                rotater = RandomRotationWithAngle(degrees=180, same_on_batch=True)
+                delta_rot_rangle = 10
+                rot_angles = [-180 + delta_rot_rangle * i for i in range(360 // delta_rot_rangle)]
+                feat_gallery_roted = []
+                for rot in tqdm.tqdm(rot_angles):
+                    satimgs_roted = rotater(satimgs_gallery_flatten, rot)
+                    feat_gallery_roted.append(get_feats(satimgs_roted, feat_fm_agg=True))
+                feat_gallery_roted = torch.stack(feat_gallery_roted,dim=1)
 
+                rots_ref = torch.tensor(np.deg2rad(np.stack(rot_angles)), dtype=torch.float32)
+                result = {'feat_gallery': feat_gallery_roted.reshape(*sat_gallary.shape[:2],*feat_gallery_roted.shape[1:]).detach().cpu().numpy(),
+                          'nrcs_gallery': nrcs_gallery.detach().cpu().numpy(),
+                          'rots_ref': np.array(rot_angles),
+                          }
+                scipy.io.savemat(p2gallery_mat,result)
+
+            # get satimgs_query_feat
+            n_query = 128
+            nrcs_q = torch.from_numpy(self.sat_dataset.mk_rand_nrcs(n_query))
+            rots_q = -torch.pi + 2*torch.pi*torch.rand(n_query)
+            coords_q = torch.concatenate([nrcs_q,rots_q.unsqueeze(1),torch.ones(nrcs_q.shape[0],1)*self.sat_dataset.satimgsize_scale_to_200m_mean],dim=-1)
+            satimgs_q = self.sat_dataset.crop_satimgs_by_4d_coords(coords_q)
+            feat_q = get_feats(satimgs_q, feat_fm_agg=True)
+
+            # computing pred
+            pred_agg = torch.norm(feat_q[:,None,None,:] - feat_gallery_roted.unsqueeze(0), dim=-1, p=2)
+            pred_v,pred_id = torch.sort( pred_agg.flatten(start_dim=1,end_dim=2), dim=-1, descending=False)
+            pred_id_rot = pred_id % pred_agg.shape[2]  # 应该是 pred_id % R
+            pred_id_rc = pred_id // pred_agg.shape[2]  # 应该是 pred_id // R
+            from util_unravel_index import unravel_index
+            pred_ids_unraled = unravel_index(pred_id,torch.Size([nrcs_gallery.shape[0],nrcs_gallery.shape[1],pred_agg.shape[2] ]))
+            # pred_row = pred_ids_unraled[0]
+            # pred_col = pred_ids_unraled[1]
+            # pred_rot = pred_ids_unraled[2]
+
+            # computing gt
+            gt2gallery_rc_dist_mat = torch.norm(nrcs_q.unsqueeze(1) - nrcs_gallery_flatten.unsqueeze(0), dim=-1, p=2)
+            gt_ids_rc_flatten = torch.argmin(gt2gallery_rc_dist_mat, dim=-1)
+            gt_rows = gt_ids_rc_flatten // nrcs_gallery.shape[1]
+            gt_cols = gt_ids_rc_flatten % nrcs_gallery.shape[1]
+            gt_ids_rc = torch.stack([gt_rows, gt_cols], dim=0).T
+            gt_ids_rc_np = gt_ids_rc.detach().cpu().numpy()
+            angular_diff_raw = torch.tensor(np.deg2rad(np.stack(rot_angles)),dtype=torch.float32,device=rots_q.device)[None,...]-rots_q.unsqueeze(1)
+            angular_diff_normalized = (angular_diff_raw + torch.pi) % (2 * torch.pi) - torch.pi #将差值归一化到 [-pi, pi] 这个区间内,找到最短角度差,公式为: (diff + pi) % (2 * pi) - pi
+            angular_dist = torch.abs(angular_diff_normalized)
+            gt_ids_rot = torch.argmin(angular_dist, dim=-1)  # Shape: (N_q)
+            gt_ids_rot_np = gt_ids_rot.detach().cpu().numpy()
+
+            from eval_recall_fm_salad import qurey_label_fm_gallery_nrc,compute_recall_by_label,create_success_mask
+            distrc_sats2uav, uav_labels_query = qurey_label_fm_gallery_nrc(nrcs_gallery_flatten,nrcs_q,self.sat_dataset.halfimg_radius_nrc)
+            compute_recall_by_label(uav_labels_query, pred_id_rc[:,:200], k_values=[1, 5, 10, 20, 50])
+
+            rot_mask = create_success_mask(pred_id_rc[:,:1], uav_labels_query, k=1)
+            rot_recall_results = compute_recall_by_label(
+                q_labels=gt_ids_rot[rot_mask].unsqueeze(-1),
+                pred_labels_per_query=pred_ids_unraled[2][rot_mask,:10],
+                k_values=[1, 5, 10],
+                title="Conditional Rotation Recall (based on radius search)"
+            )
+            print("\n条件旋转召回率结果:", rot_recall_results)
+
+            gtrot2eval = rots_q[rot_mask]
+            predrot2eval= rots_ref[pred_ids_unraled[2][rot_mask,0]]
+            rot_err2eval = gtrot2eval - predrot2eval
+            rot_err_min = torch.abs(torch.atan2(torch.sin(rot_err2eval),torch.cos(rot_err2eval)))
+            rot_err_min = torch.rad2deg(rot_err_min)
+            print("\n平均旋转估计误差:", rot_err_min.mean().item())
+
+            compute_udf=False
+            if compute_udf:
+                pred_rc_err_min = torch.norm(nrcs_q - nrcs_gallery[pred_ids_unraled[0][:,0],pred_ids_unraled[1][:,0]],dim=-1,p=2)
+                pred_rot_err_min = rots_q-torch.deg2rad(torch.tensor(rot_angles))[pred_id_rot[:,0]]
+                pred_rot_err_min = torch.abs(torch.atan2(torch.sin(pred_rot_err_min), torch.cos(pred_rot_err_min))).squeeze()  # atan2 函数的输出范围是 [-π, π]
+                self.udf_compter = UDFComputer(self.sat_dataset)
+                udf_dist = self.udf_compter.compute_udf_fm_diff(pred_rc_err_min,pred_rot_err_min)
+
+            vis = False
+            if vis:
+                gt2gallery_dist_mat = torch.norm(nrcs_q.unsqueeze(1)-nrcs_gallery_flatten.unsqueeze(0),dim=-1,p=2)
+                gt_ids_flatten = torch.argmin(gt2gallery_dist_mat,dim=-1)
+                gt_rows = gt_ids_flatten // nrcs_gallery.shape[1]
+                gt_cols = gt_ids_flatten % nrcs_gallery.shape[1]
+                gt_ids = torch.stack([gt_rows, gt_cols], dim=0).T
+                gt_ids_np = gt_ids.detach().cpu().numpy()
+
+                id_seled = 0
+                from util_vis_retrieval_in_2d import visualize_response_map,calculate_peak_saliency,visualize_response_map_3d
+                visualize_response_map(
+                    response_map = pred_agg[id_seled].reshape(nrcs_gallery.shape[:2]).detach().cpu().numpy(),
+                    ground_truth_idx = (gt_ids_np[id_seled][0],gt_ids_np[id_seled][1]),
+                    mark_extreme = 'min',
+                    # cmap = 'coolwarm',
+                )
+                visualize_response_map_3d( torch.exp(-pred_agg[id_seled]).reshape(nrcs_gallery.shape[:2]).detach().cpu().numpy() )
+
+
+    def mk_gallery_feat(self):
+        self._test_ready()
+        satimgsize2crop = self.sat_dataset.satimgsize2crop
+        overlap=0.5
+        sat_tiles, nrcs_girdcoord_center = self.sat_dataset.crop_sat_unifrom(size2clip=satimgsize2crop,overlap=overlap)
+
+        from dataset_transform_making import RandomRotationWithAngle
+        rotater = RandomRotationWithAngle(degrees=180,same_on_batch=True)
+        sat_tiles_roted = []
+        delta_rot_rangle = 10
+        rot_angles = [-180 + delta_rot_rangle*i for i in range(360//delta_rot_rangle)]
+        for rot in rot_angles:
+            sat_tiles_roted.append(rotater(sat_tiles.flatten(start_dim=0,end_dim=1),rot))
+        sat_tiles_roted = torch.concatenate(sat_tiles_roted,dim=0)
+        sat_tiles_roted = self.sat_dataset.scale_transform(sat_tiles_roted)
+
+        batchsize = 512
+        feat_gallery = []
+        with torch.no_grad():
+            for batch in torch.split(sat_tiles_roted, batchsize, dim=0):
+                feats = self.img_encoder(batch[:, 0, ...].to(self.device))
+                feats = self.aggregator(feats[:, 1:, :].permute(0, 2, 1).reshape(-1, self.feat_q_dim, 14, 14))
+                feat_gallery.append(feats)
+        feat_gallery = torch.cat(feat_gallery,dim=0)
+        feat_gallery = feat_gallery.reshape(-1,360//delta_rot_rangle,feat_gallery.shape[-1])
+
+        # save the result matrix:
+        result = {'feat_gallery': feat_gallery.detach().cpu().numpy(),
+                  'nrc_gallery': nrcs_girdcoord_center.detach().cpu().numpy(),
+                  }
+        suffix = f"_overlap{overlap}_radius{self.sat_dataset.halfimg_radius_meter:.0f}m.mat"
+        scipy.io.savemat(
+            f"{os.path.dirname(self.opt.load2test)}/{os.path.basename(self.opt.load2test).replace('.pth', suffix)}", result)
 
 
 if __name__ == '__main__':
     torch.manual_seed(666)
     np.random.seed(2025)
     trainer = Trainer()
-    trainer.train()
+    # trainer.train()
     # trainer.val()
-    # trainer.test()
+    trainer.test_xy_rot()
+    # trainer.mk_map_feats()
     # trainer.test_xy()
     # trainer.output_test_res()
     # trainer.test_rot()

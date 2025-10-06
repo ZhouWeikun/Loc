@@ -2,7 +2,7 @@ import torch
 import torchvision.transforms as transforms
 from torchvision.transforms import functional as F
 import random
-
+from typing import List, Union
 
 # 改进后的自定义 Transform 类，能正确处理 Batch
 class RandomRotationWithAngle(torch.nn.Module):
@@ -29,42 +29,109 @@ class RandomRotationWithAngle(torch.nn.Module):
         # 用来存储角度，可以是单个浮点数或一个列表
         self.angle = None
 
-    def forward(self, img: torch.Tensor) -> torch.Tensor:
-        if img.ndim == 4:  # --- 处理一个 Batch ---
+    def forward(self, img: torch.Tensor, angle: Union[float, List[float], None] = None) -> torch.Tensor:
+        """
+        Args:
+            img (Tensor): 输入图像 (3D) 或图像批次 (4D)。
+            angle (float, List[float], optional):
+                - 如果提供，则使用此角度/角度列表进行旋转。
+                - 如果为 None，则进行随机旋转。
+                - 对于批处理，可以是一个浮点数为整个批次应用相同旋转，
+                  也可以是一个列表为批次中每个图像应用不同旋转。
+                Defaults to None.
+        Returns:
+            Tensor: 旋转后的图像或图像批次。
+        """
+        # --- 1. 处理一个 Batch ---
+        if img.ndim == 4:
+            batch_size = img.shape[0]
 
-            if self.same_on_batch:
-                # --- 行为B: 对整个Batch应用同一个旋转 ---
-                # 1. 只生成一个随机角度
-                random_angle = random.uniform(self.degrees[0], self.degrees[1])
-                self.angle = random_angle  # 保存这个单值
-
-                # 2. F.rotate 可以直接处理Batch，当angle是标量时，它会对所有图应用相同旋转
-                return F.rotate(img, self.angle, self.interpolation, fill=self.fill)
-
+            # 步骤 A: 决定要使用的角度
+            angles_to_apply = None
+            if angle is not None:
+                # 优先使用外部传入的、确定的角度
+                angles_to_apply = angle
             else:
-                # --- 行为A: 对Batch中每个样本应用不同旋转 (原始逻辑) ---
-                batch_size = img.shape[0]
+                # Fallback: 生成随机角度
+                if self.same_on_batch:
+                    angles_to_apply = random.uniform(self.degrees[0], self.degrees[1])
+                else:
+                    angles_to_apply = [random.uniform(self.degrees[0], self.degrees[1]) for _ in range(batch_size)]
 
-                # 1. 为每个图片生成一个随机角度列表
-                angles = [random.uniform(self.degrees[0], self.degrees[1]) for _ in range(batch_size)]
-                self.angle = angles  # 保存角度列表
+            self.angle = angles_to_apply  # 记录最终使用的角度
 
-                # 2. 逐个旋转Batch中的图片
+            # 步骤 B: 根据角度类型执行旋转
+            if isinstance(angles_to_apply, (int, float)):
+                # 单个角度 -> 应用于整个批次
+                return F.rotate(img, angles_to_apply, self.interpolation, fill=self.fill)
+
+            elif isinstance(angles_to_apply, (list, tuple)):
+                # 角度列表 -> 为每个图像应用不同旋转
+                if len(angles_to_apply) != batch_size:
+                    raise ValueError(f"提供的角度列表长度 ({len(angles_to_apply)}) 与批次大小 ({batch_size}) 不匹配。")
+
                 rotated_images = [
-                    F.rotate(img[i], angle, self.interpolation, fill=self.fill)
-                    for i, angle in enumerate(angles)
+                    F.rotate(img[i], ang, self.interpolation, fill=self.fill)
+                    for i, ang in enumerate(angles_to_apply)
                 ]
-
-                # 3. 将旋转后的图片列表重新堆叠成一个Batch Tensor
                 return torch.stack(rotated_images)
+            else:
+                raise TypeError(f"要应用的旋转角度必须是浮点数或浮点数列表，但得到的是 {type(angles_to_apply)}。")
 
-        elif img.ndim == 3:  # --- 处理单个图像 (逻辑不变) ---
-            random_angle = random.uniform(self.degrees[0], self.degrees[1])
-            self.angle = random_angle
-            return F.rotate(img, self.angle, self.interpolation, fill=self.fill)
+        # --- 2. 处理单个图像 ---
+        elif img.ndim == 3:
+            angle_to_apply = None
+            if angle is not None:
+                # 优先使用外部传入的、确定的角度
+                angle_to_apply = angle
+            else:
+                # Fallback: 生成随机角度
+                angle_to_apply = random.uniform(self.degrees[0], self.degrees[1])
 
+            self.angle = angle_to_apply  # 记录最终使用的角度
+            return F.rotate(img, angle_to_apply, self.interpolation, fill=self.fill)
+
+        # --- 3. 错误处理 ---
         else:
             raise TypeError(f"输入必须是3D或4D的Tensor，但收到了维度为{img.ndim}的输入。")
+
+
+    # def forward(self, img: torch.Tensor, angle: Union[float, List[float], None] = None) -> torch.Tensor:
+    #     if img.ndim == 4:  # --- 处理一个 Batch ---
+    #
+    #         if self.same_on_batch:
+    #             # --- 行为B: 对整个Batch应用同一个旋转 ---
+    #             # 1. 只生成一个随机角度
+    #             random_angle = random.uniform(self.degrees[0], self.degrees[1])
+    #             self.angle = random_angle  # 保存这个单值
+    #
+    #             # 2. F.rotate 可以直接处理Batch，当angle是标量时，它会对所有图应用相同旋转
+    #             return F.rotate(img, self.angle, self.interpolation, fill=self.fill)
+    #
+    #         else:
+    #             # --- 行为A: 对Batch中每个样本应用不同旋转 (原始逻辑) ---
+    #             batch_size = img.shape[0]
+    #
+    #             # 1. 为每个图片生成一个随机角度列表
+    #             angles = [random.uniform(self.degrees[0], self.degrees[1]) for _ in range(batch_size)]
+    #             self.angle = angles  # 保存角度列表
+    #
+    #             # 2. 逐个旋转Batch中的图片
+    #             rotated_images = [
+    #                 F.rotate(img[i], angle, self.interpolation, fill=self.fill)
+    #                 for i, angle in enumerate(angles)
+    #             ]
+    #
+    #             # 3. 将旋转后的图片列表重新堆叠成一个Batch Tensor
+    #             return torch.stack(rotated_images)
+    #
+    #     elif img.ndim == 3:  # --- 处理单个图像 (逻辑不变) ---
+    #         random_angle = random.uniform(self.degrees[0], self.degrees[1])
+    #         self.angle = random_angle
+    #         return F.rotate(img, self.angle, self.interpolation, fill=self.fill)
+    #
+    #     else:
+    #         raise TypeError(f"输入必须是3D或4D的Tensor，但收到了维度为{img.ndim}的输入。")
 
 
 def mk_sat_tensor_transform(

@@ -171,7 +171,8 @@ class FieldViser2D:
         return all_poses
 
     def vis(self,result_grid,gt_rc=None,extreme='min'):
-        result_grid = result_grid.reshape((self.resolution, self.resolution))
+        if len(result_grid.shape)==1:
+            result_grid = result_grid.reshape((self.resolution, self.resolution))
         print("4. Plotting the results...")
         fig, ax = plt.subplots(figsize=(10, 8))
 

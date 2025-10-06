@@ -116,6 +116,7 @@ def mk_sat_tensor_transform(
     transform2ret = transforms.Compose(transform_list)
     return transform2ret
 
+
 from multiprocessing import Pool
 # --- 工作进程初始化函数 ---
 # 在每个子进程启动时会执行一次
@@ -146,6 +147,7 @@ def _process_single_crop(args):
     crop = T.functional.rotate(crop, float(rot_deg))
 
     return crop
+
 
 class SatDataset(object):
     def __init__(self,
@@ -185,6 +187,7 @@ class SatDataset(object):
         from dataset_transform_making import mk_sat_tensor_transform
         self.imgsize2net = imgsize2net
         self.sat_transform_train, self.sat_rotater =  mk_sat_tensor_transform(imgsize2net,rand_rot=True)
+        self.scale_transform = T.Compose([transforms.Resize(self.imgsize2net,antialias=True)])
 
         # for defining the scale to sample
         # if p_uav_geocsv is not None:
@@ -200,10 +203,11 @@ class SatDataset(object):
         scale_mask = (satimgsize_scale_to_200m>lower_bound) * (satimgsize_scale_to_200m<upper_bound)
         # config the satimgsize2crop
         self.satimgsize2crop_correspond2uav = np.array(h_cover_m[scale_mask] / self.geo_res_m)
-        self.satimgsize2crop = self.satimgsize2crop_correspond2uav.mean()
+        self.satimgsize2crop_mean = self.satimgsize2crop_correspond2uav.mean()
         self.satimgsize2crop_boundary = np.array(
             [self.satimgsize2crop_correspond2uav.min(), self.satimgsize2crop_correspond2uav.max()])
         self.satimgsize_scale_to_200m = satimgsize_scale_to_200m[scale_mask]
+        self.satimgsize_scale_to_200m_mean = self.satimgsize_scale_to_200m.mean()
         self.satimgsize_scale_to_200m_boundary = self.satimgsize2crop_boundary*self.geo_res_m/200
 
         #  define the range when sampling the satmap:
@@ -222,7 +226,7 @@ class SatDataset(object):
         # define the edge, and the normed_halfimg_radius_rc that defines positive samples
         # self.satimgsize2crop = satimgsize2crop
         # self.satmap_edge_pixs = satimgsize2crop // 2
-        self.halfimg_radius_nrc = self.satimgsize2crop // 2. / self.satmap_hw_max
+        self.halfimg_radius_nrc = self.satimgsize2crop_mean // 2. / self.satmap_hw_max
         self.halfimg_radius_meter = self.get_halfimg_radius_meter(satimgsize2crop // 2)
 
         self.ret_positive=True
@@ -253,9 +257,9 @@ class SatDataset(object):
         return satimg
 
     def crop_satimgs_by_4d_coords(self,coords):
-        if not hasattr(self,'scale_transform'):
-            self.scale_transform = T.Compose([transforms.Resize(self.imgsize2net,antialias=True)])
-
+        """
+        coords=nrc,rot in rad (-pi,pi), scale
+        """
         satimgsize2crop_list = coords[:,-1] * 200. / self.geo_res_m
         row_list = (coords[:,0] - self.nr_tiftop) * self.satmap_hw_max
         col_list = (coords[:,1] - self.nc_tifleft) * self.satmap_hw_max
@@ -394,12 +398,13 @@ class SatDataset(object):
 
         # self.satmap_tensor = self.satmap_tensor.cuda() if not self.satmap_tensor.is_cuda and torch.cuda.is_available() else self.satmap_tensor
         n, m, _ = rcs_girdcoord.shape
-        sat_tiles = torch.empty((n, m, 3, size2clip, size2clip), device=self.satmap_tensor.device)
+        # sat_tiles = torch.empty((n, m, 3, size2clip, size2clip), device=self.satmaps_tensor[0].device)
+        sat_tiles = torch.empty((n, m, 3, int(size2clip), int(size2clip)), device=self.satmaps_tensor[0].device)
         # 向量化提取所有窗口
         for i in range(n):
             for j in range(m):
                 rb, cb, re, ce = rcs_girdcoord[i, j]
-                sat_tiles[i, j] = self.satmap_tensor[:, rb:re, cb:ce]  # [C, H, W]
+                sat_tiles[i, j] = self.satmaps_tensor[0][:, int(rb):int(re), int(cb):int(ce)]  # [C, H, W]
 
         return sat_tiles, nrcs_girdcoord_center
 
@@ -434,7 +439,7 @@ class SatDataset(object):
         # plt.show()
 
     def __len__(self):
-        return   int((self.satmap_h * self.satmap_w) / (self.satimgsize2crop ** 2))
+        return   int((self.satmap_h * self.satmap_w) / (self.satimgsize2crop_mean ** 2))
 
     """funcs about fine loc:"""
     def sample_sats_in_rect(self, nrc_topleft, nrc_buttonright, n2sample_h=128, n2sample_w=128, satimgsize2crop=224, type2clip='tensor'):

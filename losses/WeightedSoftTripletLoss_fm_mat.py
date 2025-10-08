@@ -135,12 +135,16 @@ class MSLoss_fm_mat(nn.Module):
             # compute MS-loss:
                 # loss for hard_pos
             hard_pos2compute_loss = feat_mat.masked_fill(~hard_pos_mask,self.neg_ignore) #fill the easy_pos_samples with -inf
+            hard_pos2compute_loss = self.alpha * (hard_pos2compute_loss - self.tau)
             hard_pos2compute_loss = torch.cat([hard_pos2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
-            loss_pos = 1/self.alpha * torch.logsumexp(self.alpha * (hard_pos2compute_loss - self.tau), dim=-1, keepdim=True).mean()
+            loss_pos = 1 / self.alpha * torch.logsumexp(hard_pos2compute_loss, dim=-1, keepdim=True).mean()
+            # loss_pos = 1/self.alpha * torch.logsumexp(self.alpha * (hard_pos2compute_loss - self.tau), dim=-1, keepdim=True).mean()
                 # loss for hard_neg
             hard_neg2compute_loss = feat_mat.masked_fill(~hard_neg_mask,self.pos_ignore)
+            hard_neg2compute_loss = -self.beta * (hard_neg2compute_loss - self.tau)
             hard_neg2compute_loss = torch.cat([hard_neg2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
-            loss_neg = 1/self.beta * torch.logsumexp(-self.beta * (hard_neg2compute_loss - self.tau), dim=-1, keepdim=True).mean()
+            loss_neg = 1 / self.beta * torch.logsumexp(hard_neg2compute_loss, dim=-1, keepdim=True).mean()
+            # loss_neg = 1/self.beta * torch.logsumexp(-self.beta * (hard_neg2compute_loss - self.tau), dim=-1, keepdim=True).mean()
         else:
             pos_mat[neg_mask] = self.pos_ignore
             neg_mat[pos_mask] = self.neg_ignore
@@ -151,12 +155,14 @@ class MSLoss_fm_mat(nn.Module):
             hard_neg_mask = torch.gt(feat_mat, pos_most_min_per_row[0].unsqueeze(1)) * neg_mask
 
             hard_pos2compute_loss = feat_mat.masked_fill(~hard_pos_mask,self.neg_ignore)
+            hard_pos2compute_loss = self.alpha * (self.tau-hard_pos2compute_loss)
             hard_pos2compute_loss = torch.cat([hard_pos2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
-            loss_pos = torch.logsumexp(self.alpha * (self.tau-hard_pos2compute_loss), dim=-1, keepdim=True).mean()
+            loss_pos = torch.logsumexp(hard_pos2compute_loss, dim=-1, keepdim=True).mean()
 
             hard_neg2compute_loss = feat_mat.masked_fill(~hard_neg_mask,self.pos_ignore)
+            hard_neg2compute_loss = -self.beta * (hard_neg2compute_loss-self.tau)
             hard_neg2compute_loss = torch.cat([hard_neg2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
-            loss_neg = torch.logsumexp(-self.beta * (hard_neg2compute_loss-self.tau), dim=-1, keepdim=True).mean()
+            loss_neg = torch.logsumexp(hard_neg2compute_loss, dim=-1, keepdim=True).mean()
 
         return loss_pos+loss_neg
 
@@ -170,9 +176,12 @@ class SWTLoss_fm_mat(nn.Module):
         self.alpha = slope_pos
         self.beta = slope_neg
         self.decoupling = decoupling
+        self.weight_dist_func = lambda x:1/(1+torch.exp(-8.5*(x-0.25)))
+
 
     def forward(self, feat_mat,
                 pos_mask,
+                dist_mat=None,
                 metric='dist',
                 ):
 
@@ -189,17 +198,23 @@ class SWTLoss_fm_mat(nn.Module):
             neg_most_hard_per_row = torch.min(neg_mat,dim=-1)  # find the minimum distance of negative value in every row
 
             if not self.decoupling:
-                return torch.log(1 + torch.exp( self.alpha * (pos_most_hard_per_row[0] - neg_most_hard_per_row[0]))).mean()  # (dist_hardp - dist_hardn) large -> loss large
-            #todo:issue to fix
+                # return torch.log(1 + torch.exp( self.alpha * (pos_most_hard_per_row[0] - neg_most_hard_per_row[0]))).mean()  # (dist_hardp - dist_hardn) large -> loss large
+                indices_hard_pos = pos_most_hard_per_row[1].unsqueeze(1)
+                dist_pos_most_hard_per_row = torch.gather(dist_mat, dim=1, index=indices_hard_pos)
+                indices_hard_neg = neg_most_hard_per_row[1].unsqueeze(1)
+                dist_neg_most_hard_per_row = torch.gather(dist_mat, dim=1, index=indices_hard_neg)
+                neg_weight = self.weight_dist_func(dist_neg_most_hard_per_row-dist_pos_most_hard_per_row).squeeze()
+                return (neg_weight*torch.log(1 + torch.exp(self.alpha * (pos_most_hard_per_row[0] - neg_most_hard_per_row[0])))).mean()
+
             hard_pos_mask = torch.gt(feat_mat, neg_most_hard_per_row[0].unsqueeze(1)) * pos_mask #getting the hard_pos_mask by comparing the neg_most_hard_per_row to the pos
             hard_neg_mask = torch.lt(feat_mat, pos_most_hard_per_row[0].unsqueeze(1)) * neg_mask #getting the hard_neg_mask by comparing the pos_most_hard_per_row to the neg
 
                 # loss for hard_pos
             delta_pos2compute_loss = feat_mat - neg_most_hard_per_row[0].unsqueeze(1)
             hard_pos2compute_loss = delta_pos2compute_loss.masked_fill(~hard_pos_mask, self.neg_ignore)
+            hard_pos2compute_loss = self.alpha * hard_pos2compute_loss
             hard_pos2compute_loss = torch.cat([hard_pos2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
-                # loss_pos = torch.logsumexp(self.alpha * hard_pos2compute_loss, dim=-1, keepdim=True).mean()
-            loss_per_row_pos = torch.logsumexp(self.alpha * hard_pos2compute_loss, dim=-1)
+            loss_per_row_pos = torch.logsumexp(hard_pos2compute_loss, dim=-1)
             non_zero_mask_pos = loss_per_row_pos > 0
                 # If there are any rows with loss, compute their mean
             if non_zero_mask_pos.sum() > 0:
@@ -211,9 +226,9 @@ class SWTLoss_fm_mat(nn.Module):
                 # loss for hard_neg
             delta_neg2compute_loss = pos_most_hard_per_row[0].unsqueeze(1) - feat_mat
             hard_neg2compute_loss = delta_neg2compute_loss.masked_fill(~hard_neg_mask,self.pos_ignore)
+            hard_neg2compute_loss = -self.beta * hard_neg2compute_loss
             hard_neg2compute_loss = torch.cat([hard_neg2compute_loss, torch.zeros((feat_mat.shape[0], 1), device=feat_mat.device)], dim=-1)
-                # loss_neg = torch.logsumexp(-self.beta * hard_neg2compute_loss, dim=-1, keepdim=True).mean()
-            loss_per_row_neg = torch.logsumexp(-self.beta * hard_neg2compute_loss, dim=-1)
+            loss_per_row_neg = torch.logsumexp(hard_neg2compute_loss, dim=-1)
             non_zero_mask_neg = loss_per_row_neg > 0
                 # If there are any rows with loss, compute their mean
             if non_zero_mask_neg.sum() > 0:

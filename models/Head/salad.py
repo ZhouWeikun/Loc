@@ -124,7 +124,7 @@ class SALAD(nn.Module):
         input_feat_dim (int): The number of channels of the inputs (d).
         num_clusters (int): The number of clusters in the model (m).
         cluster_dim (int): The number of channels of the clusters (l).
-        token_dim (int): The dimension of the global scene token (g).
+        global_token_dim (int): The dimension of the global scene token (g).
         dropout (float): The dropout rate.
     """
 
@@ -132,7 +132,7 @@ class SALAD(nn.Module):
                  input_feat_dim=768, #org=1536
                  num_clusters=32, #64
                  cluster_dim=64, #128
-                 token_dim=256, #the ouput dim of golbal_token
+                 global_token_dim=256, #the ouput dim of golbal_token
                  dropout=0.3,
                  img_hw = (224,224),
                  pathchsize = 14,
@@ -144,7 +144,7 @@ class SALAD(nn.Module):
         self.input_feat_dim = input_feat_dim
         self.num_clusters = num_clusters
         self.cluster_dim = cluster_dim
-        self.token_dim = token_dim
+        self.global_token_dim = global_token_dim
         self.token_hw = (int(img_hw[0]/pathchsize),int(img_hw[1]/pathchsize))
         self.with_dustbin = with_dustbin
         self.hidden_layer_dim = hidden_layer_dim
@@ -163,7 +163,7 @@ class SALAD(nn.Module):
         self.token_features = nn.Sequential(
             nn.Linear(self.input_feat_dim, self.hidden_layer_dim),
             nn.ReLU(),
-            nn.Linear(self.hidden_layer_dim, self.token_dim)
+            nn.Linear(self.hidden_layer_dim, self.global_token_dim)
         )
         # MLP for local features f_i, compress the dim of token
         self.cluster_features = nn.Sequential(
@@ -197,9 +197,9 @@ class SALAD(nn.Module):
         # Reshape to (B, C, H, W)
         x = x.reshape((x.shape[0], self.token_hw[0],  self.token_hw[1], self.input_feat_dim)).permute(0, 3, 1, 2)
 
-        f = self.cluster_features(x).flatten(2)
+        f = self.cluster_features(x).flatten(2) #from local
         p = self.score(x).flatten(2)
-        t = self.token_features(t)
+        t = self.token_features(t) #from global
 
         # Sinkhorn algorithm
         p = get_matching_probs(p,self.dust_bin,3)
@@ -223,3 +223,17 @@ class SALAD(nn.Module):
         ], dim=-1)
 
         return nn.functional.normalize(f, p=2, dim=-1)
+
+        # part_global = nn.functional.normalize(t, p=2, dim=-1)
+        # part_local = nn.functional.normalize((f * p).sum(dim=-1), p=2, dim=1).flatten(1)
+        # global_mean = torch.mean(part_global).item()
+        # global_var = torch.var(part_global).item()
+        # local_mean = torch.mean(part_local).item()
+        # local_var = torch.var(part_local).item()
+        # var_per_dim_global = torch.var(part_global,dim=0)
+        # var_per_dim_loacl = torch.var(part_local, dim=0)
+        # var_of_var_global = torch.var(torch.var(part_global,dim=0),dim=-1)
+        # var_of_var_local = torch.var(torch.var(part_local,dim=0),dim=-1)
+        # from matplotlib import pyplot as plt
+        # plt.hist(var_of_var_local,bins=50)
+

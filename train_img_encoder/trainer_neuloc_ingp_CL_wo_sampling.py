@@ -177,8 +177,8 @@ class UDFComputer(object):
         # self.w_d = dist_threshold_accpetable / self.norm_factor_rc * 0.5  # 方向权重
         # self.w_s = self.w_d * 0.5  # 尺度权重
         # weight definity,version1:
-        self.w_rc = 0.5  # 位置权重，通常设为1.0作为基准
-        self.w_r = 0.4  # 位置权重，通常设为1.0作为基准
+        self.w_rc = 0.6  # 位置权重，通常设为1.0作为基准
+        self.w_r = 0.3 # 位置权重，通常设为1.0作为基准
         self.w_s = 0.1  # 尺度权重
         rc_dist_threshold_accpetable = self.sat_dataset.halfimg_radius_nrc
         # self.weight_rc_dist_func = lambda x:torch.sigmoid(10*x/rc_dist_threshold_accpetable-5) #weight in [0,1],assuming x/rc_dist_threshold_accpetable mapping rc_dist_threshold_accpetable to 1
@@ -251,14 +251,21 @@ class Trainer(object):
         coord_dim = self.rc_pos_encoder.out_dim+self.rot_pos_encoder.out_dim+self.scale_pos_encoder.out_dim
         # config the aggregator
         # self.decoder = LocalDecoderFiLM(dim=feat_q_dim,c_dim=feat_q_dim,hidden_size=1024,n_blocks=3,output_dim=1,norm_type='none',leaky=True).to(self.device)
-        from models.Head.G2M import G2M
-        self.aggregator = G2M(in_channels=feat_q_dim,out_channels=feat_q_dim,rank=1024).to(self.device)
+        # from models.Head.G2M import G2M
+        # self.aggregator = G2M(in_channels=feat_q_dim,out_channels=feat_q_dim,rank=1024).to(self.device)
+        # from models.Head.salad import SALAD
+        # self.aggregator = SALAD(input_feat_dim=feat_q_dim, global_token_dim=128, pathchsize=16, num_clusters=14, cluster_dim=64).to(self.device)
+        from models.Head.salad_residual import SALAD_Residual
+        self.aggregator = SALAD_Residual(input_feat_dim=feat_q_dim, base_dim=feat_q_dim, patchsize=16, num_clusters=16, cluster_dim=64).to(self.device)
+        # from models.Head.salad_film import SALAD_FiLM
+        # self.aggregator = SALAD_FiLM(input_feat_dim=feat_q_dim,base_dim=feat_q_dim,patchsize=16, num_clusters=16, cluster_dim=64).to(self.device)
+        self.agg_name = 'salad'
 
         # config the grid
         from app.nerf.main_nerf import NeRFAppConfig
         from wisp.config._tyro import parse_args_tyro_v1
         self.grid_args = parse_args_tyro_v1(NeRFAppConfig,'/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/nerf_hash.yaml')
-        from wisp.config import instantiate
+        # from wisp.config import instantiate
         # blas = instantiate(self.grid_args.blas, pointcloud=None)
         # self.grid = instantiate(self.grid_args.grid, blas=blas).to(self.device)  # A grid keeps track of both features and occupancy
         from models.multi_mlp import create_mlp
@@ -364,6 +371,7 @@ class Trainer(object):
         loss_mse = torch.nn.MSELoss(reduction='mean')
         from losses.WeightedSoftTripletLoss_fm_mat import SWTLoss_fm_mat,MSLoss_fm_mat
         loss_swt = SWTLoss_fm_mat(decoupling=False)
+        loss_ms = MSLoss_fm_mat()
         self.udf_compter = UDFComputer(sat_dataset=self.sat_dataset)
         # rc_radius = self.dataloader_train.dataset.sat_dataset.halfimg_radius_nrc * 0.5
         for epoch in range(begin_epoch,num_epochs):
@@ -421,14 +429,19 @@ class Trainer(object):
                 positive_mat = udf_dist_mat < self.sat_dataset.halfimg_radius_nrc
 
                 feats_q = self.img_encoder(satimgs_q.to(self.device))
-                feats_q = self.aggregator(feats_q[:,1:,:].permute(0,2,1).reshape(satimgs_q.shape[0],self.feat_q_dim,14,14)) #for patchsize=16,imgszie=224
+                if self.agg_name == 'g2m':
+                    feats_q = self.aggregator(feats_q[:,1:,:].permute(0,2,1).reshape(satimgs_q.shape[0],self.feat_q_dim,14,14)) #for patchsize=16,imgszie=224
+                elif self.agg_name == 'salad':
+                    feats_q = self.aggregator(feats_q) #aggregator = salad
                 feat_dist_mat = torch.norm(feats_q[satimg_q_ids].unsqueeze(1) - feats_q.unsqueeze(0),dim=-1) #without normalizing feat
 
-                loss = loss_swt(feat_dist_mat,positive_mat)
+                loss = loss_swt(feat_dist_mat,positive_mat,udf_dist_mat)
+                # loss = loss_ms(feat_dist_mat,positive_mat)
 
                 #debug for vis
                 # positive_mat_np = positive_mat.detach().cpu().numpy()
                 # feat_dist_mat_np = feat_dist_mat.detach().cpu().numpy()
+                # udf_dist_mat_np = udf_dist_mat.detach().cpu().numpy()
                 # from matplotlib import pyplot as plt
                 # bins = 50
                 # plot_range = (0,feat_dist_mat_np.max())
@@ -457,37 +470,42 @@ class Trainer(object):
             # scheduler.step()
 
             # save the network's para
-            # if epoch % 10 == 9: #for running
+            if (epoch % 10 == 0) and (epoch>0): #for running
             # if epoch % 2 == 0: #for debugging
             # if (epoch == 10) or (epoch % 10 == 9 and epoch >= 110):
             # if ((epoch > 0) and (epoch % opt.save_freq == 0)) or ( epoch % 10 == 9 and epoch >= 110 ):
-            from tool.util_ckpt_handler import save_param
-            params_to_add = {
-                "optimizer_state": self.optimizer,
-                "epoch": epoch,
-            }
-            self.param.update(params_to_add)
-            save_param(opt.exp_name, self.param)
-            #log info:
-            # grid_feats_grad = self.grid.codebook.feats.grad
-            # self.logger.info(f"Grid feats grad L2 norm:{torch.linalg.norm(grid_feats_grad).item()}")
-            # self.logger.info(f"Grid feats value.max():{feats_grid.max().item():.4f}")
-            mean_dino = torch.mean(feats_q, dim=0)
-            # mean_grid = torch.mean(feats_grid, dim=0)
-            # l2_distance = torch.linalg.norm(mean_dino - mean_grid).item()
-            # cosine_sim = F.cosine_similarity(mean_dino.unsqueeze(0), mean_grid.unsqueeze(0)).item()
-            # self.logger.info(f"  mean值- L2 距离: {l2_distance:.6f}")
-            # self.logger.info(f"  mean值- 余弦相似度: {cosine_sim:.6f}")
-            # var_per_dim_grid = torch.var(feats_grid, dim=0)
-            var_per_dim_dino = torch.var(feats_q, dim=0)
-            # self.logger.info(f"  gird_方差均值: {var_per_dim_grid.mean().item():.6f}")
-            self.logger.info(f"  dino_方差均值: {var_per_dim_dino.mean().item():.6f}")
-            if self.writer is not None:
-                # self.writer.add_scalar(' mean_L2_dist', l2_distance, epoch)
-                # self.writer.add_scalar(' mean_cosine_sim', cosine_sim, epoch)
-                # self.writer.add_scalar(' gird_var_mean', var_per_dim_grid.mean().item(), epoch)
-                self.writer.add_scalar(' dino_mean', mean_dino.mean().item(), epoch)
-                self.writer.add_scalar(' dino_var_mean', var_per_dim_dino.mean().item(), epoch)
+                from tool.util_ckpt_handler import save_param
+                params_to_add = {
+                    "optimizer_state": self.optimizer,
+                    "epoch": epoch,
+                }
+                self.param.update(params_to_add)
+                save_param(opt.exp_name, self.param)
+                #log info:
+                # grid_feats_grad = self.grid.codebook.feats.grad
+                # self.logger.info(f"Grid feats grad L2 norm:{torch.linalg.norm(grid_feats_grad).item()}")
+                # self.logger.info(f"Grid feats value.max():{feats_grid.max().item():.4f}")
+                mean_dino = torch.mean(feats_q, dim=0)
+                # mean_grid = torch.mean(feats_grid, dim=0)
+                # l2_distance = torch.linalg.norm(mean_dino - mean_grid).item()
+                # cosine_sim = F.cosine_similarity(mean_dino.unsqueeze(0), mean_grid.unsqueeze(0)).item()
+                # self.logger.info(f"  mean值- L2 距离: {l2_distance:.6f}")
+                # self.logger.info(f"  mean值- 余弦相似度: {cosine_sim:.6f}")
+                # var_per_dim_grid = torch.var(feats_grid, dim=0)
+                var_per_dim_dino = torch.var(feats_q, dim=0)
+                # self.logger.info(f"  gird_方差均值: {var_per_dim_grid.mean().item():.6f}")
+                self.logger.info(f"feat_方差的均值: {var_per_dim_dino.mean().item():.6f}")
+                # 更有意义的指标：方差的方差（衡量特征维度的差异性）
+                var_of_var = torch.var(var_per_dim_dino)
+                self.logger.info(f"feat_方差的方差: {var_of_var.item():.6f}")
+
+                if self.writer is not None:
+                    # self.writer.add_scalar(' mean_L2_dist', l2_distance, epoch)
+                    # self.writer.add_scalar(' mean_cosine_sim', cosine_sim, epoch)
+                    # self.writer.add_scalar(' gird_var_mean', var_per_dim_grid.mean().item(), epoch)
+                    self.writer.add_scalar(' feat_mean', mean_dino.mean().item(), epoch)
+                    self.writer.add_scalar(' feat_var_mean', var_per_dim_dino.mean().item(), epoch)
+                    self.writer.add_scalar(' feat_var_var', var_of_var.item(), epoch)
 
             # log info
             str2log = ''
@@ -610,8 +628,10 @@ class Trainer(object):
             for batch in torch.split(satimgs_flatten, batchsize, dim=0):
                 feat = self.img_encoder(batch.to(self.device))
                 if feat_fm_agg:
-                    feat = self.aggregator(
-                        feat[:, 1:, :].permute(0, 2, 1).reshape(feat.shape[0], self.feat_q_dim, 14, 14))
+                    if self.agg_name == 'salad':
+                        feat = self.aggregator.forward(feat)
+                    elif self.agg_name == 'g2m':
+                        feat = self.aggregator.forward(feat[:, 1:, :].permute(0, 2, 1).reshape(feat.shape[0], self.feat_q_dim, 14, 14),normalize=True)
                 else:
                     feat = feat[:, 0, :]
                 feat_galllery.append(feat.detach().cpu())
@@ -624,13 +644,12 @@ class Trainer(object):
             p2gallery_mat = f"{os.path.dirname(self.opt.load2test)}/{os.path.basename(self.opt.load2test).replace('.pth', suffix)}"
             if os.path.exists(p2gallery_mat):
                 gallery_mat = scipy.io.loadmat(p2gallery_mat)
-                feat_gallery_roted = torch.tensor(p2gallery_mat['feat_gallery']).flatten(start_dim=0, end_dim=1)
-                nrcs_gallery =  torch.tensor(gallery_mat['feat_gallery'])
-                rots_ref = torch.tensor(gallery_mat['rots_ref'])
-
+                feat_gallery_roted = torch.tensor(gallery_mat['feat_gallery'],dtype=torch.float32).flatten(start_dim=0, end_dim=1)
+                nrcs_gallery = torch.tensor(gallery_mat['nrcs_gallery'],dtype=torch.float32)
+                rots_ref = torch.tensor(gallery_mat['rots_ref'],dtype=torch.float32).squeeze()
+                nrcs_gallery_flatten = nrcs_gallery.flatten(start_dim=0,end_dim=1)
             else:
                 # get satimgs_gallery,v1
-
                 sat_gallary, nrcs_gallery = self.sat_dataset.crop_sat_unifrom(size2clip=self.sat_dataset.satimgsize2crop_mean,overlap=overlap)
                 nrcs_gallery_flatten = torch.from_numpy(nrcs_gallery).flatten(start_dim=0,end_dim=1)
 
@@ -642,20 +661,23 @@ class Trainer(object):
                 delta_rot_rangle = 10
                 rot_angles = [-180 + delta_rot_rangle * i for i in range(360 // delta_rot_rangle)]
                 feat_gallery_roted = []
+                # self.img_encoder = torch.compile(self.img_encoder)
+                # self.aggregator = torch.compile(self.aggregator)
                 for rot in tqdm.tqdm(rot_angles):
-                    satimgs_roted = rotater(satimgs_gallery_flatten, rot)
-                    feat_gallery_roted.append(get_feats(satimgs_roted, feat_fm_agg=True))
+                    with autocast():
+                        satimgs_roted = rotater(satimgs_gallery_flatten, rot)
+                        feat_gallery_roted.append(get_feats(satimgs_roted, feat_fm_agg=True))
                 feat_gallery_roted = torch.stack(feat_gallery_roted,dim=1)
 
                 rots_ref = torch.tensor(np.deg2rad(np.stack(rot_angles)), dtype=torch.float32)
                 result = {'feat_gallery': feat_gallery_roted.reshape(*sat_gallary.shape[:2],*feat_gallery_roted.shape[1:]).detach().cpu().numpy(),
-                          'nrcs_gallery': nrcs_gallery.detach().cpu().numpy(),
-                          'rots_ref': np.array(rot_angles),
+                          'nrcs_gallery': nrcs_gallery,
+                          'rots_ref': rots_ref.detach().cpu().numpy(),
                           }
                 scipy.io.savemat(p2gallery_mat,result)
 
             # get satimgs_query_feat
-            n_query = 128
+            n_query = 512
             nrcs_q = torch.from_numpy(self.sat_dataset.mk_rand_nrcs(n_query))
             rots_q = -torch.pi + 2*torch.pi*torch.rand(n_query)
             coords_q = torch.concatenate([nrcs_q,rots_q.unsqueeze(1),torch.ones(nrcs_q.shape[0],1)*self.sat_dataset.satimgsize_scale_to_200m_mean],dim=-1)
@@ -673,6 +695,10 @@ class Trainer(object):
             # pred_col = pred_ids_unraled[1]
             # pred_rot = pred_ids_unraled[2]
 
+            from eval_recall_fm_salad import qurey_label_fm_gallery_nrc,compute_recall_by_label,create_success_mask
+            distrc_sats2uav, uav_labels_query = qurey_label_fm_gallery_nrc(nrcs_gallery_flatten,nrcs_q,self.sat_dataset.halfimg_radius_nrc)
+            compute_recall_by_label(uav_labels_query, pred_id_rc[:,:200], k_values=[1, 5, 10, 20, 50])
+
             # computing gt
             gt2gallery_rc_dist_mat = torch.norm(nrcs_q.unsqueeze(1) - nrcs_gallery_flatten.unsqueeze(0), dim=-1, p=2)
             gt_ids_rc_flatten = torch.argmin(gt2gallery_rc_dist_mat, dim=-1)
@@ -680,15 +706,15 @@ class Trainer(object):
             gt_cols = gt_ids_rc_flatten % nrcs_gallery.shape[1]
             gt_ids_rc = torch.stack([gt_rows, gt_cols], dim=0).T
             gt_ids_rc_np = gt_ids_rc.detach().cpu().numpy()
-            angular_diff_raw = torch.tensor(np.deg2rad(np.stack(rot_angles)),dtype=torch.float32,device=rots_q.device)[None,...]-rots_q.unsqueeze(1)
+            # angular_diff_raw = torch.tensor(np.deg2rad(np.stack(rot_angles)),dtype=torch.float32,device=rots_q.device)[None,...]-rots_q.unsqueeze(1)
+            if rots_ref.max() < 4:
+                angular_diff_raw = rots_ref[None, ...] - rots_q.unsqueeze(1)
+            else:
+                angular_diff_raw = torch.deg2rad(rots_ref)[None,...]-rots_q.unsqueeze(1)
             angular_diff_normalized = (angular_diff_raw + torch.pi) % (2 * torch.pi) - torch.pi #将差值归一化到 [-pi, pi] 这个区间内,找到最短角度差,公式为: (diff + pi) % (2 * pi) - pi
             angular_dist = torch.abs(angular_diff_normalized)
             gt_ids_rot = torch.argmin(angular_dist, dim=-1)  # Shape: (N_q)
             gt_ids_rot_np = gt_ids_rot.detach().cpu().numpy()
-
-            from eval_recall_fm_salad import qurey_label_fm_gallery_nrc,compute_recall_by_label,create_success_mask
-            distrc_sats2uav, uav_labels_query = qurey_label_fm_gallery_nrc(nrcs_gallery_flatten,nrcs_q,self.sat_dataset.halfimg_radius_nrc)
-            compute_recall_by_label(uav_labels_query, pred_id_rc[:,:200], k_values=[1, 5, 10, 20, 50])
 
             rot_mask = create_success_mask(pred_id_rc[:,:1], uav_labels_query, k=1)
             rot_recall_results = compute_recall_by_label(
@@ -709,7 +735,7 @@ class Trainer(object):
             compute_udf=False
             if compute_udf:
                 pred_rc_err_min = torch.norm(nrcs_q - nrcs_gallery[pred_ids_unraled[0][:,0],pred_ids_unraled[1][:,0]],dim=-1,p=2)
-                pred_rot_err_min = rots_q-torch.deg2rad(torch.tensor(rot_angles))[pred_id_rot[:,0]]
+                pred_rot_err_min = rots_q-rots_ref[pred_id_rot[:,0]]
                 pred_rot_err_min = torch.abs(torch.atan2(torch.sin(pred_rot_err_min), torch.cos(pred_rot_err_min))).squeeze()  # atan2 函数的输出范围是 [-π, π]
                 self.udf_compter = UDFComputer(self.sat_dataset)
                 udf_dist = self.udf_compter.compute_udf_fm_diff(pred_rc_err_min,pred_rot_err_min)
@@ -725,13 +751,14 @@ class Trainer(object):
 
                 id_seled = 0
                 from util_vis_retrieval_in_2d import visualize_response_map,calculate_peak_saliency,visualize_response_map_3d
+                map2vis = pred_agg[id_seled][:,gt_ids_rot[0]].reshape(nrcs_gallery.shape[:2])
                 visualize_response_map(
-                    response_map = pred_agg[id_seled].reshape(nrcs_gallery.shape[:2]).detach().cpu().numpy(),
+                    response_map = map2vis.detach().cpu().numpy(),
                     ground_truth_idx = (gt_ids_np[id_seled][0],gt_ids_np[id_seled][1]),
                     mark_extreme = 'min',
                     # cmap = 'coolwarm',
                 )
-                visualize_response_map_3d( torch.exp(-pred_agg[id_seled]).reshape(nrcs_gallery.shape[:2]).detach().cpu().numpy() )
+                visualize_response_map_3d( torch.exp(-map2vis) )
 
 
     def mk_gallery_feat(self):
@@ -774,7 +801,6 @@ if __name__ == '__main__':
     np.random.seed(2025)
     trainer = Trainer()
     # trainer.train()
-    # trainer.val()
     trainer.test_xy_rot()
     # trainer.mk_map_feats()
     # trainer.test_xy()

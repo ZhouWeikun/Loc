@@ -21,7 +21,7 @@ data_setting:
 
 exp_setting:
   exps_dir: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps
-  load2test: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/debug_zurich_95/epoch1088.pth
+  load2test: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/debug_zurich_15/epoch3609.pth
   load2train: #/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/zurich_12km2_hashfit1k_serialmoulator_swfeat/epoch699.pth #/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/zurich_12km2_hashfit1k_mlp_add/epoch999.pth #choose 57 or 62
   exp_name: debug_zurich
   p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/blocks12_res03m.json
@@ -38,7 +38,7 @@ exp_setting:
 
 hardware_setting:
   autocast: False
-  batchsize_sat: 256 #24
+  batchsize_sat: 512 #24
   batchsize_uav: 4
   gpu_ids: '0'
   num_worker: 8

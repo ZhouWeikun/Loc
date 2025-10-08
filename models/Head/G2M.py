@@ -52,7 +52,7 @@ class G2M(nn.Module):
         )
         self.gca_sigmoid = nn.Sigmoid()
 
-    def forward(self, x):
+    def forward(self, x, normalize=True):
         """
         Args:
             x (torch.Tensor): The input feature map from patch tokens, with shape [B, C, H, W].
@@ -83,9 +83,10 @@ class G2M(nn.Module):
         descriptor = self.final_fc(calibrated_feat)
 
         # L2 Normalize the final descriptor
-        descriptor = F.normalize(descriptor, p=2, dim=1)
+        descriptor = F.normalize(descriptor, p=2, dim=1) if normalize else descriptor
 
         return descriptor
+
 
 
 # --- Example Usage ---

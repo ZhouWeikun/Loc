@@ -5,26 +5,25 @@ from __future__ import print_function, division
 import argparse
 import torch
 import tqdm
-from torch.ao.nn.quantized.functional import threshold
-from torch.cuda.amp import autocast, GradScaler
-import torch.nn.functional as F
+# from torch.ao.nn.quantized.functional import threshold
+from torch.cuda.amp import GradScaler
+# import torch.nn.functional as F
 import time
 import scipy.io
-from triton.language import dtype
+# from triton.language import dtype
 
-from tool.util_mk_optimizer import  make_optimizer
-from models.taskflow import make_img_encoder
-from tool.utils import save_network, copyfiles2checkpoints, get_preds, get_logger, calc_flops_params, set_seed,get_unique_exp_dir
+# from tool.util_mk_optimizer import  make_optimizer
+from train_img_encoder.nets_taskflow import make_img_encoder
+from tool.utils import get_logger, get_unique_exp_dir
 # from tool.utils import load_network_wstate, save_network_wstate
 import warnings
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
-import torchvision
-import torch.nn.functional as F
+# import torchvision
+# import torch.nn.functional as F
 import glob
 import math
-
-from losses.loss_cl import Loss
+# from losses.loss_cl import Loss
 warnings.filterwarnings("ignore")
 
 # var to selct:
@@ -32,13 +31,14 @@ warnings.filterwarnings("ignore")
 # from datasets_custom.make_dataloder_classify import make_dataloader_train
 # from datasets_custom.make_dataloader_xmu import make_dataloader_xmu
 # from datasets_custom.make_dataloader_gta import make_dataloader_gta
-from datasets_custom.make_dataloader_wingtra import make_dataloader_wingtra
 # from exps.exp24.datasets_custom.make_dataloader_dsalad import  make_dataloader
-from PIL import Image
-from matplotlib import pyplot as plt
 import yaml
 import os
 import json
+
+from tool.util_mk_optimizer import create_optimizer_w_temple
+from tool.util_ckpt_handler import load_param
+from models.pos_encoder import encode_4d_coords
 
 
 def get_parse():
@@ -243,41 +243,53 @@ class Trainer(object):
             # freeze the para
         for param in self.img_encoder.parameters():
             param.requires_grad = False
-        # config the pos_encoder
-        from models.pos_encoder import PositionalEncoder
-        self.rc_pos_encoder = PositionalEncoder(input_dims=2,include_input=True,multires=6)
-        self.rot_pos_encoder = PositionalEncoder(input_dims=2,include_input=True,multires=4)
-        self.scale_pos_encoder = PositionalEncoder(input_dims=1,include_input=True,multires=4)
-        coord_dim = self.rc_pos_encoder.out_dim+self.rot_pos_encoder.out_dim+self.scale_pos_encoder.out_dim
+
         # config the aggregator
         # self.decoder = LocalDecoderFiLM(dim=feat_q_dim,c_dim=feat_q_dim,hidden_size=1024,n_blocks=3,output_dim=1,norm_type='none',leaky=True).to(self.device)
         # from models.Head.G2M import G2M
-        # self.aggregator = G2M(in_channels=feat_q_dim,out_channels=feat_q_dim,rank=1024).to(self.device)
+        # self.img_aggregator = G2M(in_channels=feat_q_dim,out_channels=feat_q_dim,rank=1024).to(self.device)
         # from models.Head.salad import SALAD
-        # self.aggregator = SALAD(input_feat_dim=feat_q_dim, global_token_dim=128, pathchsize=16, num_clusters=14, cluster_dim=64).to(self.device)
+        # self.img_aggregator = SALAD(input_feat_dim=feat_q_dim, global_token_dim=128, pathchsize=16, num_clusters=14, cluster_dim=64).to(self.device)
         from models.Head.salad_residual import SALAD_Residual
-        self.aggregator = SALAD_Residual(input_feat_dim=feat_q_dim, base_dim=feat_q_dim, patchsize=16, num_clusters=16, cluster_dim=64).to(self.device)
+        self.img_aggregator = SALAD_Residual(input_feat_dim=feat_q_dim, base_dim=feat_q_dim, patchsize=16, num_clusters=16, cluster_dim=64).to(self.device)
         # from models.Head.salad_film import SALAD_FiLM
-        # self.aggregator = SALAD_FiLM(input_feat_dim=feat_q_dim,base_dim=feat_q_dim,patchsize=16, num_clusters=16, cluster_dim=64).to(self.device)
+        # self.img_aggregator = SALAD_FiLM(input_feat_dim=feat_q_dim,base_dim=feat_q_dim,patchsize=16, num_clusters=16, cluster_dim=64).to(self.device)
         self.agg_name = 'salad'
+        #load the param for trained aggregator:
+        p2load = '/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/zurich_12km2_cl_saladResidual_ep3.6k_swllossWweight/epoch3969.pth'
+        load_param(p2load,{ 'aggregator':self.img_aggregator})
+
+        # config the pos_encoder
+        from models.pos_encoder import PositionalEncoder
+        self.rc_pos_encoder = PositionalEncoder(input_dims=2, include_input=True, multires=8)
+        self.rot_pos_encoder = PositionalEncoder(input_dims=2, include_input=True, multires=6)
+        self.scale_pos_encoder = PositionalEncoder(input_dims=1, include_input=True, multires=4)
+        self.coord_encoded_dim = self.rc_pos_encoder.out_dim + self.rot_pos_encoder.out_dim + self.scale_pos_encoder.out_dim
 
         # config the grid
         from app.nerf.main_nerf import NeRFAppConfig
         from wisp.config._tyro import parse_args_tyro_v1
         self.grid_args = parse_args_tyro_v1(NeRFAppConfig,'/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/nerf_hash.yaml')
-        # from wisp.config import instantiate
-        # blas = instantiate(self.grid_args.blas, pointcloud=None)
-        # self.grid = instantiate(self.grid_args.grid, blas=blas).to(self.device)  # A grid keeps track of both features and occupancy
-        from models.multi_mlp import create_mlp
+        from wisp.config import instantiate
+        blas = instantiate(self.grid_args.blas, pointcloud=None)
+        self.grid = instantiate(self.grid_args.grid, blas=blas).to(self.device)  # A grid keeps track of both features and occupancy
+        # from models.multi_mlp import create_mlp
         # self.grid_mlp = create_mlp([coord_dim+feat_q_dim,feat_q_dim,feat_q_dim],norm_type='layer').to(self.device)
-        # from models.ocn_mlp import LocalDecoder,LocalDecoderFiLM,SerialModulator
+        # from models.ocn_mlp import LocalDecoder,LocalDecoderFiLM
         # self.grid_mlp = SerialModulator(s_dim=feat_q_dim,c_dim=coord_dim+feat_q_dim, hidden_size=1024,n_blocks=5,output_dim=1024,c_operation='add',leaky=True).to(self.device)
+        from models.cond_modulator_shallow_serial import SerialModulatorShallow
+        self.grid_mlp = SerialModulatorShallow(input_dim=feat_q_dim,condition_dim=self.coord_encoded_dim,hidden_dim=512,num_blocks=1,output_dim=feat_q_dim,condition_operator='add',
+                                               ).to(self.device)
 
         #define the param to save/laod
-        self.param = {
-            # 'grid':self.grid,
-            # 'grid_mlp':self.grid_mlp,
-            'aggregator':self.aggregator,
+        self.param2optimize = {
+            'grid':self.grid,
+            'grid_mlp':self.grid_mlp,
+            # 'aggregator':self.img_aggregator,
+        }
+        self.param2freeze = {
+            'img_encoder':self.img_encoder,
+            'img_aggregator':self.img_aggregator,
         }
 
     def _test_ready(self):
@@ -299,13 +311,14 @@ class Trainer(object):
 
         #laod the ckpt
         from tool.util_ckpt_handler import load_param
-        load_param(opt.load2test,self.param)
-        for k,v in self.param.items():
+        load_param(opt.load2test,self.param2optimize)
+        for k,v in self.param2optimize.items():
             v.eval()
-        self.img_encoder.eval()
+        for k,v in self.param2freeze.items():
+            v.eval()
 
         # config the datalaoder
-        from dataset_satmap_wingtra import SatDataset
+        from dataset_wingtra_4d import SatDataset
         self.sat_dataset = SatDataset(
             p_satinfo_json=self.opt.p_satinfo_json,
             p_uav_geocsv=self.opt.p_uav_geocsv,
@@ -316,36 +329,68 @@ class Trainer(object):
                                                           pin_memory=True, shuffle=True, drop_last=False,
                                                           persistent_workers=True)
 
+    def _feats_fm_grid(self, coords):
+        if len(coords.shape) == 3:
+            n, m, _ = coords.shape
+            coords_flatten = coords.flatten(start_dim=0, end_dim=1)
+        else:
+            coords_flatten = coords
+        scales = coords_flatten[..., -1]
+
+        grid_nrc_coords = coords_flatten[:, :2] * 2 - 1.
+        grid_rot_coords = coords_flatten[:, 2:3] / (2 * torch.pi) - 1.
+        grid_rot_coords *= (180 / self.grid_args.grid.max_grid_res)
+        gird_3d_coords = torch.concatenate([grid_nrc_coords, grid_rot_coords], dim=-1)
+        n_gird_lod = len(self.grid.active_lods)
+        feats_grid = self.grid.interpolate(gird_3d_coords.to(self.device), n_gird_lod - 1)
+        #   aggerate the multiscale feats
+        # normalized_scales = (scales - self.sat_dataset.satimgsize_scale_to_200m_boundary[0]) / (
+        #             self.sat_dataset.satimgsize_scale_to_200m_boundary[1] -
+        #             self.sat_dataset.satimgsize_scale_to_200m_boundary[0])
+        normalized_scales = (self.sat_dataset.satimgsize_scale_to_200m_boundary[1] - scales) / (
+                self.sat_dataset.satimgsize_scale_to_200m_boundary[1] -
+                self.sat_dataset.satimgsize_scale_to_200m_boundary[0])
+        center_indices = (normalized_scales * (n_gird_lod - 1)).squeeze()
+        m_indices = torch.arange(n_gird_lod, device=normalized_scales.device)  # 形状: [M]
+
+        dist = torch.abs(center_indices.unsqueeze(1) - m_indices.unsqueeze(0))
+        epsilon = 1e-8
+        # scale_weights = 1.0 / (dist + epsilon)
+        p = 0.5  # p=2时，权重随距离二次方衰减（衰减更快）;p=0.5时，衰减更慢
+        scale_weights = 1.0 / (dist.pow(p) + epsilon)
+        scale_weights = scale_weights / torch.sum(scale_weights, dim=-1, keepdim=True)
+
+        feats_grid = (feats_grid.reshape(gird_3d_coords.shape[0], n_gird_lod, -1) * scale_weights.unsqueeze(
+            -1).to(self.device)).sum(dim=-2)
+
+        if len(coords.shape) == 3:
+            feats_grid = feats_grid.reshape(n, m, feats_grid.shape[-1])
+        return feats_grid
 
     def train(self):
         opt = self.opt
 
-        #config the optimizer ,todo:
-        from tool.util_mk_optimizer import create_optimizer_w_temple
-        self.optimizer = create_optimizer_w_temple({"img_encoder":self.img_encoder,
-                                                    'aggregator': self.aggregator,
-                                                    # "grid":self.grid,
-                                                    # "gird_mlp": self.grid_mlp,
-                                                    },'adam')
+        #config the optimizer
+        self.optimizer = create_optimizer_w_temple(self.param2optimize,'adam')
 
         # load the ckpt for continuing train if necessray
         from tool.util_ckpt_handler import load_param
         if opt.load2train is not None and len(opt.load2train)>0:
             params_to_add = {"optimizer_state": self.optimizer}
-            self.param.update(params_to_add)
-            load_param(opt.load2train, self.param)
+            self.param2optimize.update(params_to_add)
+            load_param(opt.load2train, self.param2optimize)
         begin_epoch = 0
 
         # config the datalaoder:
-        from dataset_satmap_wingtra import SatDataset
+        from dataset_wingtra_4d import SatDataset
         self.sat_dataset = SatDataset(
             p_satinfo_json=self.opt.p_satinfo_json,
             p_uav_geocsv=self.opt.p_uav_geocsv,
             imgsize2net=224,
         )
-        self.sat_dataloader = torch.utils.data.DataLoader(self.sat_dataset, batch_size = self.opt.batchsize_sat,
-                                                          num_workers = self.opt.num_worker,
-                                                          pin_memory=True, shuffle=True, drop_last=False,
+        self.sat_dataloader = torch.utils.data.DataLoader(self.sat_dataset, batch_size=self.opt.batchsize_sat,
+                                                          num_workers=self.opt.num_worker,
+                                                          pin_memory=True,shuffle=True,drop_last=False,
                                                           persistent_workers=True)
 
         # config the logger&writer
@@ -382,73 +427,30 @@ class Trainer(object):
                 # uav_imgs, uav_nrcs = next(iter(self.uav_dataloader_train))
 
                 gt_coords = torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio], 1).to(self.device)
-                # from util_gen_coord_samples_hierarchical import generate_pose_samples_hierarchical,get_stratified_sampling_configs,visualize_hierarchical_samples
-                # config_sampling = get_stratified_sampling_configs(
-                #     base_rc_std = self.sat_dataset.halfimg_radius_nrc*0.5,
-                #     base_dir_std_rad = np.deg2rad(10),
-                #     base_log_s_std = 0.05,
-                # )
-                # n_uniform_samples=0
-                # coords_sampled = generate_pose_samples_hierarchical(
-                #     p_true_batch=gt_coords,
-                #     rc_bounds=(self.sat_dataset.nr2sample_range, self.sat_dataset.nc2sample_range),
-                #     scale_bounds=self.sat_dataset.satimgsize_scale_to_200m_boundary,
-                #     sampling_configs=config_sampling, # <--- 传入动态生成的配置
-                #     num_uniform_samples=n_uniform_samples,
-                # ).to(self.device)
-                # debug:vis the coord_samples
-                # visualize_hierarchical_samples(
-                #     p_true=gt_coords[0],
-                #     rc_bounds=(self.sat_dataset.nr2sample_range, self.sat_dataset.nc2sample_range),
-                #     sampling_configs=config_sampling,
-                #     all_samples=coords_sampled[0],
-                #     num_uniform_samples=n_uniform_samples,
-                # )
-
-                # sample satimg according to the new sampled coords
-                # satimgs_sampled = self.sat_dataset.crop_satimgs_by_4d_coords(coords_sampled.flatten(start_dim=0,end_dim=1))
-                # satimgs_sampled = satimgs_sampled.reshape(coords_sampled.shape[0],coords_sampled.shape[1],*satimgs_sampled.shape[-3:])
-                # # concatenate the sampled satimg with the gt_satimg and update the coords
-                # satimgs_q = torch.concatenate([satimg,satimgs_sampled],dim=1).flatten(start_dim=0,end_dim=1)
-                # coords = torch.concatenate([gt_coords.unsqueeze(1),gt_coords.unsqueeze(1),coords_sampled],dim=1)
+                # coords = torch.concatenate([gt_coords.unsqueeze(1), gt_coords.unsqueeze(1)], dim=1)
                 # coords_flatten = coords.flatten(start_dim=0,end_dim=1)
-                # satimg_q_ids = [ coords.shape[1]*i for i in range(gt_coords.shape[0])]
+                # satimgs_q = satimg.flatten(start_dim=0,end_dim=1)
+                # satimg_q_ids = [coords.shape[1] * i for i in range(coords.shape[0])]
 
-                coords = torch.concatenate([gt_coords.unsqueeze(1), gt_coords.unsqueeze(1)], dim=1)
-                coords_flatten = coords.flatten(start_dim=0,end_dim=1)
-                satimgs_q = satimg.flatten(start_dim=0,end_dim=1)
-                satimg_q_ids = [coords.shape[1] * i for i in range(coords.shape[0])]
-
-                rc_dist_mat = gt_coords[:,:2].unsqueeze(1) - coords_flatten[:,:2].unsqueeze(0)
-                rc_dist_mat = torch.norm(rc_dist_mat,dim=-1)
-                r_dist_mat = gt_coords[:,2].unsqueeze(1) - coords_flatten[:,2].unsqueeze(0)
-                r_dist_mat = torch.abs(torch.atan2(torch.sin(r_dist_mat), torch.cos(r_dist_mat))).squeeze() #atan2 函数的输出范围是 [-π, π]
-                s_dist_mat = gt_coords[:,3].unsqueeze(1) / coords_flatten[:,3].unsqueeze(0)
-                s_dist_mat = torch.abs(torch.log(s_dist_mat)).squeeze() #比例关系在对数空间中会变为加减关系
-                udf_dist_mat = self.udf_compter.compute_udf_fm_diff(rc_dist_mat,r_dist_mat,s_dist_mat)
-                positive_mat = udf_dist_mat < self.sat_dataset.halfimg_radius_nrc
-
+                satimgs_q = satimg
                 feats_q = self.img_encoder(satimgs_q.to(self.device))
                 if self.agg_name == 'g2m':
-                    feats_q = self.aggregator(feats_q[:,1:,:].permute(0,2,1).reshape(satimgs_q.shape[0],self.feat_q_dim,14,14)) #for patchsize=16,imgszie=224
+                    feats_q = self.img_aggregator(feats_q[:,1:,:].permute(0,2,1).reshape(satimgs_q.shape[0],self.feat_q_dim,14,14)) #for patchsize=16,imgszie=224
                 elif self.agg_name == 'salad':
-                    feats_q = self.aggregator(feats_q) #aggregator = salad
-                feat_dist_mat = torch.norm(feats_q[satimg_q_ids].unsqueeze(1) - feats_q.unsqueeze(0),dim=-1) #without normalizing feat
+                    feats_q = self.img_aggregator(feats_q) #aggregator = salad
 
-                loss = loss_swt(feat_dist_mat,positive_mat,udf_dist_mat)
-                # loss = loss_ms(feat_dist_mat,positive_mat)
-
-                #debug for vis
-                # positive_mat_np = positive_mat.detach().cpu().numpy()
-                # feat_dist_mat_np = feat_dist_mat.detach().cpu().numpy()
-                # udf_dist_mat_np = udf_dist_mat.detach().cpu().numpy()
-                # from matplotlib import pyplot as plt
-                # bins = 50
-                # plot_range = (0,feat_dist_mat_np.max())
-                # plt.hist(feat_dist_mat.flatten().detach().cpu().numpy(), bins=bins, range=plot_range,
-                #          alpha=0.7, label='DINO Features (Filtered)', density=True)
-                # plt.show()
-
+                # 3.结果预测
+                # get feats from hash
+                feats_grid = self._feats_fm_grid(gt_coords)
+                coords_encoded = encode_4d_coords(torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio], dim=-1),
+                                                  rc_encoder=self.rc_pos_encoder,
+                                                  rot_endcoder=self.rot_pos_encoder,
+                                                  scale_encoder=self.scale_pos_encoder )
+                feats_grid = self.grid_mlp(inputs=feats_grid,
+                                           condition_features= coords_encoded.to(feats_grid.device))
+                                           # condition_features=torch.concatenate([feats_grid, coords_encoded.to(feats_grid.device)],dim=-1))
+                feats_grid = torch.nn.functional.normalize(feats_grid,dim=-1)
+                loss = loss_mse(feats_grid,feats_q)*1000
 
                 # 反向传播
                 self.optimizer.zero_grad()
@@ -479,33 +481,33 @@ class Trainer(object):
                     "optimizer_state": self.optimizer,
                     "epoch": epoch,
                 }
-                self.param.update(params_to_add)
-                save_param(opt.exp_name, self.param)
+                self.param2optimize.update(params_to_add)
+                save_param(opt.exp_name, self.param2optimize)
                 #log info:
-                # grid_feats_grad = self.grid.codebook.feats.grad
-                # self.logger.info(f"Grid feats grad L2 norm:{torch.linalg.norm(grid_feats_grad).item()}")
-                # self.logger.info(f"Grid feats value.max():{feats_grid.max().item():.4f}")
+                grid_feats_grad = self.grid.codebook.feats.grad
+                self.logger.info(f"Grid feats grad L2 norm:{torch.linalg.norm(grid_feats_grad).item()}")
+                self.logger.info(f"Grid feats value.max():{feats_grid.max().item():.4f}")
                 mean_dino = torch.mean(feats_q, dim=0)
-                # mean_grid = torch.mean(feats_grid, dim=0)
-                # l2_distance = torch.linalg.norm(mean_dino - mean_grid).item()
-                # cosine_sim = F.cosine_similarity(mean_dino.unsqueeze(0), mean_grid.unsqueeze(0)).item()
-                # self.logger.info(f"  mean值- L2 距离: {l2_distance:.6f}")
-                # self.logger.info(f"  mean值- 余弦相似度: {cosine_sim:.6f}")
-                # var_per_dim_grid = torch.var(feats_grid, dim=0)
+                mean_grid = torch.mean(feats_grid, dim=0)
+                l2_distance = torch.linalg.norm(mean_dino - mean_grid).item()
+                cosine_sim = torch.nn.functional.cosine_similarity(mean_dino.unsqueeze(0), mean_grid.unsqueeze(0)).item()
+                self.logger.info(f"  mean值- L2 距离: {l2_distance:.6f}")
+                self.logger.info(f"  mean值- 余弦相似度: {cosine_sim:.6f}")
+                var_per_dim_grid = torch.var(feats_grid, dim=0)
                 var_per_dim_dino = torch.var(feats_q, dim=0)
-                # self.logger.info(f"  gird_方差均值: {var_per_dim_grid.mean().item():.6f}")
+                self.logger.info(f"gird_方差均值: {var_per_dim_grid.mean().item():.6f}")
                 self.logger.info(f"feat_方差的均值: {var_per_dim_dino.mean().item():.6f}")
-                # 更有意义的指标：方差的方差（衡量特征维度的差异性）
-                var_of_var = torch.var(var_per_dim_dino)
-                self.logger.info(f"feat_方差的方差: {var_of_var.item():.6f}")
+                # # 更有意义的指标：方差的方差（衡量特征维度的差异性）
+                # var_of_var = torch.var(var_per_dim_dino)
+                # self.logger.info(f"feat_方差的方差: {var_of_var.item():.6f}")
 
                 if self.writer is not None:
-                    # self.writer.add_scalar(' mean_L2_dist', l2_distance, epoch)
-                    # self.writer.add_scalar(' mean_cosine_sim', cosine_sim, epoch)
-                    # self.writer.add_scalar(' gird_var_mean', var_per_dim_grid.mean().item(), epoch)
-                    self.writer.add_scalar(' feat_mean', mean_dino.mean().item(), epoch)
-                    self.writer.add_scalar(' feat_var_mean', var_per_dim_dino.mean().item(), epoch)
-                    self.writer.add_scalar(' feat_var_var', var_of_var.item(), epoch)
+                    self.writer.add_scalar(' mean_L2_dist', l2_distance, epoch)
+                    self.writer.add_scalar(' mean_cosine_sim', cosine_sim, epoch)
+                    self.writer.add_scalar(' gird_var_mean', var_per_dim_grid.mean().item(), epoch)
+                    # self.writer.add_scalar(' feat_mean', mean_dino.mean().item(), epoch)
+                    # self.writer.add_scalar(' feat_var_mean', var_per_dim_dino.mean().item(), epoch)
+                    # self.writer.add_scalar(' feat_var_var', var_of_var.item(), epoch)
 
             # log info
             str2log = ''
@@ -557,14 +559,14 @@ class Trainer(object):
             # for batch in torch.split(satimgs_gallery_flatten, batchsize,dim=0):
             #     feat = self.img_encoder(batch.to(self.device))
             #     if feat_fm_agg:
-            #         feat = self.aggregator(feat[:, 1:, :].permute(0, 2, 1).reshape(feat.shape[0], self.feat_q_dim, 14, 14))
+            #         feat = self.img_aggregator(feat[:, 1:, :].permute(0, 2, 1).reshape(feat.shape[0], self.feat_q_dim, 14, 14))
             #     else:
             #         feat = feat[:,0,:]
             #     feat_galllery.append(feat.detach().cpu())
             # feat_galllery = torch.cat(feat_galllery)
             # feat_q = self.img_encoder(satimgs_q.to(self.device))
             # if feat_fm_agg:
-            #     feat_q = self.aggregator(feat_q[:, 1:, :].permute(0, 2, 1).reshape(feat_q.shape[0], self.feat_q_dim, 14, 14)).detach().cpu()
+            #     feat_q = self.img_aggregator(feat_q[:, 1:, :].permute(0, 2, 1).reshape(feat_q.shape[0], self.feat_q_dim, 14, 14)).detach().cpu()
             # else:
             #     feat_q = feat_q[:, 0, :].detach().cpu()
             def get_feats(feat_fm_agg=True):
@@ -573,7 +575,7 @@ class Trainer(object):
                 for batch in torch.split(satimgs_gallery_flatten, batchsize, dim=0):
                     feat = self.img_encoder(batch.to(self.device))
                     if feat_fm_agg:
-                        feat = self.aggregator(
+                        feat = self.img_aggregator(
                             feat[:, 1:, :].permute(0, 2, 1).reshape(feat.shape[0], self.feat_q_dim, 14, 14))
                     else:
                         feat = feat[:, 0, :]
@@ -581,7 +583,7 @@ class Trainer(object):
                 feat_galllery = torch.cat(feat_galllery)
                 feat_q = self.img_encoder(satimgs_q.to(self.device))
                 if feat_fm_agg:
-                    feat_q = self.aggregator(
+                    feat_q = self.img_aggregator(
                         feat_q[:, 1:, :].permute(0, 2, 1).reshape(feat_q.shape[0], self.feat_q_dim, 14, 14)).detach().cpu()
                 else:
                     feat_q = feat_q[:, 0, :].detach().cpu()
@@ -608,7 +610,7 @@ class Trainer(object):
                 gt_ids_np = gt_ids.detach().cpu().numpy()
 
                 id_seled = 0
-                from util_vis_retrieval_in_2d import visualize_response_map,calculate_peak_saliency,visualize_response_map_3d
+                from util_vis_retrieval_in_2d import visualize_response_map, visualize_response_map_3d
                 visualize_response_map(
                     response_map = pred_agg[id_seled].reshape(sat_tiles.shape[:2]).detach().cpu().numpy(),
                     ground_truth_idx = (gt_ids_np[id_seled][0],gt_ids_np[id_seled][1]),
@@ -629,9 +631,9 @@ class Trainer(object):
                 feat = self.img_encoder(batch.to(self.device))
                 if feat_fm_agg:
                     if self.agg_name == 'salad':
-                        feat = self.aggregator.forward(feat)
+                        feat = self.img_aggregator.forward(feat)
                     elif self.agg_name == 'g2m':
-                        feat = self.aggregator.forward(feat[:, 1:, :].permute(0, 2, 1).reshape(feat.shape[0], self.feat_q_dim, 14, 14),normalize=True)
+                        feat = self.img_aggregator.forward(feat[:, 1:, :].permute(0, 2, 1).reshape(feat.shape[0], self.feat_q_dim, 14, 14),normalize=True)
                 else:
                     feat = feat[:, 0, :]
                 feat_galllery.append(feat.detach().cpu())
@@ -642,6 +644,7 @@ class Trainer(object):
             overlap = 0.5
             suffix = f"_overlap{overlap}_radius{self.sat_dataset.halfimg_radius_meter:.0f}m.mat"
             p2gallery_mat = f"{os.path.dirname(self.opt.load2test)}/{os.path.basename(self.opt.load2test).replace('.pth', suffix)}"
+
             if os.path.exists(p2gallery_mat):
                 gallery_mat = scipy.io.loadmat(p2gallery_mat)
                 feat_gallery_roted = torch.tensor(gallery_mat['feat_gallery'],dtype=torch.float32).flatten(start_dim=0, end_dim=1)
@@ -649,28 +652,38 @@ class Trainer(object):
                 rots_ref = torch.tensor(gallery_mat['rots_ref'],dtype=torch.float32).squeeze()
                 nrcs_gallery_flatten = nrcs_gallery.flatten(start_dim=0,end_dim=1)
             else:
-                # get satimgs_gallery,v1
-                sat_gallary, nrcs_gallery = self.sat_dataset.crop_sat_unifrom(size2clip=self.sat_dataset.satimgsize2crop_mean,overlap=overlap)
-                nrcs_gallery_flatten = torch.from_numpy(nrcs_gallery).flatten(start_dim=0,end_dim=1)
-
-                # coords_gallery_flatten = torch.cat([nrcs_grid_flatten,torch.zeros(nrcs_grid_flatten.shape[0],1),torch.ones(nrcs_grid_flatten.shape[0],1)*self.sat_dataset.satimgsize_scale_to_200m_mean], dim=1)
-                satimgs_gallery_flatten = self.sat_dataset.scale_transform(sat_gallary.flatten(start_dim=0,end_dim=1))
-
-                from dataset_transform_making import RandomRotationWithAngle
-                rotater = RandomRotationWithAngle(degrees=180, same_on_batch=True)
+                nrcs_gallery = self.sat_dataset.crop_sat_unifrom(
+                    size2clip=self.sat_dataset.satimgsize2crop_mean, overlap=overlap, only_nrcs=True)
+                nrcs_gallery_flatten = torch.tensor(nrcs_gallery, dtype=torch.float32).flatten(start_dim=0, end_dim=1)
                 delta_rot_rangle = 10
                 rot_angles = [-180 + delta_rot_rangle * i for i in range(360 // delta_rot_rangle)]
-                feat_gallery_roted = []
-                # self.img_encoder = torch.compile(self.img_encoder)
-                # self.aggregator = torch.compile(self.aggregator)
-                for rot in tqdm.tqdm(rot_angles):
-                    with autocast():
-                        satimgs_roted = rotater(satimgs_gallery_flatten, rot)
-                        feat_gallery_roted.append(get_feats(satimgs_roted, feat_fm_agg=True))
-                feat_gallery_roted = torch.stack(feat_gallery_roted,dim=1)
+                rots_ref = torch.tensor(np.deg2rad(np.stack(rot_angles)), dtype=torch.float32)
+                coords_gallery = torch.concatenate([nrcs_gallery_flatten.unsqueeze(1).expand(-1, rots_ref.shape[0], -1),
+                                                    rots_ref[None, :, None].expand(nrcs_gallery_flatten.shape[0], -1,
+                                                                                   1),
+                                                    torch.ones([nrcs_gallery_flatten.shape[0], rots_ref.shape[0], 1],
+                                                               dtype=torch.float32) * self.sat_dataset.satimgsize_scale_to_200m_mean
+                                                    ], dim=-1)
+                coords_gallery_flatten = coords_gallery.flatten(start_dim=0, end_dim=1)
+                coords_gallery__encoded_flatten = encode_4d_coords(coords_gallery_flatten,
+                                                                   rc_encoder=self.rc_pos_encoder,
+                                                                   rot_endcoder=self.rot_pos_encoder,
+                                                                   scale_encoder=self.scale_pos_encoder)
+                feat_gallery_flatten = []
+                chunk_size = 512  # 定义块大小
+                # 将两个张量都进行切分
+                coords_chunks = torch.split(coords_gallery_flatten, chunk_size)
+                encoded_coords_chunks = torch.split(coords_gallery__encoded_flatten, chunk_size)
+                for coords_4d, encoded_coords_4d in zip(coords_chunks, encoded_coords_chunks):
+                    feat = self._feats_fm_grid(coords_4d)
+                    feat = self.grid_mlp(inputs=feat, condition_features=encoded_coords_4d.to(feat.device))
+                    feat_gallery_flatten.append(feat.detach().cpu())
+                feat_gallery_flatten = torch.concatenate(feat_gallery_flatten, dim=0)
+                feat_gallery_flatten = torch.nn.functional.normalize(feat_gallery_flatten, dim=-1, p=2)
+                feat_gallery = feat_gallery_flatten.reshape(*nrcs_gallery.shape[:2], rots_ref.shape[0], -1)
 
                 rots_ref = torch.tensor(np.deg2rad(np.stack(rot_angles)), dtype=torch.float32)
-                result = {'feat_gallery': feat_gallery_roted.reshape(*sat_gallary.shape[:2],*feat_gallery_roted.shape[1:]).detach().cpu().numpy(),
+                result = {'feat_gallery': feat_gallery.detach().cpu().numpy(),
                           'nrcs_gallery': nrcs_gallery,
                           'rots_ref': rots_ref.detach().cpu().numpy(),
                           }
@@ -685,15 +698,15 @@ class Trainer(object):
             feat_q = get_feats(satimgs_q, feat_fm_agg=True)
 
             # computing pred
-            pred_agg = torch.norm(feat_q[:,None,None,:] - feat_gallery_roted.unsqueeze(0), dim=-1, p=2)
-            pred_v,pred_id = torch.sort( pred_agg.flatten(start_dim=1,end_dim=2), dim=-1, descending=False)
-            pred_id_rot = pred_id % pred_agg.shape[2]  # 应该是 pred_id % R
-            pred_id_rc = pred_id // pred_agg.shape[2]  # 应该是 pred_id // R
+            # pred_agg = torch.norm(feat_q[:,None,None,:] - feat_gallery_roted.unsqueeze(0), dim=-1, p=2)
+            # pred_v,pred_id = torch.sort( pred_agg.flatten(start_dim=1,end_dim=2), dim=-1, descending=False)
+            pred_agg = torch.norm(feat_q.unsqueeze(1) - feat_gallery_flatten.unsqueeze(0), dim=-1, p=2)
+            pred_v, pred_id = torch.sort(pred_agg, dim=-1, descending=False)
+            gallery_shape = torch.Size([*nrcs_gallery.shape[:2],rots_ref.shape[0]])
+            pred_id_rot = pred_id % gallery_shape[2]  # 应该是 pred_id % R
+            pred_id_rc = pred_id // gallery_shape[2]  # 应该是 pred_id // R
             from util_unravel_index import unravel_index
-            pred_ids_unraled = unravel_index(pred_id,torch.Size([nrcs_gallery.shape[0],nrcs_gallery.shape[1],pred_agg.shape[2] ]))
-            # pred_row = pred_ids_unraled[0]
-            # pred_col = pred_ids_unraled[1]
-            # pred_rot = pred_ids_unraled[2]
+            pred_ids_unraled = unravel_index(pred_id,gallery_shape)
 
             from eval_recall_fm_salad import qurey_label_fm_gallery_nrc,compute_recall_by_label,create_success_mask
             distrc_sats2uav, uav_labels_query = qurey_label_fm_gallery_nrc(nrcs_gallery_flatten,nrcs_q,self.sat_dataset.halfimg_radius_nrc)
@@ -720,7 +733,7 @@ class Trainer(object):
             rot_recall_results = compute_recall_by_label(
                 q_labels=gt_ids_rot[rot_mask].unsqueeze(-1),
                 pred_labels_per_query=pred_ids_unraled[2][rot_mask,:10],
-                k_values=[1, 5, 10],
+                k_values=[1, 3, 5, 10],
                 title="Conditional Rotation Recall (based on radius search)"
             )
             print("\n条件旋转召回率结果:", rot_recall_results)
@@ -750,8 +763,8 @@ class Trainer(object):
                 gt_ids_np = gt_ids.detach().cpu().numpy()
 
                 id_seled = 0
-                from util_vis_retrieval_in_2d import visualize_response_map,calculate_peak_saliency,visualize_response_map_3d
-                map2vis = pred_agg[id_seled][:,gt_ids_rot[0]].reshape(nrcs_gallery.shape[:2])
+                from util_vis_retrieval_in_2d import visualize_response_map, visualize_response_map_3d
+                map2vis = pred_agg[id_seled].reshape(gallery_shape)[:,:,gt_ids_rot[0]]
                 visualize_response_map(
                     response_map = map2vis.detach().cpu().numpy(),
                     ground_truth_idx = (gt_ids_np[id_seled][0],gt_ids_np[id_seled][1]),
@@ -759,6 +772,7 @@ class Trainer(object):
                     # cmap = 'coolwarm',
                 )
                 visualize_response_map_3d( torch.exp(-map2vis) )
+                # visualize_response_map_3d( -map2vis )
 
 
     def mk_gallery_feat(self):
@@ -767,7 +781,7 @@ class Trainer(object):
         overlap=0.5
         sat_tiles, nrcs_girdcoord_center = self.sat_dataset.crop_sat_unifrom(size2clip=satimgsize2crop,overlap=overlap)
 
-        from dataset_transform_making import RandomRotationWithAngle
+        from train_img_encoder.datasets_custom.util_mk_data_transform import RandomRotationWithAngle
         rotater = RandomRotationWithAngle(degrees=180,same_on_batch=True)
         sat_tiles_roted = []
         delta_rot_rangle = 10
@@ -782,7 +796,7 @@ class Trainer(object):
         with torch.no_grad():
             for batch in torch.split(sat_tiles_roted, batchsize, dim=0):
                 feats = self.img_encoder(batch[:, 0, ...].to(self.device))
-                feats = self.aggregator(feats[:, 1:, :].permute(0, 2, 1).reshape(-1, self.feat_q_dim, 14, 14))
+                feats = self.img_aggregator(feats[:, 1:, :].permute(0, 2, 1).reshape(-1, self.feat_q_dim, 14, 14))
                 feat_gallery.append(feats)
         feat_gallery = torch.cat(feat_gallery,dim=0)
         feat_gallery = feat_gallery.reshape(-1,360//delta_rot_rangle,feat_gallery.shape[-1])

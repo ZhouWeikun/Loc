@@ -176,13 +176,14 @@ class SWTLoss_fm_mat(nn.Module):
         self.alpha = slope_pos
         self.beta = slope_neg
         self.decoupling = decoupling
-        self.weight_dist_func = lambda x:1/(1+torch.exp(-8.5*(x-0.25)))
+        self.weight_dist_func = lambda x:1/(1+torch.exp(-8.5*(x-0.15)))
 
 
     def forward(self, feat_mat,
                 pos_mask,
                 dist_mat=None,
                 metric='dist',
+                w_weight = False,
                 ):
 
         neg_mask = ~pos_mask
@@ -198,7 +199,9 @@ class SWTLoss_fm_mat(nn.Module):
             neg_most_hard_per_row = torch.min(neg_mat,dim=-1)  # find the minimum distance of negative value in every row
 
             if not self.decoupling:
-                # return torch.log(1 + torch.exp( self.alpha * (pos_most_hard_per_row[0] - neg_most_hard_per_row[0]))).mean()  # (dist_hardp - dist_hardn) large -> loss large
+                if not w_weight:
+                    return torch.log(1 + torch.exp( self.alpha * (pos_most_hard_per_row[0] - neg_most_hard_per_row[0]))).mean()  # (dist_hardp - dist_hardn) large -> loss large
+
                 indices_hard_pos = pos_most_hard_per_row[1].unsqueeze(1)
                 dist_pos_most_hard_per_row = torch.gather(dist_mat, dim=1, index=indices_hard_pos)
                 indices_hard_neg = neg_most_hard_per_row[1].unsqueeze(1)

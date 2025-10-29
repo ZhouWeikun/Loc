@@ -1,152 +1,16 @@
 import os
 import json
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,40).__str__()
-import cv2 #import after setting OPENCV_IO_MAX_IMAGE_PIXELS
 # from torchvision.transforms import InterpolationMode
 from PIL import Image
 import pandas as pd
 import numpy as np
 import torch
 from torchvision import transforms
-import math,random
+import random
 import  torchvision.transforms as T
-
-
-def mk_transform(
-        mean,
-        std,
-        imgsize2net=224,
-        rand_affine = False,
-        affine_para = None,
-        rand_rot = False,
-        rand_erase = False,
-        color_jitter = False,
-        center_crop = False,
-        rand_crop = False,
-        ):
-    transform_list = [transforms.Resize(imgsize2net)]
-    if center_crop:
-        transform_list += [transforms.CenterCrop(imgsize2net)]
-    if rand_crop:
-        transform_list += [transforms.RandomCrop(imgsize2net)]
-    if rand_rot:
-        transform_list.append(transforms.RandomRotation(180, interpolation=3))
-    if rand_affine:
-        # 1. 为 RandomAffine 定义一套默认参数
-        default_affine_params = {
-            'degrees': 180,
-            'translate': (0, 0),
-            'scale': (1.0, 1.0),
-            'shear': 5,
-        }
-        # 2. 如果提供了affine_para字典，用它来更新默认值
-        if affine_para:
-            if not isinstance(affine_para, dict):
-                raise TypeError("affine_para必须是一个字典。")
-            default_affine_params.update(affine_para)
-            # 3. 使用字典解包(**)将参数传递给函数
-        transform_list.append(
-            transforms.RandomAffine(
-                **default_affine_params,  # <--- 核心改动
-                interpolation=transforms.InterpolationMode.BILINEAR,
-                fill=0
-            )
-        )
-    if color_jitter:
-        transform_list.append(
-            transforms.Compose([
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05),
-                # transforms.RandomAutocontrast(p=0.3),
-                # transforms.RandomGrayscale(p=0.3)
-            ])
-        )
-    transform_list += [transforms.ToTensor()]
-    if rand_erase:
-        transform_list.append(transforms.RandomErasing(p=0.1, scale=(0.05, 0.2), ratio=(0.3, 3.3), value=1))
-    transform_list +=[transforms.Normalize(mean=mean, std=std)]
-
-    transform2ret = transforms.Compose(transform_list)
-    return transform2ret
-
-
-def mk_sat_tensor_transform(
-        imgsize2net=224,
-        rand_affine = False,
-        affine_para = None,
-        rand_rot = False,
-        rand_erase = False,
-        color_jitter = False,
-        ):
-    transform_list = [transforms.Resize(imgsize2net)]
-    if rand_rot:
-        transform_list.append(transforms.RandomRotation(180, interpolation=3))
-    if rand_affine:
-        # 1. 为 RandomAffine 定义一套默认参数
-        default_affine_params = {
-            'degrees': 0,
-            'translate': (0, 0),
-            'scale': (1.0, 1.0),
-            'shear': 5,
-        }
-        # 2. 如果提供了affine_para字典，用它来更新默认值
-        if affine_para:
-            if not isinstance(affine_para, dict):
-                raise TypeError("affine_para必须是一个字典。")
-            default_affine_params.update(affine_para)
-            # 3. 使用字典解包(**)将参数传递给函数
-        transform_list.append(
-            transforms.RandomAffine(
-                **default_affine_params,  # <--- 核心改动
-                interpolation=transforms.InterpolationMode.BILINEAR,
-                fill=0
-            )
-        )
-    if color_jitter:
-        transform_list.append(
-            transforms.Compose([
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05),
-                # transforms.RandomAutocontrast(p=0.3),
-                # transforms.RandomGrayscale(p=0.3)
-            ])
-        )
-    transform_list += [transforms.ToTensor()]
-    if rand_erase:
-        transform_list.append(transforms.RandomErasing(p=0.1, scale=(0.05, 0.2), ratio=(0.3, 3.3), value=1))
-
-    transform2ret = transforms.Compose(transform_list)
-    return transform2ret
-
-
-from multiprocessing import Pool
-# --- 工作进程初始化函数 ---
-# 在每个子进程启动时会执行一次
-def _init_corpping_worker(satmaps_tensor_list, scale_transform_obj):
-    """将共享的大数据加载到每个工作进程的全局变量中"""
-    global shared_satmaps, shared_transform
-    shared_satmaps = satmaps_tensor_list
-    shared_transform = scale_transform_obj
-
-
-# --- 单个任务的工作函数 ---
-# 这个函数是每个子进程要执行的核心任务
-def _process_single_crop(args):
-    """处理单个坐标的裁剪、缩放和旋转任务"""
-    # 从全局变量中获取共享数据
-    global shared_satmaps, shared_transform
-
-    # 解析传入的、每个任务都不同的参数
-    rb, cb, size, rot_deg = args
-
-    # 1. 随机选择源图像并裁剪
-    source_tensor = random.choice(shared_satmaps)
-    re, ce = rb + size, cb + size
-    crop = source_tensor[:, rb:re, cb:ce]
-
-    # 2. 缩放和旋转
-    crop = shared_transform(crop)
-    crop = T.functional.rotate(crop, float(rot_deg))
-
-    return crop
+#
+from train_img_encoder.datasets_custom.util_mk_data_transform import mk_pil_transform,mk_sat_tensor_transform
 
 
 class SatDataset(object):
@@ -154,6 +18,7 @@ class SatDataset(object):
                  p_satinfo_json,
                  imgsize2net = 224,
                  satimgsize2crop = 256,
+                 scale_ref_m=200,
                  p_uav_geocsv=None,
                  **kwargs,
                  ):
@@ -184,31 +49,37 @@ class SatDataset(object):
         self.satmap_hw_max = np.max([self.satmap_h, self.satmap_w])
 
         #config the transforms
-        from dataset_transform_making import mk_sat_tensor_transform
         self.imgsize2net = imgsize2net
-        self.sat_transform_train, self.sat_rotater =  mk_sat_tensor_transform(imgsize2net,rand_rot=True)
+        self.sat_transform_train, self.sat_rotater = mk_sat_tensor_transform(imgsize2net,rand_rot=True)
         self.scale_transform = T.Compose([transforms.Resize(self.imgsize2net,antialias=True)])
 
         # for defining the scale to sample
-        # if p_uav_geocsv is not None:
+        self.scale_ref_m = scale_ref_m
         df = pd.read_csv(p_uav_geocsv)
         h_cover_m =  df['h_cover_m']
         aff2d_corrected_mask = df['aff2d_corrected']
-        h_cover_m = h_cover_m[aff2d_corrected_mask]
-        # filtering by the scale
-        scale_ref_m = 200
-        satimgsize_scale_to_200m = np.array(h_cover_m/self.geo_res_m)*self.geo_res_m/scale_ref_m
-        lower_bound = np.percentile( satimgsize_scale_to_200m, 2)
-        upper_bound = np.percentile( satimgsize_scale_to_200m, 99)
-        scale_mask = (satimgsize_scale_to_200m>lower_bound) * (satimgsize_scale_to_200m<upper_bound)
+        h_cover_m_corrected = h_cover_m[aff2d_corrected_mask]
+        satimgsize_scale_to_200m_corrected = np.array(h_cover_m_corrected/self.geo_res_m)*self.geo_res_m/scale_ref_m
+        lower_bound = np.percentile( satimgsize_scale_to_200m_corrected, 2)
+        upper_bound = np.percentile( satimgsize_scale_to_200m_corrected, 99)
+        satimgsize_scale_to_200m = np.array(h_cover_m / self.geo_res_m) * self.geo_res_m / scale_ref_m
+        scale_mask = (satimgsize_scale_to_200m > lower_bound) * (satimgsize_scale_to_200m < upper_bound) * aff2d_corrected_mask
+
         # config the satimgsize2crop
-        self.satimgsize2crop_correspond2uav = np.array(h_cover_m[scale_mask] / self.geo_res_m)
-        self.satimgsize2crop_mean = self.satimgsize2crop_correspond2uav.mean()
+        self.satimgsize_correspond2uav_list = np.array(h_cover_m[scale_mask] / self.geo_res_m)
+        self.satimgsize2crop_mean = self.satimgsize_correspond2uav_list.mean()
         self.satimgsize2crop_boundary = np.array(
-            [self.satimgsize2crop_correspond2uav.min(), self.satimgsize2crop_correspond2uav.max()])
-        self.satimgsize_scale_to_200m = satimgsize_scale_to_200m[scale_mask]
-        self.satimgsize_scale_to_200m_mean = self.satimgsize_scale_to_200m.mean()
-        self.satimgsize_scale_to_200m_boundary = self.satimgsize2crop_boundary*self.geo_res_m/200
+            [self.satimgsize_correspond2uav_list.min(), self.satimgsize_correspond2uav_list.max()])
+        self.satimgsize_scale_to_200m_boundary = self.satimgsize2crop_boundary*self.geo_res_m/scale_ref_m
+        self.satimgsize_scale_to_200m_list = satimgsize_scale_to_200m[scale_mask]
+        self.satimgsize_scale_to_200m_mean = self.satimgsize_scale_to_200m_list.mean()
+        # mk a scale_levels
+        n_scales = 3
+        delta_scale = (self.satimgsize_scale_to_200m_boundary[1]-self.satimgsize_scale_to_200m_boundary[0])/n_scales
+        lower = torch.linspace(start=self.satimgsize_scale_to_200m_boundary[0],end=self.satimgsize_scale_to_200m_boundary[1]-delta_scale,steps=3,dtype=torch.float32)
+        upper = torch.linspace(start=self.satimgsize_scale_to_200m_boundary[0]+delta_scale,end=self.satimgsize_scale_to_200m_boundary[1], steps=3,dtype=torch.float32)
+        self.satimgsize_scale_to_200m_unif_list = 0.5*(lower+upper)
+        self.satimgsize_unif_list = self.satimgsize_scale_to_200m_unif_list*scale_ref_m/self.geo_res_m
 
         #  define the range when sampling the satmap:
         self.satmap_edge_pixs = self.satimgsize2crop_boundary[1]+224
@@ -224,12 +95,11 @@ class SatDataset(object):
         self.nc2sample_w = self.nc2sample_max - self.nc2sample_min
 
         # define the edge, and the normed_halfimg_radius_rc that defines positive samples
-        # self.satimgsize2crop = satimgsize2crop
-        # self.satmap_edge_pixs = satimgsize2crop // 2
         self.halfimg_radius_nrc = self.satimgsize2crop_mean // 2. / self.satmap_hw_max
         self.halfimg_radius_meter = self.get_halfimg_radius_meter(satimgsize2crop // 2)
 
-        self.ret_positive=True
+        self.return_pair=True
+
 
     """funcs about sampling satmap:"""
     def crop_satimg_by_nrc(self, nrc, satimgsize2crop=224, type='tensor'):
@@ -243,7 +113,7 @@ class SatDataset(object):
         row_end = row + halfimg_width
 
         if type == 'tensor':
-            if self.ret_positive:
+            if self.return_pair:
                 satmaps_tensor = random.sample(self.satmaps_tensor, 2)
                 satimg0 = satmaps_tensor[0][:, int(row_begin):int(row_end), int(col_begin):int(col_end)]
                 satimg1 = satmaps_tensor[1][:, int(row_begin):int(row_end), int(col_begin):int(col_end)]
@@ -255,85 +125,6 @@ class SatDataset(object):
             satmap = random.choice(self.satmaps)
             satimg = satmap.crop((int(col_begin), int(row_begin), int(col_end), int(row_end)))
         return satimg
-
-    def crop_satimgs_by_4d_coords(self,coords):
-        """
-        coords=nrc,rot in rad (-pi,pi), scale
-        """
-        satimgsize2crop_list = coords[:,-1] * 200. / self.geo_res_m
-        row_list = (coords[:,0] - self.nr_tiftop) * self.satmap_hw_max
-        col_list = (coords[:,1] - self.nc_tifleft) * self.satmap_hw_max
-
-        halfimg_width = (satimgsize2crop_list / 2)
-        if type(coords) == torch.Tensor:
-            rows_begin = (row_list - halfimg_width).int()
-            cols_begin = (col_list - halfimg_width).int()
-            rows_begin = rows_begin.detach().cpu().numpy()
-            cols_begin = cols_begin.detach().cpu().numpy()
-            satimgsize2crop_list = satimgsize2crop_list.int().detach().cpu().numpy()
-            rot_list = torch.rad2deg(coords[:,2]).detach().cpu().numpy()
-        else:
-            rows_begin = (row_list - halfimg_width)
-            cols_begin = (col_list - halfimg_width)
-            rot_list = np.rad2deg(coords[:,2])
-
-        cropped_images = []
-        for i in range(len(coords)):
-            # 为批次中的每个样本随机选择一张卫星图
-            source_tensor = random.choice(self.satmaps_tensor)
-
-            rb, cb = rows_begin[i], cols_begin[i]
-            re, ce = rb + satimgsize2crop_list[i], cb + satimgsize2crop_list[i]
-            crop = source_tensor[:, rb:re, cb:ce]
-            crop = self.scale_transform(crop)
-            crop = T.functional.rotate(crop, float(rot_list[i]))
-            cropped_images.append(crop)
-        cropped_images = torch.stack(cropped_images, dim=0)
-        return cropped_images
-        #debug:
-        # from matplotlib import pyplot as plt
-        # img2vis = self.denormalize_img(crop)
-        # plt.imshow(img2vis)
-        # plt.show()
-
-    def crop_satimgs_by_4d_coords_multi_process(self,coords,num_workers=None):
-        """
-        coords: tensor with shape (n,4)
-        """
-        if num_workers is None:
-            num_workers = os.cpu_count()//2
-        if not hasattr(self,'scale_transform'):
-            self.scale_transform = T.Compose([T.Resize(self.imgsize2net,antialias=True)])
-
-        # --- 1. 向量化计算 ---
-        satimgsize2crop_list = coords[:,-1] * 200. / self.geo_res_m
-        row_list = (coords[:,0] - self.nr_tiftop) * self.satmap_hw_max
-        col_list = (coords[:,1] - self.nc_tifleft) * self.satmap_hw_max
-        halfimg_width = (satimgsize2crop_list / 2)
-
-        # 统一转换为 numpy 以便打包参数
-        rows_begin = (row_list - halfimg_width).int().cpu().numpy()
-        cols_begin = (col_list - halfimg_width).int().cpu().numpy()
-        sizes = satimgsize2crop_list.int().cpu().numpy()
-        rot_list = torch.rad2deg(coords[:, 2]).cpu().numpy()
-
-        # --- 2. 准备传递给每个任务的参数列表 ---
-        task_args = list(zip(rows_begin, cols_begin, sizes, rot_list))
-
-        # --- 3. 使用多进程池替代 for 循环 ---
-        # initializer 会在每个子进程启动时调用 _init_corpping_worker
-        # initargs 是传递给 _init_corpping_worker 的参数，避免了在主循环中重复传递大对象
-        with Pool(processes=num_workers,
-                  initializer=_init_corpping_worker,
-                  initargs=(self.satmaps_tensor, self.scale_transform)) as pool:
-
-            # pool.map 会将 task_args 列表中的每一项作为参数传递给 _process_single_crop
-            # 并行执行，然后按顺序收集结果
-            results = pool.map(_process_single_crop, task_args)
-
-        # --- 4. 收集结果 ---
-        cropped_images = torch.stack(results, dim=0)
-        return cropped_images
 
     def mk_rand_nrcs(self, n_rand, dtype=np.float32):
         rand_nrcs = np.random.rand(n_rand, 2).astype(dtype)
@@ -378,7 +169,7 @@ class SatDataset(object):
         meter_radius = 0.5*(np.abs(offset_x_m)+np.abs(offset_y_m))
         return meter_radius
 
-    def crop_sat_unifrom(self, size2clip=224, overlap=0.):
+    def crop_sat_unifrom(self, size2clip=224, overlap=0., only_nrcs=False):
         # get all sattiles:
         sat_rows = self.satmap_h
         sat_cols = self.satmap_w
@@ -395,6 +186,8 @@ class SatDataset(object):
         # rc2nrc:
         rcs_girdcoord_center = (rcs_begincoord + rcs_endcoord) / 2
         nrcs_girdcoord_center = rcs_girdcoord_center / self.satmap_hw_max
+        if only_nrcs:
+            return nrcs_girdcoord_center
 
         # self.satmap_tensor = self.satmap_tensor.cuda() if not self.satmap_tensor.is_cuda and torch.cuda.is_available() else self.satmap_tensor
         n, m, _ = rcs_girdcoord.shape
@@ -414,10 +207,10 @@ class SatDataset(object):
         sat_nrc_rand = self.mk_rand_nrcs(1)[0]
 
         # handling size/scale
-        satimgsize2crop = np.clip(np.random.choice(self.satimgsize2crop_correspond2uav) +  (np.random.rand() - 0.5) *\
+        satimgsize2crop = np.clip(np.random.choice(self.satimgsize_correspond2uav_list) +  (np.random.rand() - 0.5) *\
                            (self.satimgsize2crop_boundary[1]- self.satimgsize2crop_boundary[0]) * 0.1,
                                   self.satimgsize2crop_boundary[0],self.satimgsize2crop_boundary[1])
-        satimgsize_len_ratio_to_200m = torch.tensor([satimgsize2crop*self.geo_res_m/200.],dtype=torch.float32)
+        satimgsize_len_ratio_to_200m = torch.tensor([satimgsize2crop*self.geo_res_m/self.scale_ref_m],dtype=torch.float32)
 
         # crop the satimg
         satimg_rand = self.crop_satimg_by_nrc(sat_nrc_rand, type='tensor',satimgsize2crop=satimgsize2crop)
@@ -440,6 +233,7 @@ class SatDataset(object):
 
     def __len__(self):
         return   int((self.satmap_h * self.satmap_w) / (self.satimgsize2crop_mean ** 2))
+
 
     """funcs about fine loc:"""
     def sample_sats_in_rect(self, nrc_topleft, nrc_buttonright, n2sample_h=128, n2sample_w=128, satimgsize2crop=224, type2clip='tensor'):
@@ -475,6 +269,7 @@ class SatDataset(object):
 
         return sat_tiles,nrc_center_meshgrid
 
+
     """funcs for debugging"""
     def denormalize_img(self,img_tensor):
         if img_tensor.device.type != 'cpu':
@@ -502,49 +297,64 @@ class UAVDataset(object):
     def __init__(self,
                  p_uavinfo_json,
                  imgsize2net=224,
+                 scale_ref_m=200,
+                 geo_res_m=0.3,
                  trans_georc2nrc_func=None,
                  **kwargs,
                  ):
         # read corresponding uav imgs & mate info
         with open(p_uavinfo_json, "r") as f:
             self.uavinfo_dict = json.load(f)
-        self.uav_df = pd.read_csv(self.uavinfo_dict['uavimgs_geocsv_path'])
+        df = pd.read_csv(self.uavinfo_dict['uavimgs_geocsv_path'])
+        self.uav_df = df
 
-        uav_names = self.uav_df['filename']
+        # filtering by the scale
+        h_cover_m =  df['h_cover_m']
+        aff2d_corrected_mask = df['aff2d_corrected']
+        h_cover_m_corrected = h_cover_m[aff2d_corrected_mask]
+        satimgsize_scale_to_200m_corrected = np.array(h_cover_m_corrected/geo_res_m)*geo_res_m/scale_ref_m
+        lower_bound = np.percentile( satimgsize_scale_to_200m_corrected, 2)
+        upper_bound = np.percentile( satimgsize_scale_to_200m_corrected, 99)
+        satimgsize_scale_to_200m = np.array(h_cover_m / geo_res_m) * geo_res_m / scale_ref_m
+        scale_mask = (satimgsize_scale_to_200m > lower_bound) * (satimgsize_scale_to_200m < upper_bound) * aff2d_corrected_mask
+
+        uav_names = self.uav_df['filename'][scale_mask]
         uavimgs_dir = self.uavinfo_dict['uavimgs_dir']
         self.uavimg_paths = [os.path.join(uavimgs_dir, name) for name in uav_names]
-
         self.uav_latlons = np.stack([self.uav_df['latitude [decimal degrees]'], self.uav_df['longitude [decimal degrees]']], axis=1)
+        self.uav_rot = np.deg2rad(np.array(self.uav_df['rotdeg_fm_north_anticlock'][scale_mask]))
+        self.uav_rot_torch = torch.from_numpy(self.uav_rot).to(torch.float32)
+        self.uav_sacle_ratio = np.array(h_cover_m[scale_mask] / scale_ref_m)
+        self.uav_sacle_ratio_torch = torch.from_numpy(self.uav_sacle_ratio).to(torch.float32)
+
         if 'geo_rc_epsg_code' in  self.uavinfo_dict.keys():
-            self.uav_georcs = np.stack([self.uav_df['geo_row'],self.uav_df['geo_col']], axis=1)
             self.epsg_code = int(self.uavinfo_dict['geo_rc_epsg_code'])
+            self.uav_georcs = np.stack([self.uav_df[f'geo_row_proj{self.epsg_code}'],self.uav_df[f'geo_col_proj{self.epsg_code}']], axis=1)
 
-
-        # config transform for uavimgs
-        self.imgsize2net = imgsize2net
-        self.uav_transform_train = mk_transform(
-            imgsize2net=self.imgsize2net,
-            mean=self.uavinfo_dict['mean'], std=self.uavinfo_dict['std'],
-            rand_affine=True, affine_para={'degrees': 180, 'translate': (0, 0), 'scale': (0.9, 1.1), 'shear': 5},
-            rand_erase=True,rand_crop=True,center_crop=False)
-        self.uav_transform_test = mk_transform(
-            imgsize2net=self.imgsize2net,
-            mean=self.uavinfo_dict['mean'], std=self.uavinfo_dict['std'],
-            center_crop=True)
-
-        # if trans_georc2nrc_func is not None:
-        #     if hasattr(self, 'uav_georcs'):
-        #         self.uav_nrcs = trans_georc2nrc_func(self.uav_latlons,dtype=np.float32) if hasattr(self,'uav_georcs') else None
+        if trans_georc2nrc_func is not None:
+            self.uav_nrcs = trans_georc2nrc_func(self.uav_georcs,dtype=np.float32,source_epsg_code=self.epsg_code)
 
         self.split_uav_dataset()
         if kwargs['stage']!=None:
             self.switch_stage(kwargs['stage'])
 
+        # config transform for uavimgs
+        self.imgsize2net = imgsize2net
+        self.uav_transform_train = mk_pil_transform(
+            imgsize2net=self.imgsize2net,
+            mean=self.uavinfo_dict['mean'], std=self.uavinfo_dict['std'],
+            rand_affine=True, affine_para={'degrees': 0, 'translate': (0, 0), 'scale': (1.0, 1.0), 'shear': 5},
+            rand_erase=True,center_crop=True,rand_crop=False)
+        self.uav_transform_test = mk_pil_transform(
+            imgsize2net=self.imgsize2net,
+            mean=self.uavinfo_dict['mean'], std=self.uavinfod_ict['std'],
+            center_crop=True)
 
     """funcs about handling uavings:"""
     def split_uav_dataset(self, train_radio=0.9):
         # split the dataset for train/val/test
         n_train = int(len(self.uavimg_paths) * train_radio)
+        self.n_train = n_train
 
         self.uavimg_paths_train = self.uavimg_paths[:n_train]
         self.uav_lonlats_train = self.uav_latlons[:n_train]
@@ -570,6 +380,7 @@ class UAVDataset(object):
         uavimg = Image.open(self.uavimg_paths_test[index])
         uavimg_q = self.uav_transform_test(uavimg)
         uav_rc = self.uav_nrcs_test[index]
+
         return uavimg_q,torch.tensor(uav_rc)
 
 
@@ -621,7 +432,15 @@ if __name__ == '__main__':
     sat_dataset = SatDataset(
         p_satinfo_json='/home/data/zwk/data_uavimgs_wingtra/Zurich/blocks12_res03m.json',
         p_uav_geocsv='/home/data/zwk/data_uavimgs_wingtra/Zurich/IMAGES_info/uavimgs_geo_corrected_v1.csv',
+        imgsize2net=224,
     )
+    uav_dataset = UAVDataset(
+        p_uavinfo_json = '/home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info.json',
+        trans_georc2nrc_func = sat_dataset.transfrom_georc_to_nrc,
+        geo_res_m=0.3,
+    )
+
+
     for i in range(5):
         try:
             data = sat_dataset[i]

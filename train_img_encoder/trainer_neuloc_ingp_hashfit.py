@@ -5,24 +5,17 @@ from __future__ import print_function, division
 import argparse
 import torch
 import tqdm
-from torch.ao.nn.quantized.functional import threshold
-from torch.cuda.amp import autocast, GradScaler
-import torch.nn.functional as F
+from torch.cuda.amp import GradScaler
 import time
-import scipy.io
-from tool.util_mk_optimizer import  make_optimizer
-from models.taskflow import make_img_encoder
-from tool.utils import save_network, copyfiles2checkpoints, get_preds, get_logger, calc_flops_params, set_seed,get_unique_exp_dir
+from train_img_encoder.nets_taskflow import make_img_encoder
+from tool.utils import get_logger, get_unique_exp_dir
 # from tool.utils import load_network_wstate, save_network_wstate
 import warnings
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
-import torchvision
 import torch.nn.functional as F
 import glob
-import math
 
-from losses.loss_cl import Loss
 warnings.filterwarnings("ignore")
 
 # var to selct:
@@ -30,13 +23,9 @@ warnings.filterwarnings("ignore")
 # from datasets_custom.make_dataloder_classify import make_dataloader_train
 # from datasets_custom.make_dataloader_xmu import make_dataloader_xmu
 # from datasets_custom.make_dataloader_gta import make_dataloader_gta
-from datasets_custom.make_dataloader_wingtra import make_dataloader_wingtra
 # from exps.exp24.datasets_custom.make_dataloader_dsalad import  make_dataloader
-from PIL import Image
-from matplotlib import pyplot as plt
 import yaml
 import os
-import scipy
 import json
 
 
@@ -185,7 +174,7 @@ class Trainer(object):
         self.rot_pos_encoder = PositionalEncoder(input_dims=2,include_input=True,multires=4)
         self.scale_pos_encoder = PositionalEncoder(input_dims=1,include_input=True,multires=4)
         coord_dim = self.rc_pos_encoder.out_dim+self.rot_pos_encoder.out_dim+self.scale_pos_encoder.out_dim
-        from models.ocn_mlp import LocalDecoder,LocalDecoderFiLM,SerialModulator
+        from models.ocn_mlp import LocalDecoderFiLM,SerialModulator
         feat_q_dim = self.img_encoder.backbone.output_channel
         self.decoder = LocalDecoderFiLM(dim=feat_q_dim,c_dim=feat_q_dim,hidden_size=1024,n_blocks=3,output_dim=1,norm_type='none',leaky=True).to(self.device)
 
@@ -196,7 +185,6 @@ class Trainer(object):
         from wisp.config import instantiate
         blas = instantiate(self.grid_args.blas, pointcloud=None)
         self.grid = instantiate(self.grid_args.grid, blas=blas).to(self.device)  # A grid keeps track of both features and occupancy
-        from models.multi_mlp import create_mlp
         # self.grid_mlp = create_mlp([coord_dim+feat_q_dim,feat_q_dim,feat_q_dim],norm_type='layer').to(self.device)
         self.grid_mlp = SerialModulator(s_dim=feat_q_dim,c_dim=coord_dim+feat_q_dim, hidden_size=1024,n_blocks=5,output_dim=1024,c_operation='add',leaky=True).to(self.device)
 
@@ -231,7 +219,7 @@ class Trainer(object):
         self.img_encoder.eval()
 
         # config the datalaoder
-        from dataset_satmap_wingtra import SatDataset
+        from dataset_wingtra_4d import SatDataset
         self.sat_dataset = SatDataset(
             p_satinfo_json=self.opt.p_satinfo_json,
             p_uav_geocsv=self.opt.p_uav_geocsv,
@@ -259,7 +247,7 @@ class Trainer(object):
         begin_epoch = 0
 
         # config the datalaoder:
-        from dataset_satmap_wingtra import SatDataset
+        from dataset_wingtra_4d import SatDataset
         self.sat_dataset = SatDataset(
             p_satinfo_json=self.opt.p_satinfo_json,
             p_uav_geocsv=self.opt.p_uav_geocsv,

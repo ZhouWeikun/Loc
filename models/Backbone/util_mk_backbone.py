@@ -6,19 +6,35 @@ from .RKNet import RKNet
 # from .cvt import get_cvt_models
 import torch
 
-def make_backbone(opt):
-    backbone_model = Backbone(opt)
+def make_backbone(backbone_name, imgsize2net=224):
+    """
+    创建backbone模型
+
+    Args:
+        backbone_name: str, backbone名称 (e.g., "ViTB-224", "dinov2", "dinov3")
+        imgsize2net: int, 输入图像尺寸，默认224
+
+    Returns:
+        Backbone: backbone模型实例
+    """
+    backbone_model = Backbone(backbone_name, imgsize2net)
     return backbone_model
 
+
 class Backbone(nn.Module):
-    def __init__(self, opt):
+    def __init__(self, backbone_name, imgsize2net=224):
+        """
+        Args:
+            backbone_name: str, backbone名称
+            imgsize2net: int, 输入图像尺寸
+        """
         super().__init__()
-        self.opt = opt
-        self.img_size = (opt.imgsize2net,opt.imgsize2net)
-        self.backbone,self.output_channel = self.init_backbone()
+        self.backbone_name = backbone_name
+        self.imgsize2net = (imgsize2net, imgsize2net)
+        self.backbone, self.output_channel = self.init_backbone()
 
     def init_backbone(self):
-        backbone = self.opt.backbone
+        backbone = self.backbone_name
         if backbone=="resnet50":
             backbone_model = timm.create_model('resnet50', pretrained=True)
             output_channel = 2048
@@ -29,7 +45,7 @@ class Backbone(nn.Module):
             backbone_model = timm.create_model('legacy_seresnet50', pretrained=True)
             output_channel = 2048
         elif backbone=="ViTS-224":
-            backbone_model = timm.create_model("vit_small_patch16_224", pretrained=True, img_size=self.img_size)
+            backbone_model = timm.create_model("vit_small_patch16_224", pretrained=True, imgsize2net=self.imgsize2net)
             output_channel = 384
         elif backbone=="ViTS-384":
             backbone_model = timm.create_model("vit_small_patch16_384", pretrained=True)
@@ -65,7 +81,7 @@ class Backbone(nn.Module):
             # for i, f in enumerate(features):
             #     print(f"  特征图 {i} 的形状: {f.shape}")
         elif backbone=="ViTB-384":
-            backbone_model = timm.create_model('vit_base_patch16_rope_reg1_gap_256.sbb_in1k',pretrained=True,num_classes=0,img_size=384)
+            backbone_model = timm.create_model('vit_base_patch16_rope_reg1_gap_256.sbb_in1k',pretrained=True,num_classes=0,imgsize2net=384)
             output_channel = 768
         elif backbone=="SwinB-224":
             backbone_model = timm.create_model("swin_base_patch4_window7_224", pretrained=True)
@@ -160,7 +176,7 @@ class Backbone(nn.Module):
 
     def forward(self, image):
         features = self.backbone.forward_features(image)
-        if ('dino'in self.opt.backbone) and ("v3" in self.opt.backbone): #for handling dinov3
+        if ('dino' in self.backbone_name) and ("v3" in self.backbone_name): #for handling dinov3
             x_norm_clstoken = features["x_norm_clstoken"]
             x_norm_patchtokens = features["x_norm_patchtokens"]
             features = torch.concatenate([x_norm_clstoken.unsqueeze(1), x_norm_patchtokens], dim=1)

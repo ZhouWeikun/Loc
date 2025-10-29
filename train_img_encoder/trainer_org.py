@@ -14,8 +14,8 @@ import torch.nn.functional as F
 import time
 
 from optimizers.make_optimizer import make_optimizer
-from models.taskflow import make_model
-from tool.utils import save_network, copyfiles2checkpoints, get_preds, get_logger, calc_flops_params, set_seed
+from train_img_encoder.nets_taskflow import make_model
+from tool.utils import copyfiles2checkpoints, get_logger, set_seed
 from tool.utils import load_network_wstate, save_network_wstate
 import warnings
 from losses.loss_cl import Loss

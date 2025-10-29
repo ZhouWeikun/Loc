@@ -104,7 +104,7 @@ class ImgEncoder(object):
             #         if not hasattr(opt, cfg):
             #             setattr(opt, cfg, value)
 
-        from models.taskflow import make_model
+        from train_img_encoder.nets_taskflow import make_model
         self.model = make_model(self.opt)
         if self.opt.use_gpu:
             self.model = self.model.to(self.device)

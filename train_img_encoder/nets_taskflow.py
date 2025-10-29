@@ -1,15 +1,18 @@
 import torch.nn as nn
-from .Backbone.backbone import make_backbone
-from .Head.head import make_head
+from models.Backbone.util_mk_backbone import make_backbone
+from models.Head.util_mk_head import make_head
 import torch
 import math
-# from train_img_encoder.util_circorr_fm_radon import RadonHandler
+# from train_img_encoder.util_circorr_fm_radon import RadonHandler\
 
+def mk_vis_encoder(opt):
+    model = Model(opt)
+    return model
 
 class Model(nn.Module):
     def __init__(self, opt):
         super().__init__()
-        self.backbone = make_backbone(opt)
+        self.backbone = make_backbone(opt.backbone)
         opt.in_planes = self.backbone.output_channel
         self.opt = opt
         if (type(opt.head)==str) and (len(opt.head)>0):
@@ -28,7 +31,6 @@ class Model(nn.Module):
         else:
             return (res, features[:, 0], features[:, 1:])
 
-
     def load_params(self, load_from):
         pretran_model = torch.load(load_from)
         model2_dict = self.state_dict()
@@ -37,8 +39,4 @@ class Model(nn.Module):
         self.load_state_dict(model2_dict)
 
 
-def make_img_encoder(opt):
-    model = Model(opt)
-    # if os.path.exists(opt.load_from):
-    #     model.load_params(opt.load_from)
-    return model
+

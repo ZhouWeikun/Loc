@@ -95,46 +95,7 @@ class RandomRotationWithAngle(torch.nn.Module):
         else:
             raise TypeError(f"输入必须是3D或4D的Tensor，但收到了维度为{img.ndim}的输入。")
 
-
-    # def forward(self, img: torch.Tensor, angle: Union[float, List[float], None] = None) -> torch.Tensor:
-    #     if img.ndim == 4:  # --- 处理一个 Batch ---
-    #
-    #         if self.same_on_batch:
-    #             # --- 行为B: 对整个Batch应用同一个旋转 ---
-    #             # 1. 只生成一个随机角度
-    #             random_angle = random.uniform(self.degrees[0], self.degrees[1])
-    #             self.angle = random_angle  # 保存这个单值
-    #
-    #             # 2. F.rotate 可以直接处理Batch，当angle是标量时，它会对所有图应用相同旋转
-    #             return F.rotate(img, self.angle, self.interpolation, fill=self.fill)
-    #
-    #         else:
-    #             # --- 行为A: 对Batch中每个样本应用不同旋转 (原始逻辑) ---
-    #             batch_size = img.shape[0]
-    #
-    #             # 1. 为每个图片生成一个随机角度列表
-    #             angles = [random.uniform(self.degrees[0], self.degrees[1]) for _ in range(batch_size)]
-    #             self.angle = angles  # 保存角度列表
-    #
-    #             # 2. 逐个旋转Batch中的图片
-    #             rotated_images = [
-    #                 F.rotate(img[i], angle, self.interpolation, fill=self.fill)
-    #                 for i, angle in enumerate(angles)
-    #             ]
-    #
-    #             # 3. 将旋转后的图片列表重新堆叠成一个Batch Tensor
-    #             return torch.stack(rotated_images)
-    #
-    #     elif img.ndim == 3:  # --- 处理单个图像 (逻辑不变) ---
-    #         random_angle = random.uniform(self.degrees[0], self.degrees[1])
-    #         self.angle = random_angle
-    #         return F.rotate(img, self.angle, self.interpolation, fill=self.fill)
-    #
-    #     else:
-    #         raise TypeError(f"输入必须是3D或4D的Tensor，但收到了维度为{img.ndim}的输入。")
-
-
-def mk_sat_tensor_transform(
+def mk_tensor_transform(
         imgsize2net=224,
         rand_rot = False,
         rand_affine = False,
@@ -179,7 +140,7 @@ def mk_sat_tensor_transform(
     return transform2ret,rotator
 
 
-def mk_transform(
+def mk_pil_transform(
         mean,
         std,
         imgsize2net=224,
@@ -191,6 +152,9 @@ def mk_transform(
         center_crop = False,
         rand_crop = False,
         ):
+    """
+    不接受 已经是 Tensor 的输入
+    """
     transform_list = [transforms.Resize(imgsize2net)]
     if center_crop:
         transform_list += [transforms.CenterCrop(imgsize2net)]

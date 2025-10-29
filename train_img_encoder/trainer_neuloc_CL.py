@@ -5,24 +5,17 @@ from __future__ import print_function, division
 import argparse
 import torch
 import tqdm
-from torch.ao.nn.quantized.functional import threshold
-from torch.cuda.amp import autocast, GradScaler
-import torch.nn.functional as F
+from torch.cuda.amp import GradScaler
 import time
-import scipy.io
-from tool.util_mk_optimizer import  make_optimizer
-from models.taskflow import make_img_encoder
-from tool.utils import save_network, copyfiles2checkpoints, get_preds, get_logger, calc_flops_params, set_seed,get_unique_exp_dir
+from train_img_encoder.nets_taskflow import make_img_encoder
+from tool.utils import get_logger, get_unique_exp_dir
 # from tool.utils import load_network_wstate, save_network_wstate
 import warnings
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
-import torchvision
-import torch.nn.functional as F
 import glob
 import math
 
-from losses.loss_cl import Loss
 warnings.filterwarnings("ignore")
 
 # var to selct:
@@ -30,13 +23,9 @@ warnings.filterwarnings("ignore")
 # from datasets_custom.make_dataloder_classify import make_dataloader_train
 # from datasets_custom.make_dataloader_xmu import make_dataloader_xmu
 # from datasets_custom.make_dataloader_gta import make_dataloader_gta
-from datasets_custom.make_dataloader_wingtra import make_dataloader_wingtra
 # from exps.exp24.datasets_custom.make_dataloader_dsalad import  make_dataloader
-from PIL import Image
-from matplotlib import pyplot as plt
 import yaml
 import os
-import scipy
 import json
 
 
@@ -249,10 +238,8 @@ class Trainer(object):
         from app.nerf.main_nerf import NeRFAppConfig
         from wisp.config._tyro import parse_args_tyro_v1
         self.grid_args = parse_args_tyro_v1(NeRFAppConfig,'/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/nerf_hash.yaml')
-        from wisp.config import instantiate
         # blas = instantiate(self.grid_args.blas, pointcloud=None)
         # self.grid = instantiate(self.grid_args.grid, blas=blas).to(self.device)  # A grid keeps track of both features and occupancy
-        from models.multi_mlp import create_mlp
         # self.grid_mlp = create_mlp([coord_dim+feat_q_dim,feat_q_dim,feat_q_dim],norm_type='layer').to(self.device)
         # from models.ocn_mlp import LocalDecoder,LocalDecoderFiLM,SerialModulator
         # self.grid_mlp = SerialModulator(s_dim=feat_q_dim,c_dim=coord_dim+feat_q_dim, hidden_size=1024,n_blocks=5,output_dim=1024,c_operation='add',leaky=True).to(self.device)
@@ -289,7 +276,7 @@ class Trainer(object):
         self.img_encoder.eval()
 
         # config the datalaoder
-        from dataset_satmap_wingtra import SatDataset
+        from dataset_wingtra_4d import SatDataset
         self.sat_dataset = SatDataset(
             p_satinfo_json=self.opt.p_satinfo_json,
             p_uav_geocsv=self.opt.p_uav_geocsv,
@@ -321,7 +308,7 @@ class Trainer(object):
         begin_epoch = 0
 
         # config the datalaoder:
-        from dataset_satmap_wingtra import SatDataset
+        from dataset_wingtra_4d import SatDataset
         self.sat_dataset = SatDataset(
             p_satinfo_json=self.opt.p_satinfo_json,
             p_uav_geocsv=self.opt.p_uav_geocsv,
@@ -353,7 +340,7 @@ class Trainer(object):
         scaler = GradScaler()
         step = 0
         loss_mse = torch.nn.MSELoss(reduction='mean')
-        from losses.WeightedSoftTripletLoss_fm_mat import SWTLoss_fm_mat,MSLoss_fm_mat
+        from losses.WeightedSoftTripletLoss_fm_mat import SWTLoss_fm_mat
         loss_swt = SWTLoss_fm_mat(decoupling=True)
         self.udf_compter = UDFComputer(sat_dataset=self.sat_dataset)
         # rc_radius = self.dataloader_train.dataset.sat_dataset.halfimg_radius_nrc * 0.5
@@ -365,7 +352,7 @@ class Trainer(object):
                 # uav_imgs, uav_nrcs = next(iter(self.uav_dataloader_train))
 
                 gt_coords = torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio], 1).to(self.device)
-                from util_gen_coord_samples_hierarchical import generate_pose_samples_hierarchical,get_stratified_sampling_configs,visualize_hierarchical_samples
+                from util_gen_coord_samples_hierarchical import generate_pose_samples_hierarchical,get_stratified_sampling_configs
                 config_sampling = get_stratified_sampling_configs(
                     base_rc_std = self.sat_dataset.halfimg_radius_nrc*0.5,
                     base_dir_std_rad = np.deg2rad(10),

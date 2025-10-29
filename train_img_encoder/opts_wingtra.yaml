@@ -21,16 +21,17 @@ data_setting:
 
 exp_setting:
   exps_dir: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps
-  load2test: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/debug_zurich_15/epoch3609.pth
+  load2test: /home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/debug_zurich_37/epoch100.pth
   load2train: #/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/zurich_12km2_hashfit1k_serialmoulator_swfeat/epoch699.pth #/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/zurich_12km2_hashfit1k_mlp_add/epoch999.pth #choose 57 or 62
-  exp_name: debug_zurich
-  p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/blocks12_res03m.json
-  p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info.json
-  p_uav_geocsv: /home/data/zwk/data_uavimgs_wingtra/Zurich/IMAGES_info/uavimgs_geo_corrected_v1.csv
-  dataset_name: zurich
-#  p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/SWISSIMAGE2024_30blocks_res03m.json
-#  p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info.json
-#  dataset_name: zuchwil
+  exp_name: debug_zuchwil
+#  p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/blocks12_res03m.json
+#  p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info.json
+#  p_uav_geocsv: /home/data/zwk/data_uavimgs_wingtra/Zurich/IMAGES_info/uavimgs_geo_corrected_v1.csv
+#  dataset_name: zurich
+  p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/zuchwil_blocks12_proj2056_res03m.json
+  p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info/uavimgs_metainfo.json
+  p_uav_geocsv: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info/uavimgs_geo_corrected_v1.csv
+  dataset_name: zuchwil
   save_freq: 1
   tensorboard: True
   val: True
@@ -38,7 +39,7 @@ exp_setting:
 
 hardware_setting:
   autocast: False
-  batchsize_sat: 512 #24
+  batchsize_sat: 4 #24
   batchsize_uav: 4
   gpu_ids: '0'
   num_worker: 8
@@ -51,7 +52,7 @@ learning_setting:
     - 35
     - 45
     name: multistep
-  num_epochs: 10000
+  num_epochs: 100
   optimizer:
     lr: 0.0001
     momentum: 0.9

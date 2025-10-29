@@ -5,23 +5,17 @@ from __future__ import print_function, division
 import argparse
 import torch
 import tqdm
-from torch.ao.nn.quantized.functional import threshold
-from torch.cuda.amp import autocast, GradScaler
-import torch.nn.functional as F
+from torch.cuda.amp import GradScaler
 import time
-import scipy.io
-from tool.util_mk_optimizer import  make_optimizer
-from models.taskflow import make_img_encoder
-from tool.utils import save_network, copyfiles2checkpoints, get_preds, get_logger, calc_flops_params, set_seed,get_unique_exp_dir
+from train_img_encoder.nets_taskflow import make_img_encoder
+from tool.utils import get_logger, get_unique_exp_dir
 # from tool.utils import load_network_wstate, save_network_wstate
 import warnings
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
-import torchvision
 import glob
 import math
 
-from losses.loss_cl import Loss
 warnings.filterwarnings("ignore")
 
 # var to selct:
@@ -29,13 +23,9 @@ warnings.filterwarnings("ignore")
 # from datasets_custom.make_dataloder_classify import make_dataloader_train
 # from datasets_custom.make_dataloader_xmu import make_dataloader_xmu
 # from datasets_custom.make_dataloader_gta import make_dataloader_gta
-from datasets_custom.make_dataloader_wingtra import make_dataloader_wingtra
 # from exps.exp24.datasets_custom.make_dataloader_dsalad import  make_dataloader
-from PIL import Image
-from matplotlib import pyplot as plt
 import yaml
 import os
-import scipy
 import json
 
 
@@ -214,7 +204,7 @@ class Trainer(object):
         self.decoder.eval()
 
         # config the datalaoder
-        from dataset_satmap_wingtra import SatDataset
+        from dataset_wingtra_4d import SatDataset
         self.sat_dataset = SatDataset(
             p_satinfo_json=self.opt.p_satinfo_json,
             p_uav_geocsv=self.opt.p_uav_geocsv,
@@ -250,7 +240,7 @@ class Trainer(object):
         # optimizer,scheduler = self.optimizer,self.lr_scheduler
 
         # config the datalaoder:
-        from dataset_satmap_wingtra import SatDataset
+        from dataset_wingtra_4d import SatDataset
         self.sat_dataset = SatDataset(
             p_satinfo_json=self.opt.p_satinfo_json,
             p_uav_geocsv=self.opt.p_uav_geocsv,
@@ -292,7 +282,7 @@ class Trainer(object):
                 coords = torch.concatenate([sat_nrc, rad_roted, satimgsize_cover_ratio], 1).to(self.device)
 
                 # making coords,verison1:
-                from util_gen_coord_samples_hierarchical import generate_pose_samples_hierarchical,get_stratified_sampling_configs,visualize_hierarchical_samples
+                from util_gen_coord_samples_hierarchical import generate_pose_samples_hierarchical,get_stratified_sampling_configs
                 config_sampling = get_stratified_sampling_configs(
                     base_rc_std = self.sat_dataset.halfimg_radius_nrc,
                     base_dir_std_rad = np.deg2rad(10),

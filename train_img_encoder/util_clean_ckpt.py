@@ -49,7 +49,7 @@ def clean_checkpoints(directory: str, k: int, dry_run: bool = True):
         # 保留的条件:
         # 1. 它是最新的一个 epoch
         # 2. 它的 epoch 编号是 k 的整数倍
-        if epoch_num == latest_epoch_num or epoch_num % k == 9:
+        if epoch_num == latest_epoch_num or epoch_num % k == 0:
             files_to_keep.append(filename)
         else:
             files_to_delete.append(filename)
@@ -141,5 +141,5 @@ if __name__ == "__main__":
 
     # clean_checkpoints(args.directory, args.keep_interval, args.dry_run)
 
-    clean_checkpoints('/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/debug_zurich_15'
-                      , 100, False)
+    clean_checkpoints('/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/debug_hashfit_1'
+                      , 1000, False)

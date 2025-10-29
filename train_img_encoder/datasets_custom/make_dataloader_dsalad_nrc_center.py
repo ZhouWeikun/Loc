@@ -264,7 +264,8 @@ class DatasetDsalad(Dataset):
 
         self.uav_rcs = self.latlon_to_nrc(self.uav_latlons)
         if 'rotdeg_fm_north_anticlock' in uav_infodict.keys():
-            self.rotdeg_fm_north_anticlock = self.uav_df['rotdeg_fm_north_anticlock'].values #the target_deg=-90deg
+            self.rotdeg_fm_north_anticlock = self.
+            uav_df['rotdeg_fm_north_anticlock'].values #the target_deg=-90deg
 
         #set vals about spliting training and testing sets
         self.split_uav_dataset()

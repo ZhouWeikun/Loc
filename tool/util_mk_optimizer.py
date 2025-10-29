@@ -38,10 +38,14 @@ OPTIMIZER_TEMPLATES = {
         'param_groups': [
             {'param_source': 'no_decay', 'lr': 5e-5, 'weight_decay': 0.0},
             {'param_source': 'img_encoder', 'lr': 5e-5, 'weight_decay': 1e-6},
-            {'param_source': 'mlp', 'lr': 1e-3, 'weight_decay': 1e-4},
-            {'param_source': 'grid', 'lr': 1e-1, 'weight_decay': 1e-16},
-            {'param_source': 'grid_mlp', 'lr': 1e-2, 'weight_decay': 1e-6},
+            {'param_source': 'vis_encoder', 'lr': 5e-5, 'weight_decay': 1e-6},
             {'param_source': 'aggregator', 'lr': 1e-4, 'weight_decay': 1e-6},
+            {'param_source': 'vis_aggregator', 'lr': 1e-4, 'weight_decay': 1e-6},
+            {'param_source': 'grid', 'lr': 1, 'weight_decay': 0},
+            {'param_source': 'grid_mlp', 'lr': 1e-2, 'weight_decay': 1e-6},
+            {'param_source': 'metric_net', 'lr': 1e-3, 'weight_decay': 1e-6},
+            {'param_source': 'rank_former', 'lr': 1e-3, 'weight_decay': 1e-6},
+            {'param_source': 'qf_proj', 'lr': 1e-3, 'weight_decay': 1e-6},
         ]
     }
 }

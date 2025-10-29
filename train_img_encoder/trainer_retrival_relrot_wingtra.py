@@ -10,8 +10,8 @@ import torch.nn.functional as F
 import time
 import scipy.io
 from optimizers.make_optimizer import make_optimizer
-from models.taskflow import make_model
-from tool.utils import save_network, copyfiles2checkpoints, get_preds, get_logger, calc_flops_params, set_seed,get_unique_exp_dir
+from train_img_encoder.nets_taskflow import make_model
+from tool.utils import copyfiles2checkpoints, get_logger, get_unique_exp_dir
 from tool.utils import load_network_wstate, save_network_wstate
 import warnings
 from torch.utils.tensorboard import SummaryWriter
@@ -25,8 +25,6 @@ warnings.filterwarnings("ignore")
 # var to selct:
 # from datasets.make_dataloader import make_dataloader
 # from datasets_custom.make_dataloder_classify import make_dataloader_train
-from datasets_custom.make_dataloader_xmu import make_dataloader_xmu
-from datasets_custom.make_dataloader_gta import make_dataloader_gta
 from datasets_custom.make_dataloader_wingtra import make_dataloader_wingtra
 # from exps.exp24.datasets_custom.make_dataloader_dsalad import  make_dataloader
 from PIL import Image

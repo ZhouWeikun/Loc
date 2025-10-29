@@ -28,10 +28,10 @@ def get_stratified_sampling_configs(
         {'name': 'bottom', 'num_samples': 4, 'rc_multiplier': 1.0, 'dir_multiplier': 1, 'scale_multiplier': 1},
 
         # 2. “碗壁” (Slope): 中等标准差，学习UDF坡度
-        {'name': 'slope', 'num_samples': 0, 'rc_multiplier': 10, 'dir_multiplier': 2, 'scale_multiplier': 1.2},
+        {'name': 'slope', 'num_samples': 6, 'rc_multiplier': 10, 'dir_multiplier': 2, 'scale_multiplier': 1.2},
 
         # 3. “边缘” (Rim): 较大标准差，学习过渡区域
-        {'name': 'rim', 'num_samples': 0, 'rc_multiplier': 20, 'dir_multiplier': 4, 'scale_multiplier': 1.4},
+        {'name': 'rim', 'num_samples': 8, 'rc_multiplier': 20, 'dir_multiplier': 4, 'scale_multiplier': 1.4},
     ]
 
     # 根据传入的基准值和策略定义，动态生成最终配置

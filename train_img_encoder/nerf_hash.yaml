@@ -21,7 +21,7 @@ grid: # Feature grid, the backbone of the neural field
   feature_dim: 1024 #org=2
   num_lods: 5 #org=16
   multiscale_type: 'cat' #'cat' or 'sum'
-  feature_std: 1.0e-01
+  feature_std: 5.0e-04
   feature_bias:  0.0
   codebook_bitwidth: 17 #org=19, hash table size=2^codebook_bitwidth
   min_grid_res: 32 #org=16

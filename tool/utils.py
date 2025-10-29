@@ -7,7 +7,7 @@ import numpy as np
 # import cv2
 from shutil import copyfile, copytree, rmtree
 import logging
-from models.taskflow import make_img_encoder
+from train_img_encoder.nets_taskflow import mk_vis_encoder
 from thop import profile, clever_format
 import math
 import sys

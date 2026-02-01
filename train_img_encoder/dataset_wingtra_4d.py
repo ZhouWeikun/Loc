@@ -15,6 +15,7 @@ from util_mk_data_transform import mk_pil_transform,mk_tensor_transform
 from util_data_transform_with_params import mk_pil_transform_with_params, apply_augment_to_coords
 from util_batch_rotation import batch_rotate_images_per_sample
 
+
 class SatDataset(object):
     def __init__(self,
                  p_satinfo_json,
@@ -22,9 +23,11 @@ class SatDataset(object):
                  satimgsize2crop = 256,
                  scale_ref_m=200,
                  p_uav_geocsv=None,
+                 return_pair=False,
                  **kwargs,
                  ):
         # read corresponding mate info
+        self.p_satinfo_json = p_satinfo_json
         with open(p_satinfo_json, "r") as f:
             sat_infodict = json.load(f)
         self.satinfo_dict= sat_infodict
@@ -50,31 +53,33 @@ class SatDataset(object):
         self.satmap_w = self.satmaps[0].width
         self.satmap_hw_max = np.max([self.satmap_h, self.satmap_w])
 
-        #config the transforms
+        # config the transforms
         self.imgsize2net = imgsize2net
         self.sat_transform_train, self.sat_rotater = mk_tensor_transform(imgsize2net,rand_rot=True)
         self.scale_transform = T.Compose([transforms.Resize(self.imgsize2net,antialias=False)])
 
         # for defining the scale to sample
         self.scale_ref_m = scale_ref_m
+        self.p_uav_geocsv = p_uav_geocsv
         df = pd.read_csv(p_uav_geocsv)
-        h_cover_m =  df['h_cover_m']
+        h_cover_m = df['h_cover_m']
         aff2d_corrected_mask = df['aff2d_corrected']
         h_cover_m_corrected = h_cover_m[aff2d_corrected_mask]
-        satimgsize_scale_to_200m_corrected = np.array(h_cover_m_corrected/self.geo_res_m)*self.geo_res_m/scale_ref_m
-        lower_bound = np.percentile( satimgsize_scale_to_200m_corrected, 2)
-        upper_bound = np.percentile( satimgsize_scale_to_200m_corrected, 99)
-        satimgsize_scale_to_200m = np.array(h_cover_m / self.geo_res_m) * self.geo_res_m / scale_ref_m
-        scale_mask = (satimgsize_scale_to_200m > lower_bound) * (satimgsize_scale_to_200m < upper_bound) * aff2d_corrected_mask
+        satimgsize_scale_to_refm_corrected = np.array(h_cover_m_corrected/self.geo_res_m)*self.geo_res_m/scale_ref_m
+        lower_bound = np.percentile( satimgsize_scale_to_refm_corrected, 2)
+        upper_bound = np.percentile( satimgsize_scale_to_refm_corrected, 99)
+        satimgsize_scale_to_refm = np.array(h_cover_m / self.geo_res_m) * self.geo_res_m / scale_ref_m #图像高度比例
+        scale_mask = (satimgsize_scale_to_refm > lower_bound) * (satimgsize_scale_to_refm < upper_bound) * aff2d_corrected_mask
 
         # config the satimgsize2crop
         self.satimgsize_correspond2uav_list = np.array(h_cover_m[scale_mask] / self.geo_res_m)
         self.satimgsize2crop_mean = self.satimgsize_correspond2uav_list.mean()
         self.satimgsize2crop_boundary = np.array(
             [self.satimgsize_correspond2uav_list.min(), self.satimgsize_correspond2uav_list.max()])
-        self.satimgsize_scale_to_200m_boundary = self.satimgsize2crop_boundary*self.geo_res_m/scale_ref_m
-        self.satimgsize_scale_to_200m_list = satimgsize_scale_to_200m[scale_mask]
-        self.satimgsize_scale_to_200m_mean = self.satimgsize_scale_to_200m_list.mean()
+        self.satimgsize_scale_to_refm_boundary = self.satimgsize2crop_boundary*self.geo_res_m/scale_ref_m
+        self.satimgsize_scale_to_ref_m_boundary = self.satimgsize_scale_to_refm_boundary
+        self.satimgsize_scale_to_refm_list = satimgsize_scale_to_refm[scale_mask]
+        self.satimgsize_scale_to_refm_mean = self.satimgsize_scale_to_refm_list.mean()
 
         #  define the range when sampling the satmap:
         self.satmap_edge_pixs = self.satimgsize2crop_boundary[1]+224
@@ -93,8 +98,7 @@ class SatDataset(object):
         self.halfimg_radius_nrc = self.satimgsize2crop_mean // 2. / self.satmap_hw_max
         self.halfimg_radius_meter = self.get_halfimg_radius_meter(satimgsize2crop // 2)
 
-        self.return_pair=False
-
+        self.return_pair=return_pair
 
     """funcs about sampling satmap:"""
     def crop_satimg_by_nrc(self, nrc, satimgsize2crop=224, type='tensor'):
@@ -127,6 +131,42 @@ class SatDataset(object):
         nc = self.nc2sample_w * rand_nrcs[:, 1] + self.nc2sample_min
         rand_nrcs = np.stack([nr, nc], axis=1)
         return rand_nrcs
+
+    def mk_rand_coords_4d(self, n_rand, dtype=np.float32, return_tensor=False):
+        """
+        生成随机的4D坐标 (normalized_row, normalized_col, rotation_rad, scale_ratio_to_200m)
+
+        Args:
+            n_rand: int, 生成坐标的数量
+            dtype: numpy dtype, 返回数组的数据类型
+            return_tensor: bool, 是否返回torch tensor（默认返回numpy array）
+
+        Returns:
+            rand_coords_4d: [n_rand, 4] numpy array or torch tensor
+                            格式: [nr, nc, rot, scale]
+        """
+        # 1. 生成随机 nrc
+        rand_nrcs = self.mk_rand_nrcs(n_rand, dtype=dtype)  # [n_rand, 2]
+
+        # 2. 生成随机 rotation [-π, π]
+        rand_rots = (np.random.rand(n_rand) * 2 * np.pi - np.pi).astype(dtype)  # [n_rand]
+
+        # 3. 生成随机 scale (在定义的范围内)
+        scale_min = self.satimgsize_scale_to_refm_boundary[0]
+        scale_max = self.satimgsize_scale_to_refm_boundary[1]
+        rand_scales = (np.random.rand(n_rand) * (scale_max - scale_min) + scale_min).astype(dtype)  # [n_rand]
+
+        # 4. 组合成4D坐标
+        rand_coords_4d = np.concatenate([
+            rand_nrcs,  # [n_rand, 2]
+            rand_rots[:, np.newaxis],  # [n_rand, 1]
+            rand_scales[:, np.newaxis]  # [n_rand, 1]
+        ], axis=1)  # [n_rand, 4]
+
+        if return_tensor:
+            return torch.from_numpy(rand_coords_4d).to(torch.float32)
+        else:
+            return rand_coords_4d
 
     def transfrom_georc_to_nrc(self, georc: np.ndarray, source_epsg_code = 2056, dtype=np.float32):
         from transform_raster_rcs import georc_to_raster_rc
@@ -198,9 +238,9 @@ class SatDataset(object):
 
     def mk_sacle_levels(self,n_level=3):
         # mk a scale_levels
-        delta_scale = (self.satimgsize_scale_to_200m_boundary[1]-self.satimgsize_scale_to_200m_boundary[0])/n_level
-        lower = torch.linspace(start=self.satimgsize_scale_to_200m_boundary[0],end=self.satimgsize_scale_to_200m_boundary[1]-delta_scale,steps=n_level,dtype=torch.float32)
-        upper = torch.linspace(start=self.satimgsize_scale_to_200m_boundary[0]+delta_scale,end=self.satimgsize_scale_to_200m_boundary[1], steps=n_level,dtype=torch.float32)
+        delta_scale = (self.satimgsize_scale_to_refm_boundary[1]-self.satimgsize_scale_to_refm_boundary[0])/n_level
+        lower = torch.linspace(start=self.satimgsize_scale_to_refm_boundary[0],end=self.satimgsize_scale_to_refm_boundary[1]-delta_scale,steps=n_level,dtype=torch.float32)
+        upper = torch.linspace(start=self.satimgsize_scale_to_refm_boundary[0]+delta_scale,end=self.satimgsize_scale_to_refm_boundary[1], steps=n_level,dtype=torch.float32)
         scale_radio_to_200m_list = 0.5*(lower+upper)
         satimgsize_list = scale_radio_to_200m_list*self.scale_ref_m/self.geo_res_m
         return scale_radio_to_200m_list,satimgsize_list
@@ -280,13 +320,14 @@ class SatDataset(object):
 
     """funcs about getting item:"""
     def __getitem__(self,index):
+        """关于输出4d坐标的数值范围："""
         sat_nrc_rand = self.mk_rand_nrcs(1)[0]
 
         # handling size/scale
         satimgsize2crop = np.clip(np.random.choice(self.satimgsize_correspond2uav_list) +  (np.random.rand() - 0.5) *\
                            (self.satimgsize2crop_boundary[1]- self.satimgsize2crop_boundary[0]) * 0.1,
                                   self.satimgsize2crop_boundary[0],self.satimgsize2crop_boundary[1])
-        satimgsize_len_ratio_to_200m = torch.tensor([satimgsize2crop*self.geo_res_m/self.scale_ref_m],dtype=torch.float32)
+        satimgsize_cover_ratio_to_refm = torch.tensor([satimgsize2crop*self.geo_res_m/self.scale_ref_m],dtype=torch.float32)
 
         # crop the satimg
         satimg_rand = self.crop_satimg_by_nrc(sat_nrc_rand, type='tensor',satimgsize2crop=satimgsize2crop)
@@ -299,10 +340,23 @@ class SatDataset(object):
         angle_deg = np.random.uniform(-180, 180)
         rad_roted = torch.tensor([np.deg2rad(angle_deg)], dtype=torch.float32)
 
-        # 使用 batch_rotate_images_per_sample 进行旋转（需要先增加batch维度）
-        satimg_rand = batch_rotate_images_per_sample(satimg_rand.unsqueeze(0), [angle_deg]).squeeze(0)  # [C, H, W]
+        # 使用 batch_rotate_images_per_sample 进行旋转
+        if self.return_pair:
+            # satimg_rand: [2, C, H, W] -> 对两张图应用相同旋转角度 -> [2, C, H, W]
+            satimg_rand = batch_rotate_images_per_sample(satimg_rand, [angle_deg, angle_deg])
+        else:
+            # satimg_rand: [C, H, W] -> [1, C, H, W] -> 旋转 -> [1, C, H, W] -> [C, H, W]
+            satimg_rand = batch_rotate_images_per_sample(satimg_rand.unsqueeze(0), [angle_deg]).squeeze(0)
 
-        return satimg_rand, sat_nrc_rand, rad_roted, satimgsize_len_ratio_to_200m
+        # 组合成4D坐标 tensor，与 UAVDataset 对齐
+        sat_nrc_rand_tensor = torch.from_numpy(sat_nrc_rand).to(torch.float32)  # [2]
+        coords_4d = torch.cat([sat_nrc_rand_tensor, rad_roted, satimgsize_cover_ratio_to_refm], dim=-1)  # [4]
+        # 如果 return_pair=True，需要扩展 coords_4d 以匹配 satimg_rand 的维度
+        if self.return_pair:
+            # satimg_rand: [2, C, H, W], 需要 coords_4d: [2, 4]
+            coords_4d = coords_4d.unsqueeze(0).expand(2, -1)  # [4] -> [1, 4] -> [2, 4]
+
+        return satimg_rand, coords_4d
         # debug
         # img2vis = self.denormalize_img(satimg_rand[1])
         # from matplotlib import pyplot as plt
@@ -395,11 +449,11 @@ class UAVDataset(object):
         h_cover_m =  df['h_cover_m']
         aff2d_corrected_mask = df['aff2d_corrected']
         h_cover_m_corrected = h_cover_m[aff2d_corrected_mask]
-        satimgsize_scale_to_200m_corrected = np.array(h_cover_m_corrected/geo_res_m)*geo_res_m/scale_ref_m
-        lower_bound = np.percentile( satimgsize_scale_to_200m_corrected, 2)
-        upper_bound = np.percentile( satimgsize_scale_to_200m_corrected, 99)
-        satimgsize_scale_to_200m = np.array(h_cover_m / geo_res_m) * geo_res_m / scale_ref_m
-        scale_mask = (satimgsize_scale_to_200m > lower_bound) * (satimgsize_scale_to_200m < upper_bound) * aff2d_corrected_mask
+        satimgsize_scale_to_refm_corrected = np.array(h_cover_m_corrected/geo_res_m)*geo_res_m/scale_ref_m
+        lower_bound = np.percentile( satimgsize_scale_to_refm_corrected, 2)
+        upper_bound = np.percentile( satimgsize_scale_to_refm_corrected, 99)
+        satimgsize_scale_to_refm = np.array(h_cover_m / geo_res_m) * geo_res_m / scale_ref_m
+        scale_mask = (satimgsize_scale_to_refm > lower_bound) * (satimgsize_scale_to_refm < upper_bound) * aff2d_corrected_mask
 
         uav_names = self.uav_df['filename'][scale_mask]
         uavimgs_dir = self.uavinfo_dict['uavimgs_dir']
@@ -497,7 +551,7 @@ class UAVDataset(object):
         # uav_scale = self.uav_scales_torch_train[index]
         # return uavimg_q,uav_rc,uav_rot,uav_scale
 
-    def _getitem_test(self,index):#todo:Needs to be refined according to external needs -> the test_func()
+    def _getitem_test(self,index):#todo:N从dataset_wingtra_4d.pyeeds to be refined according to external needs -> the test_func()
         #1.select uavimg
         uavimg = Image.open(self.uavimg_paths_test[index])
         uavimg_q = self.uav_transform_test(uavimg)
@@ -509,7 +563,6 @@ class UAVDataset(object):
         # uav_rot = self.uav_rots_torch_test[index]
         # uav_scale = self.uav_scales_torch_test[index]
         # return uavimg_q,uav_rc,uav_rot,uav_scale
-
 
     def switch_stage(self,stage='train'):
         self.stage = stage
@@ -555,12 +608,12 @@ if __name__ == '__main__':
     # df.to_csv('/home/data/zwk/data_uavimgs_wingtra/Zurich/IMAGES_info/uavimgs_geo_corrected_v1.csv', index=False)
 
     sat_dataset = SatDataset(
-        p_satinfo_json='/home/data/zwk/data_uavimgs_wingtra/Zurich/blocks12_res03m.json',
-        p_uav_geocsv='/home/data/zwk/data_uavimgs_wingtra/Zurich/IMAGES_info/uavimgs_geo_corrected_v1.csv',
+        p_satinfo_json='/home/data/zwk/data_uavimgs_wingtra/Zurich/zurich_blocks12_proj2056_res03m.json',
+        p_uav_geocsv='/home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info/uavimgs_geo_corrected_v1.csv',
         imgsize2net=224,
     )
     uav_dataset = UAVDataset(
-        p_uavinfo_json = '/home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info.json',
+        p_uavinfo_json = '/home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info/uavimgs_metainfo.json',
         trans_georc2nrc_func = sat_dataset.transfrom_georc_to_nrc,
         geo_res_m=0.3,
     )
@@ -572,5 +625,4 @@ if __name__ == '__main__':
             print(f"加载样本 {i} 时出错: {e}")
             # 在这里中断或记录错误，然后去检查对应的文件或标注是否有问题
             break
-
 

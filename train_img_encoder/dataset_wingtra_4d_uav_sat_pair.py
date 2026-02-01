@@ -130,6 +130,7 @@ class UAVSatPairDataset(Dataset):
         satmap_sampler=None,
         device='cuda',
         n_neg_per_sample=1,
+        use_bounded_sampling=True,
     ):
         """
         Args:
@@ -138,15 +139,17 @@ class UAVSatPairDataset(Dataset):
             satmap_sampler: BoundedNegativeCoordinateSampler实例（n_neg=0时可为None）
             device: 设备（用于负样本采样）
             n_neg_per_sample: 每个样本的负样本数量（0表示不采样负样本）
+            use_bounded_sampling: bool, 是否使用正样本领域拒绝采样（True）还是完全随机采样（False）
         """
         self.uav_dataset = uav_dataset
         self.sat_dataset = sat_dataset
         self.satmap_sampler = satmap_sampler
         self.device = device
         self.n_neg_per_sample = n_neg_per_sample
+        self.use_bounded_sampling = use_bounded_sampling
 
-        if n_neg_per_sample > 0 and satmap_sampler is None:
-            raise ValueError("satmap_sampler cannot be None when n_neg_per_sample > 0")
+        if n_neg_per_sample > 0 and use_bounded_sampling and satmap_sampler is None:
+            raise ValueError("satmap_sampler cannot be None when n_neg_per_sample > 0 and use_bounded_sampling=True")
 
     def __len__(self):
         return len(self.uav_dataset)
@@ -173,18 +176,23 @@ class UAVSatPairDataset(Dataset):
         # 3. 采样负样本（如果需要）
         sat_imgs_neg = None
         if self.n_neg_per_sample > 0:
-            # 提取nrcs（前两维）
-            nrcs_uav = coords_uav[:2]
-            nrcs_uav_np = nrcs_uav.numpy() if isinstance(nrcs_uav, torch.Tensor) else nrcs_uav
+            # 根据开关选择采样策略
+            if self.use_bounded_sampling:
+                # 策略1: 正样本领域拒绝采样（排除正样本附近区域）
+                nrcs_uav = coords_uav[:2]
+                nrcs_uav_np = nrcs_uav.numpy() if isinstance(nrcs_uav, torch.Tensor) else nrcs_uav
 
-            # 采样负样本坐标
-            nrcs_neg = self._sample_negatives_cpu(
-                nrcs_uav_np,
-                threshold=self.sat_dataset.halfimg_radius_nrc,
-                row_range=self.sat_dataset.nr2sample_range,
-                col_range=self.sat_dataset.nc2sample_range,
-                total_num_negatives=self.n_neg_per_sample
-            )
+                # 采样负样本坐标（排除正样本附近区域）
+                nrcs_neg = self._sample_negatives_cpu(
+                    nrcs_uav_np,
+                    threshold=self.sat_dataset.halfimg_radius_nrc,
+                    row_range=self.sat_dataset.nr2sample_range,
+                    col_range=self.sat_dataset.nc2sample_range,
+                    total_num_negatives=self.n_neg_per_sample
+                )
+            else:
+                # 策略2: 完全随机采样（不考虑与正样本的距离）
+                nrcs_neg = self.sat_dataset.mk_rand_nrcs(self.n_neg_per_sample)
 
             # 随机采样旋转和尺度
             rots_neg = -np.pi + 2 * np.pi * np.random.rand(self.n_neg_per_sample)
@@ -321,9 +329,9 @@ if __name__ == '__main__':
 
     satmap_sampler = BoundedNegativeCoordinateSampler(device='cuda')
 
-    # ========== 测试1：n_neg=1 ==========
+    # ========== 测试1：n_neg=1, 使用bounded sampling ==========
     print("=" * 50)
-    print("测试1：n_neg=1（标准对比学习）")
+    print("测试1：n_neg=1 + bounded sampling（正样本领域拒绝采样）")
     print("=" * 50)
 
     pair_dataset = UAVSatPairDataset(
@@ -332,6 +340,7 @@ if __name__ == '__main__':
         satmap_sampler=satmap_sampler,
         device='cuda',
         n_neg_per_sample=1,
+        use_bounded_sampling=True,  # 使用正样本领域拒绝采样
     )
 
     print(f"Dataset size: {len(pair_dataset)}")
@@ -363,9 +372,30 @@ if __name__ == '__main__':
         if i >= 1:
             break
 
-    # ========== 测试2：n_neg=0 ==========
+    # ========== 测试2：n_neg=1, 使用random sampling ==========
     print("\n" + "=" * 50)
-    print("测试2：n_neg=0（只采样正样本）")
+    print("测试2：n_neg=1 + random sampling（完全随机采样）")
+    print("=" * 50)
+
+    pair_dataset_random = UAVSatPairDataset(
+        uav_dataset=uav_dataset,
+        sat_dataset=sat_dataset,
+        satmap_sampler=None,  # random sampling 不需要 sampler
+        device='cuda',
+        n_neg_per_sample=1,
+        use_bounded_sampling=False,  # 使用完全随机采样
+    )
+
+    print(f"\n测试单个样本...")
+    sample = pair_dataset_random[0]
+    print(f"UAV image shape: {sample['uav_img'].shape}")
+    print(f"Sat pos image shape: {sample['sat_img_pos'].shape}")
+    print(f"Sat neg image shape: {sample['sat_imgs_neg'].shape}")
+    print(f"Coords shape: {sample['coords_uav'].shape}")
+
+    # ========== 测试3：n_neg=0 ==========
+    print("\n" + "=" * 50)
+    print("测试3：n_neg=0（只采样正样本）")
     print("=" * 50)
 
     pair_dataset_no_neg = UAVSatPairDataset(
@@ -402,9 +432,9 @@ if __name__ == '__main__':
         if i >= 1:
             break
 
-    # ========== 测试3：多进程加速 ==========
+    # ========== 测试4：多进程加速 ==========
     print("\n" + "=" * 50)
-    print("测试3：多进程加速对比")
+    print("测试4：多进程加速对比")
     print("=" * 50)
 
     # 单进程

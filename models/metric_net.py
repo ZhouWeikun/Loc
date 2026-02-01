@@ -116,18 +116,22 @@ class MetricNet(nn.Module):
     def __init__(self,
                  feat_dim: int = 1024,
                  coord_dim: int = 128,
-                 branch_hidden_dim: int = 768,
+                 branch_hidden_dim: int = 512,
                  branch_output_dim: int = 512,
                  resblock_hidden_dim: int = 384,
                  resblock_output_dim: int = 256,
                  dropout: float = 0.1,
-                 init_weights: bool = True):
+                 init_weights: bool = True,
+                 output_activation: nn.Module = None,
+                 ):
         super().__init__()
 
         self.feat_dim = feat_dim
         self.coord_dim = coord_dim
         self.branch_output_dim = branch_output_dim
         self.resblock_output_dim = resblock_output_dim
+        # 保存激活函数
+        self.output_activation = output_activation  # <--- 2. 保存
 
         # ============ 阶段2: Branch MLPs (1024→512) ============
         self.branch_mul = BranchMLP(
@@ -253,57 +257,6 @@ class MetricNet(nn.Module):
         # 不覆盖，因为ResnetBlockFC已经有resnet_zero_init
         pass
 
-    # def forward(self,
-    #             feat_query: torch.Tensor,
-    #             feat_ref: torch.Tensor,
-    #             coord_ref_encoded: torch.Tensor) -> torch.Tensor:
-    #     """
-    #     前向传播
-    #
-    #     Args:
-    #         feat_query: 查询特征 [B, N, C] 或 [B, C] (会自动broadcast)
-    #         feat_ref: 参考特征 [B, N, C]
-    #         coord_ref_encoded: 编码后的参考坐标 [B, N, D_coord]
-    #
-    #     Returns:
-    #         distance: 预测的不匹配代价 [B, N, 1]
-    #     """
-    #     B, N, C = feat_ref.shape
-    #
-    #     # 如果feat_query是[B, C]，扩展到[B, N, C]
-    #     if feat_query.dim() == 2:
-    #         feat_query = feat_query.unsqueeze(1).expand(B, N, C)
-    #
-    #     # ============ 阶段1: 特征交互 (1024维) ============
-    #     h_mul = feat_query * feat_ref  # 逐元素乘
-    #     h_sub = feat_query - feat_ref  # 差值
-    #     h_sq = (feat_query - feat_ref) ** 2  # 平方差
-    #
-    #     # ============ 阶段2: Branch降维 (1024→512) ============
-    #     h_mul_512 = self.branch_mul(h_mul)  # [B, N, 512]
-    #     h_sub_512 = self.branch_sub(h_sub)  # [B, N, 512]
-    #     h_sq_512 = self.branch_sq(h_sq)  # [B, N, 512]
-    #
-    #     # ============ 阶段3: FiLM调制 ============
-    #     gamma, beta = self.coord_to_film(coord_ref_encoded)
-    #     # gamma, beta: [B, N, 3, 512]
-    #
-    #     # 对三个分支分别调制
-    #     h_mul_mod = gamma[:, :, 0, :] * h_mul_512 + beta[:, :, 0, :]  # [B, N, 512]
-    #     h_sub_mod = gamma[:, :, 1, :] * h_sub_512 + beta[:, :, 1, :]  # [B, N, 512]
-    #     h_sq_mod = gamma[:, :, 2, :] * h_sq_512 + beta[:, :, 2, :]  # [B, N, 512]
-    #
-    #     # ============ 阶段4: 预激活残差降维 (512→256) ============
-    #     h_mul_256 = self.resblock_mul(h_mul_mod)  # [B, N, 256]
-    #     h_sub_256 = self.resblock_sub(h_sub_mod)  # [B, N, 256]
-    #     h_sq_256 = self.resblock_sq(h_sq_mod)  # [B, N, 256]
-    #
-    #     # ============ 阶段5: 拼接与融合 (768→1) ============
-    #     h_concat = torch.cat([h_mul_256, h_sub_256, h_sq_256], dim=-1)  # [B, N, 768]
-    #
-    #     distance = self.fusion_mlp(h_concat)  # [B, N, 1]
-    #
-    #     return distance
 
     def forward(self,
                 feat_query: torch.Tensor,
@@ -365,6 +318,9 @@ class MetricNet(nn.Module):
         # 阶段5: 拼接与融合 (768→1)
         h_concat = torch.cat([h_mul_256, h_sub_256, h_sq_256], dim=-1)
         distance = self.fusion_mlp(h_concat)  # [B, N, 1]
+
+        # ============ [核心修改] 在这里应用激活 ============
+        distance = self.output_activation(distance) if self.output_activation is not None else distance
 
         # ============ 步骤3: 恢复到原始输入格式 ============
         distance = distance.squeeze(-1)  # [B, N, 1] → [B, N]

@@ -502,11 +502,18 @@ class VisualEncoderTrainer(BaseTrainer):
                 satimgs_pos = batch['satimgs_pos'].to(self.device)  # [B, C, H, W]
                 coords_uav = batch['coords_uav'].to(self.device)
 
-                # 处理satimgs as query的情况
-                if 'satimgs_query' in batch:
-                    uavimgs = torch.concatenate([uavimgs,batch['satimgs_query'].to(self.device)], dim=0)
-                    satimgs_pos = torch.concatenate([satimgs_pos,batch['satimgs_pos2satimg_query'].to(self.device)], dim=0)
-                    coords_uav = torch.concatenate([coords_uav, batch['coords_sat_query'].to(self.device)], dim=0)
+                # 处理satimgs as query的情况（区分 UAV/SAT query）
+                has_sat_query = 'satimgs_query' in batch
+                b_uav = uavimgs.shape[0]
+                b_sat = 0
+                if has_sat_query:
+                    satimgs_query = batch['satimgs_query'].to(self.device)
+                    satimgs_pos2satimg_query = batch['satimgs_pos2satimg_query'].to(self.device)
+                    coords_sat_query = batch['coords_sat_query'].to(self.device)
+                    b_sat = satimgs_query.shape[0]
+                    uavimgs = torch.cat([uavimgs, satimgs_query], dim=0)
+                    satimgs_pos = torch.cat([satimgs_pos, satimgs_pos2satimg_query], dim=0)
+                    coords_uav = torch.cat([coords_uav, coords_sat_query], dim=0)
 
                 # sample neg for per query (may be None when ANCE is enabled)
                 if 'satimgs_neg' in batch:
@@ -619,9 +626,27 @@ class VisualEncoderTrainer(BaseTrainer):
                         ignore_dim=None
                     ).squeeze(1)
 
-                #version1:
-                loss_pos, loss_neg = self.sms_loss(feat_dist_mat, weights_ref, 1 - weights_ref)
-                loss = loss_pos + loss_neg
+                if has_sat_query and b_sat > 0:
+                    feat_dist_mat_uav = feat_dist_mat[:b_uav]
+                    feat_dist_mat_sat = feat_dist_mat[b_uav:]
+                    weights_ref_uav = weights_ref[:b_uav] if weights_ref is not None else None
+                    weights_ref_sat = weights_ref[b_uav:] if weights_ref is not None else None
+
+                    loss_pos_uav, loss_neg_uav = self.sms_loss(
+                        feat_dist_mat_uav, weights_ref_uav, 1 - weights_ref_uav
+                    )
+                    loss_pos_sat, loss_neg_sat = self.sms_loss(
+                        feat_dist_mat_sat, weights_ref_sat, 1 - weights_ref_sat
+                    )
+
+                    loss_uav = loss_pos_uav + loss_neg_uav
+                    loss_sat = loss_pos_sat + loss_neg_sat
+
+                    sat_query_loss_weight = float(0.1)
+                    loss = loss_uav + sat_query_loss_weight * loss_sat
+                else:
+                    loss_pos, loss_neg = self.sms_loss(feat_dist_mat, weights_ref, 1 - weights_ref)
+                    loss = loss_pos + loss_neg
                 # version0,sml_loss,不使用距离权重，硬HardMining:
                 # if not hasattr(self, 'pos_mask_mat'):
                 #     self.pos_mask_mat = torch.cat([
@@ -987,13 +1012,13 @@ class VisualEncoderTrainer(BaseTrainer):
                     coords_uav[:, None, :2].cpu() - coords_topk[:, :, :2],
                     p=2, dim=-1
                 )
-                hits_nrc = dist_nrc < sat_dataset.halfimg_radius_nrc
+                hits_nrc = dist_nrc < sat_dataset.halfimg_radius_nrc*1.1
                 hits_rot = None
                 if not ref_wo_rot_var:
                     rot_thr = float(torch.pi / 18.0)
                     rot_diff = coords_topk[:, :, 2] - coords_uav[:, None, 2].cpu()
                     rot_diff = (rot_diff + torch.pi) % (2 * torch.pi) - torch.pi
-                    hits_rot = hits_nrc & (rot_diff.abs() < rot_thr*1.05)
+                    hits_rot = hits_nrc & (rot_diff.abs() < rot_thr*1.1)
 
                 for k in k_values:
                     if k <= hits_nrc.shape[1]:

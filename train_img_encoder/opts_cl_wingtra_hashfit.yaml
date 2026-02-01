@@ -20,8 +20,8 @@ exp_setting:
   load2train:
     vis_encoder: ""
     vis_aggregator: "/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/multiscene_12km2_cl_salad_ep100/epoch095.pth"
-    grid: "/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/zurich_12km2_multiscene_cl_hashfit_ep5k"
-    grid_mlp: "/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/zurich_12km2_multiscene_cl_hashfit_ep5k"
+    grid: "/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/zurich_12km2_multiscene_cl_hashfit_ep5k/epoch4900.pth"
+    grid_mlp: "/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/zurich_12km2_multiscene_cl_hashfit_ep5k/epoch4900.pth"
     optimizer: ""  # 优化器状态
     # epoch 会自动从checkpoint中读取
 
@@ -59,7 +59,7 @@ scenes_setting:
 hardware_setting:
   autocast: False
   batchsize_sat: 128 #24
-  batchsize_uav: 8
+  batchsize_uav: 64
   batchsize_uav_test: 128
   gpu_ids: '0'
   num_worker: 8

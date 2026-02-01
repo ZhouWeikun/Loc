@@ -17,17 +17,30 @@ from datasets.autoaugment import ImageNetPolicy
 import torch
 from datasets.queryDataset import RandomErasing
 
+def _mean_fill_from_stats(mean_vals):
+    if mean_vals is None:
+        return 0
+    mean_arr = np.asarray(mean_vals, dtype=float)
+    if mean_arr.ndim == 0:
+        val = float(mean_arr)
+        return int(round(val * 255.0)) if val <= 1.0 else int(round(val))
+    if mean_arr.max() <= 1.0:
+        mean_arr = mean_arr * 255.0
+    return tuple(int(round(x)) for x in mean_arr.tolist())
+
 def mk_transfroms_train(opt,uavimgs_info,satimgs_info):
     transform_uav_list = []
     transform_sat_list = []
+    uav_fill = _mean_fill_from_stats(uavimgs_info.get('mean'))
+    sat_fill = _mean_fill_from_stats(satimgs_info.get('mean'))
 
     transform_uav_list += [transforms.Resize(opt.h, interpolation=3)]
     transform_sat_list += [transforms.Resize(opt.h, interpolation=3)]
     
     if "uav" in opt.rr:
-        transform_uav_list += [ transforms.RandomRotation(360, interpolation=3)  ]  # 旋转+缩放+中心剪裁到512正方形图像
+        transform_uav_list += [ transforms.RandomRotation(360, interpolation=3, fill=uav_fill)  ]  # 旋转+缩放+中心剪裁到512正方形图像
     if "satellite" in opt.rr:
-        transform_sat_list += [ transforms.RandomRotation(360, interpolation=3)  ]  # 旋转+缩放+中心剪裁到512正方形图像
+        transform_sat_list += [ transforms.RandomRotation(360, interpolation=3, fill=sat_fill)  ]  # 旋转+缩放+中心剪裁到512正方形图像
 
     transform_uav_list += [
         transforms.CenterCrop(opt.h),
@@ -43,10 +56,10 @@ def mk_transfroms_train(opt,uavimgs_info,satimgs_info):
 
     if "uav" in opt.ra:  # 随机仿射变换
         transform_uav_list = transform_uav_list + \
-                             [transforms.RandomAffine(180)]
+                             [transforms.RandomAffine(180, fill=uav_fill)]
     if "satellite" in opt.ra:
         transform_sat_list = transform_sat_list + \
-                                   [transforms.RandomAffine(180)]
+                                   [transforms.RandomAffine(180, fill=sat_fill)]
 
     if "uav" in opt.re:  # 随机擦除
         transform_uav_list = transform_uav_list + \

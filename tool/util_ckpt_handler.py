@@ -82,3 +82,5 @@ def load_param(load_from, dict2load):
                     dict2load[k] = checkpoint[k]
         else:
             print(f"Warning: Key '{k}' not found in checkpoint file.")
+
+    return checkpoint

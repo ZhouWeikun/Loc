@@ -192,13 +192,13 @@ class Trainer(object):
             epoch_begin = checkpoint['epoch']
 
         #config for recording exp & backup files:
-        from tool.utils import get_unique_exp_dir,copyfiles2checkpoints_map_learner
+        from tool.utils_fm_duav import get_unique_exp_dir,copyfiles2checkpoints_map_learner
         self.args.exp_name = get_unique_exp_dir(self.args.exps_dir,self.args.exp_name)
         expdir2save = "{}/{}".format(self.args.exps_dir,self.args.exp_name)
         if not os.path.exists(expdir2save):
             os.mkdir(expdir2save)
         self.writer = SummaryWriter(f"{expdir2save}/{args.exp_name}/train_tensorboard.log") if args.tensorboard else None
-        from tool.utils import  get_logger
+        from tool.utils_fm_duav import  get_logger
         self.logger = get_logger("{}/{}/train.log".format(self.args.exps_dir,self.args.exp_name),'trainer_logger')
         copyfiles2checkpoints_map_learner( self.args )
 

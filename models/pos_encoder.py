@@ -53,59 +53,60 @@ def get_embedder(multires, i=0):
 
 
 class PositionalEncoder(nn.Module):
-    """
-    将坐标映射到高维特征的位置编码器。
-    继承自 nn.Module，可以作为一个标准的 PyTorch 层来使用。
-    """
-
     def __init__(self, input_dims, multires, include_input=True, log_sampling=True):
-        """
-        一次性初始化所有参数和函数。
-        :param input_dims: 输入坐标的维度 (例如 2D 为 2, 3D 为 3)。
-        :param multires: 多分辨率的级别，决定了频率的数量和范围。
-        :param include_input: 是否在最终输出中包含原始输入坐标。
-        :param log_sampling: 是否在对数空间中对频率进行采样。
-        """
-        super(PositionalEncoder, self).__init__()
+        super().__init__()
+        self.input_dims = input_dims
+        self.multires = multires
+        self.include_input = include_input
 
-        self.kwargs = {
-            'include_input': include_input,
-            'input_dims': input_dims,
-            'max_freq_log2': multires - 1,
-            'num_freqs': multires,
-            'log_sampling': log_sampling,
-            'periodic_fns': [torch.sin, torch.cos],
-        }
-
-        self.embed_fns = []
+        # 计算输出维度
+        # 如果 include_input=True: input_dims + 2 * input_dims * multires
+        # 如果 include_input=False: 2 * input_dims * multires
         self.out_dim = 0
+        if include_input:
+            self.out_dim += input_dims
+        self.out_dim += 2 * input_dims * multires
 
-        # --- 这部分逻辑直接从原来的 create_embedding_fn 移入 ---
-        if self.kwargs['include_input']:
-            self.embed_fns.append(lambda x: x)
-            self.out_dim += self.kwargs['input_dims']
-
-        max_freq = self.kwargs['max_freq_log2']
-        N_freqs = self.kwargs['num_freqs']
-
-        if self.kwargs['log_sampling']:
-            freq_bands = 2. ** torch.linspace(0., max_freq, steps=N_freqs)
+        # 预计算频率
+        if log_sampling:
+            freq_bands = 2. ** torch.linspace(0., multires - 1, steps=multires)
         else:
-            freq_bands = torch.linspace(2. ** 0., 2. ** max_freq, steps=N_freqs)
+            freq_bands = torch.linspace(2. ** 0., 2. ** multires, steps=multires)
 
-        for freq in freq_bands:
-            for p_fn in self.kwargs['periodic_fns']:
-                self.embed_fns.append(lambda x, p_fn=p_fn, freq=freq: p_fn(x * freq))
-                self.out_dim += self.kwargs['input_dims']
+        # [关键] 注册为 buffer，这样 .to(device) 会自动处理它
+        self.register_buffer("freq_bands", freq_bands)
 
-    def forward(self, inputs):
+    def forward(self, x):
         """
-        定义前向传播，当调用 encoder(inputs) 时会自动执行。
+        x: [..., input_dims]
         """
-        return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
+        # x 是弧度值，不需要额外的 PI 归一化，因为 sin(x) 本身就是以 2PI 为周期的
+        # freq_bands: [L]
+
+        # 扩展维度进行广播: [..., 1] * [L] -> [..., L]
+        # x.unsqueeze(-1) shape: [..., input_dims, 1]
+        embed = x.unsqueeze(-1) * self.freq_bands
+
+        # [..., input_dims, L] -> [..., input_dims * L]
+        embed = embed.flatten(start_dim=-2)
+
+        # 计算 sin, cos
+        # 结果: [..., input_dims * L * 2]
+        result = torch.cat([torch.sin(embed), torch.cos(embed)], dim=-1)
+
+        if self.include_input:
+            result = torch.cat([x, result], dim=-1)
+
+        return result
 
 
 def encode_4d_coords(coords, rc_encoder, rot_endcoder, scale_encoder):
+    """
+    旧版本的4D坐标编码函数（向后兼容）
+
+    输入：4D坐标 [nr, nc, rotation_rad, scale_ratio]
+    输出：编码后的坐标
+    """
     if len(coords.shape) == 3:
         b, n, _ = coords.shape
         coords = coords.reshape(-1, 4)
@@ -122,3 +123,4 @@ def encode_4d_coords(coords, rc_encoder, rot_endcoder, scale_encoder):
         coords_encoded = coords_encoded.reshape(b, n, -1)
 
     return coords_encoded
+

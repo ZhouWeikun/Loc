@@ -10,6 +10,23 @@ import numpy as np
 from typing import Tuple, Optional
 
 
+def _resolve_fill_value(img, fill):
+    if fill != "mean":
+        return fill
+    if torch.is_tensor(img):
+        if img.ndim == 3:
+            return img.mean(dim=(1, 2)).tolist()
+        if img.ndim == 4:
+            return img.mean(dim=(2, 3))
+    img_np = np.asarray(img)
+    if img_np.ndim == 0:
+        return float(img_np)
+    if img_np.ndim == 2:
+        return float(img_np.mean())
+    mean_vals = img_np.mean(axis=(0, 1))
+    return tuple(int(round(x)) for x in mean_vals.tolist())
+
+
 class RandomRotationWithParams(torch.nn.Module):
     """
     随机旋转Transform，能够返回实际使用的旋转角度
@@ -19,7 +36,7 @@ class RandomRotationWithParams(torch.nn.Module):
     但 F.rotate 在图像坐标系下的行为相反
     因此需要对角度取反
     """
-    def __init__(self, degrees, interpolation=transforms.InterpolationMode.BILINEAR, fill=0):
+    def __init__(self, degrees, interpolation=transforms.InterpolationMode.BILINEAR, fill="mean"):
         super().__init__()
         self.degrees = (-degrees, degrees) if isinstance(degrees, (int, float)) else degrees
         self.interpolation = interpolation
@@ -37,7 +54,8 @@ class RandomRotationWithParams(torch.nn.Module):
         self.last_angle = angle  # 记录角度（按我们的约定）
 
         # 关键修正：F.rotate 的约定与我们相反，需要取反
-        return F.rotate(img, -angle, self.interpolation, fill=self.fill)
+        fill_val = _resolve_fill_value(img, self.fill)
+        return F.rotate(img, -angle, self.interpolation, fill=fill_val)
 
     def get_last_angle(self):
         """返回最后一次旋转的角度（度数，逆时针为正）"""
@@ -223,11 +241,23 @@ def mk_pil_transform_with_params(
                 raise TypeError("affine_para必须是一个字典。")
             default_affine_params.update(affine_para)
 
+        def _mean_fill_from_stats(mean_vals):
+            if mean_vals is None:
+                return 0
+            mean_arr = np.asarray(mean_vals, dtype=float)
+            if mean_arr.ndim == 0:
+                val = float(mean_arr)
+                return int(round(val * 255.0)) if val <= 1.0 else int(round(val))
+            if mean_arr.max() <= 1.0:
+                mean_arr = mean_arr * 255.0
+            return tuple(int(round(x)) for x in mean_arr.tolist())
+
+        fill_val = _mean_fill_from_stats(mean)
         transform_list.append(
             transforms.RandomAffine(
                 **default_affine_params,
                 interpolation=transforms.InterpolationMode.BILINEAR,
-                fill=0
+                fill=fill_val
             )
         )
 

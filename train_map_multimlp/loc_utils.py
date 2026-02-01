@@ -7,7 +7,7 @@ def compute_l2_dist(X, Y, normalize=False):
     使用 PyTorch 矩阵运算快速计算两组向量之间的欧式距离。
 
     参数:
-    X: torch.Tensor, 形状为 (m, d)，代表第一组的 m 个 d 维向量。
+    X: torch.Tensor, 形状为 (m, d)，代表第一组的 ma 个 d 维向量。
     Y: torch.Tensor, 形状为 (n, d)，代表第二组的 n 个 d 维向量。
     normalize: bool, 如果为True，则在计算距离前对所有向量进行L2归一化。
 
@@ -48,6 +48,7 @@ def compute_l2_dist(X, Y, normalize=False):
     D = torch.sqrt(torch.clamp(D_sq, min=0.0))
 
     return D
+##################################################################################################
 
 
 def find_4neighbors_topleft(pred_pdf_agged):
@@ -71,19 +72,19 @@ def find_4neighbors_topleft(pred_pdf_agged):
     return top_left_coords
 
 
-def find_nneighbors_topleft(pred_pdf_agged, n):
+def find_nneighbors_topleft(pred_pdf_agged, n_len):
     """
-    寻找具有最大值的 n x n 区域的左上角坐标。
+    寻找具有最大值的 n_len x n_len 区域的左上角坐标。
 
     Args:
         pred_pdf_agged: 一个形状为 [H, W] 的二维图或形状为 [C, H, W] 的三维图。
-        n (int): 正方形卷积核的边长。
+        n_len (int): 正方形卷积核的边长。
 
     Returns:
         一个形状为 [C, 2] 的张量，包含每个通道中最大和区域的左上角 (行, 列) 坐标。
     """
-    # 动态创建一个 n x n 的全1卷积核
-    kernel = torch.ones((n, n), dtype=torch.float32)
+    # 动态创建一个 n_len x n_len 的全1卷积核
+    kernel = torch.ones((n_len, n_len), dtype=torch.float32)
 
     # 准备用于卷积的四维张量
     # 输入需要是 4D: [批次数, 输入通道数, 高, 宽]
@@ -133,18 +134,18 @@ def compute_agged_pred_4neighbors_id(pred_seq_agged):
     return id_4neighbors_flat
 
 
-def compute_agged_pred_nneighbors_id(pred_seq_agged,n,ret_2d=False):
+def compute_agged_pred_nneighbors_id(pred_seq_agged,n_len,ret_2d=False):
     """
     pred_seq_agged: with shape = [C, H, W]
     """
     h,w = pred_seq_agged.shape[-2:]
     # 1. 找到和最大 n x n 窗口的左上角坐标
-    id_toplefts = find_nneighbors_topleft(pred_seq_agged,n)
+    id_toplefts = find_nneighbors_topleft(pred_seq_agged,n_len)
     # 2. 生成一个 n x n 正方形内的所有相对偏移量
     #    这将创建一个从 (0,0) 到 (n-1, n-1) 的坐标网格
     row_offsets, col_offsets = torch.meshgrid(
-        torch.arange(n, device=pred_seq_agged.device),
-        torch.arange(n, device=pred_seq_agged.device),
+        torch.arange(n_len, device=pred_seq_agged.device),
+        torch.arange(n_len, device=pred_seq_agged.device),
         indexing='ij'  # 保证行和列的顺序正确
     )
     # 将偏移量网格展平成 [n*n, 2] 的坐标列表

@@ -181,7 +181,7 @@ class Trainer(object):
         if not os.path.exists(expdir2save):
             os.mkdir(expdir2save)
         self.writer = SummaryWriter(f"{expdir2save}/{args.exp_name}/train_tensorboard.log") if args.tensorboard else None
-        from tool.utils import  get_logger
+        from tool.utils_fm_duav import  get_logger
         self.logger = get_logger("exps/{}/train.log".format(self.args.exp_name),'trainer_logger')
 
         for epoch in torch.range(epoch_begin,args.n_epoch,dtype=torch.uint8):

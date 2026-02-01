@@ -33,8 +33,32 @@ def backup_experiment(exp_dir,opt=None):
         print("请确保项目是一个 Git 仓库，并且已安装 Git。")
 
     if opt is not None:  # save opts
+        # 保存完整配置：包括所有group_dict中的参数 + scenes_setting
         grouped_params = {}
+
+        # checkpoint参数列表（用于过滤空值）
+        checkpoint_params = ['load2train', 'load2test', 'load_stage1_ckpt', 'load_stage2_ckpt']
+
+        # 1. 保存group_dict中定义的所有参数
         for group, params in opt.group_dict.items():
-            grouped_params[group] = {param: getattr(opt, param) for param in params}
+            grouped_params[group] = {}
+            for param in params:
+                if hasattr(opt, param):
+                    value = getattr(opt, param)
+                    # 对于checkpoint参数，只保存非空值
+                    if param in checkpoint_params:
+                        if value and value != "":  # 只保存有值的checkpoint参数
+                            grouped_params[group][param] = value
+                    else:
+                        # 非checkpoint参数，全部保存
+                        grouped_params[group][param] = value
+
+        # 2. 添加scenes_setting（如果存在）
+        # scenes_setting包含了完整的场景配置，包括采样策略
+        if hasattr(opt, 'scenes_setting'):
+            grouped_params['scenes_setting'] = opt.scenes_setting
+
         with open(f'{exp_dir}/opts.yaml', 'w') as fp:
             yaml.dump(grouped_params, fp, default_flow_style=False)
+
+        print(f"配置已保存到 {exp_dir}/opts.yaml")

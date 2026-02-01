@@ -44,8 +44,9 @@ OPTIMIZER_TEMPLATES = {
             {'param_source': 'grid', 'lr': 1, 'weight_decay': 0},
             {'param_source': 'grid_mlp', 'lr': 1e-2, 'weight_decay': 1e-6},
             {'param_source': 'metric_net', 'lr': 1e-3, 'weight_decay': 1e-6},
+            {'param_source': 'projector', 'lr': 1e-4, 'weight_decay': 1e-6},
             {'param_source': 'rank_former', 'lr': 1e-3, 'weight_decay': 1e-6},
-            {'param_source': 'qf_proj', 'lr': 1e-3, 'weight_decay': 1e-6},
+            {'param_source': 'loss_fn', 'lr': 1e-3,'weight_decay': 0.0}
         ]
     }
 }

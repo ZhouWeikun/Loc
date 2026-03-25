@@ -6,31 +6,34 @@ from .RKNet import RKNet
 # from .cvt import get_cvt_models
 import torch
 
-def make_backbone(backbone_name, imgsize2net=224):
+def make_backbone(backbone_name, imgsize2net=224, backbone_config=None):
     """
     创建backbone模型
 
     Args:
         backbone_name: str, backbone名称 (e.g., "ViTB-224", "dinov2", "dinov3")
         imgsize2net: int, 输入图像尺寸，默认224
+        backbone_config: dict, backbone专属配置
 
     Returns:
         Backbone: backbone模型实例
     """
-    backbone_model = Backbone(backbone_name, imgsize2net)
+    backbone_model = Backbone(backbone_name, imgsize2net, backbone_config=backbone_config)
     return backbone_model
 
 
 class Backbone(nn.Module):
-    def __init__(self, backbone_name, imgsize2net=224):
+    def __init__(self, backbone_name, imgsize2net=224, backbone_config=None):
         """
         Args:
             backbone_name: str, backbone名称
             imgsize2net: int, 输入图像尺寸
+            backbone_config: dict, backbone专属配置
         """
         super().__init__()
         self.backbone_name = backbone_name
         self.imgsize2net = (imgsize2net, imgsize2net)
+        self.backbone_config = dict(backbone_config or {})
         self.backbone, self.output_channel = self.init_backbone()
 
     def init_backbone(self):
@@ -116,9 +119,10 @@ class Backbone(nn.Module):
             checkpoint_weight = "pytorch-image-models/CvT-13-384x384-IN-22k.pth"
             backbone_model = self.load_checkpoints(checkpoint_weight, backbone_model)
         elif ('dino' in backbone) and ('v2' in backbone) : #added by zwk
-            from .dinov2 import DINOv2,DINOV2_ARCHS
-            backbone_model = DINOv2(backbone) #**self.opt.backbone_config) #backbone_config is a dict, todo:将网络相关参数包装为字典
-            output_channel = DINOV2_ARCHS[backbone]
+            from .dinov2 import DINOv2, DINOV2_ALIASES, DINOV2_ARCHS
+            resolved_backbone = DINOV2_ALIASES.get(backbone, backbone)
+            backbone_model = DINOv2(model_name=resolved_backbone, **self.backbone_config)
+            output_channel = DINOV2_ARCHS[resolved_backbone]
         elif ('dino'in backbone) and ("v3" in  backbone):
             output_channel = 1024
             from models.Backbone.dinov3.vision_transformer import vit_large

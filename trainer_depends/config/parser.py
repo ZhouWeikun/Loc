@@ -82,6 +82,12 @@ def get_parse(print_summary=True):
     # 网络配置
     parser.add_argument('--backbone', default="dinov3", type=str,
                         help='Backbone类型: ViTB-224, dinov2, dinov3等')
+    parser.add_argument(
+        '--freeze_backbone',
+        default=True,
+        type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'},
+        help='是否冻结视觉backbone；False时允许backbone参与训练',
+    )
     parser.add_argument('--aggregator_type', default='salad', type=str,
                         help='聚合器类型: salad, g2m')
 
@@ -240,6 +246,13 @@ def get_parse(print_summary=True):
     # 兼容仍然直接读取 opt.exps_dir 的旧代码；语义上将其映射为日志根目录。
     opt.exps_dir = opt.dir2save_log
 
+    backbone_config = getattr(opt, 'backbone_config', {})
+    if backbone_config is None:
+        backbone_config = {}
+    if not isinstance(backbone_config, dict):
+        raise TypeError(f"backbone_config must be a dict, got {type(backbone_config).__name__}")
+    opt.backbone_config = dict(backbone_config)
+
     # --- 7. 组织参数到 group_dict ---
     group_info = {
         'exp_setting': ['p_yaml', 'exp_name', 'dir2save_log', 'dir2save_ckpt', 'load2train', 'load2test',
@@ -259,6 +272,8 @@ def get_parse(print_summary=True):
                             'batchsize_sat', 'batchsize_uav', 'batchsize_uav_test'],
         'network_setting': [
             'backbone',
+            'freeze_backbone',
+            'backbone_config',
             'aggregator_type',
             'freeze_grid',
             'p_grid_config_yaml',

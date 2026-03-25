@@ -44,10 +44,17 @@ class NetworkComponents:
         from models.Backbone.util_mk_backbone import make_backbone
 
         backbone_name = self.opt.backbone
-        vis_encoder = make_backbone(backbone_name).to(self.device)
+        backbone_config = getattr(self.opt, 'backbone_config', {})
+        vis_encoder = make_backbone(
+            backbone_name,
+            imgsize2net=getattr(self.opt, 'imgsize2net', 224),
+            backbone_config=backbone_config,
+        ).to(self.device)
 
         print(f"✅ 创建视觉编码器: {backbone_name}")
         print(f"   输出维度: {vis_encoder.output_channel}")
+        if backbone_config:
+            print(f"   backbone_config: {backbone_config}")
 
         return vis_encoder
 
@@ -63,17 +70,22 @@ class NetworkComponents:
             aggregator: 聚合器模型
         """
         agg_type = getattr(self.opt, 'aggregator_type', 'salad')
+        imgsize2net = int(getattr(self.opt, 'imgsize2net', 224))
+        backbone_name = str(getattr(self.opt, 'backbone', '')).lower()
+        patchsize = 14 if 'dinov2' in backbone_name else 16
 
         if agg_type == 'salad':
             from models.Head.salad_residual import SALAD_Residual
             aggregator = SALAD_Residual(
                 input_feat_dim=feat_dim,
                 base_dim=feat_dim,
-                patchsize=16,
+                img_hw=(imgsize2net, imgsize2net),
+                patchsize=patchsize,
                 num_clusters=16,
                 cluster_dim=64
             ).to(self.device)
             print(f"✅ 创建SALAD聚合器")
+            print(f"   token_grid: {imgsize2net // patchsize}x{imgsize2net // patchsize} (patchsize={patchsize})")
 
         elif agg_type == 'g2m':
             from models.Head.G2M import G2M

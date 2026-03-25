@@ -81,3 +81,5 @@ learning_setting:
 
 network_setting:
   backbone: dinov3
+  freeze_backbone: true
+  backbone_config: {}

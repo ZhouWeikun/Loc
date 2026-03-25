@@ -112,8 +112,19 @@ class SALAD_Residual(nn.Module):
     def forward(self, x):
         t = x[:, 0]
         x = x[:, 1:]
-        x = x.reshape((x.shape[0], self.token_hw[0], self.token_hw[1],
-                       self.input_feat_dim)).permute(0, 3, 1, 2)
+        num_tokens = x.shape[1]
+        expected_tokens = self.token_hw[0] * self.token_hw[1]
+        if num_tokens == expected_tokens:
+            token_hw = self.token_hw
+        else:
+            side = int(math.sqrt(num_tokens))
+            if side * side != num_tokens:
+                raise ValueError(
+                    f"SALAD_Residual expected {expected_tokens} patch tokens from token_hw={self.token_hw}, "
+                    f"but got {num_tokens}. Cannot infer a square token grid."
+                )
+            token_hw = (side, side)
+        x = x.reshape((x.shape[0], token_hw[0], token_hw[1], self.input_feat_dim)).permute(0, 3, 1, 2)
 
         # 1. 基础特征（对应hash table输出）
         base = self.base_features(t)  # [B, base_dim]
@@ -173,4 +184,3 @@ class SALAD_Residual(nn.Module):
             feat = F.normalize(feat, p=2, dim=-1)
 
         return feat
-

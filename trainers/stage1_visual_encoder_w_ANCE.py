@@ -87,26 +87,35 @@ class VisualEncoderTrainer(BaseTrainer):
 
     def _setup_trainable_params(self):
         """设置可训练参数"""
-        # 冻结视觉编码器
-        for param in self.vis_encoder.parameters():
-            param.requires_grad = False
+        freeze_backbone = bool(getattr(self.opt, 'freeze_backbone', True))
+        if freeze_backbone:
+            for param in self.vis_encoder.parameters():
+                param.requires_grad = False
 
-        # 训练聚合器
-        self.param2optimize = {
-            'vis_aggregator': self.vis_aggregator
-        }
+        self.param2optimize = {'vis_aggregator': self.vis_aggregator}
+        self.param2freeze = {}
+        if freeze_backbone:
+            self.param2freeze['vis_encoder'] = self.vis_encoder
+        else:
+            self.param2optimize['vis_encoder'] = self.vis_encoder
 
-        self.param2freeze = {
-            'vis_encoder': self.vis_encoder
-        }
-
-        # 动态生成参数配置信息
         trainable_names = ', '.join(self.param2optimize.keys())
-        frozen_names = ', '.join(self.param2freeze.keys())
+        frozen_names = ', '.join(self.param2freeze.keys()) if self.param2freeze else '(none)'
+        n_trainable_backbone_params = sum(
+            param.numel() for param in self.vis_encoder.parameters() if param.requires_grad
+        )
 
-        print("参数配置:")
+        print(f"参数配置 (freeze_backbone={freeze_backbone}):")
         print(f"  可训练: {trainable_names}")
         print(f"  冻结:   {frozen_names}\n")
+        if not freeze_backbone:
+            print(f"  vis_encoder 可训练参数量: {n_trainable_backbone_params}\n")
+
+    def _forward_train_vis_encoder(self, imgs_input):
+        if getattr(self.opt, 'freeze_backbone', True):
+            with torch.no_grad():
+                return self.vis_encoder(imgs_input)
+        return self.vis_encoder(imgs_input)
 
     # ------------------------------------------------------------------
     # Checkpoint Helpers
@@ -626,8 +635,7 @@ class VisualEncoderTrainer(BaseTrainer):
             imgs_input = torch.cat([uavimgs, satimgs_pos], dim=0)
         else:
             imgs_input = torch.cat([uavimgs, satimgs_pos, satimgs_neg_flat], dim=0)
-        with torch.no_grad():
-            feats_patch = self.vis_encoder(imgs_input)
+        feats_patch = self._forward_train_vis_encoder(imgs_input)
 
         feats_agg = self.vis_aggregator(feats_patch)
         batch_size = uavimgs.shape[0]

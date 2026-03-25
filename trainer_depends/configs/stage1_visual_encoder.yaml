@@ -80,4 +80,7 @@ learning_setting:
   val_query_scale2uniform: False
 
 network_setting:
-  backbone: dinov2
+  backbone: dinov2_vitb14
+  freeze_backbone: false
+  backbone_config:
+    num_trainable_blocks: 4

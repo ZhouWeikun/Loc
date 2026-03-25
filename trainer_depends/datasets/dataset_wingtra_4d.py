@@ -184,7 +184,7 @@ class SatDataset(object):
             return rand_coords_4d
 
     def transfrom_georc_to_nrc(self, georc: np.ndarray, source_epsg_code = 2056, dtype=np.float32):
-        from transform_raster_rcs import georc_to_raster_rc
+        from trainer_depends.datasets.transform_raster_rcs import georc_to_raster_rc
         rows, cols = georc_to_raster_rc(
             geoy=georc[:, 0],
             geox=georc[:, 1],
@@ -197,7 +197,7 @@ class SatDataset(object):
         return np.stack([row_normed, col_normed], axis=-1).astype(dtype)
 
     def transfrom_nrc_to_georc(self, nrcs: np.ndarray,target_espg_code=2056, dtype=np.float32):
-        from transform_raster_rcs import raster_rc_to_georc
+        from trainer_depends.datasets.transform_raster_rcs import raster_rc_to_georc
         rcs = nrcs * self.satmap_hw_max + self.nr_tiftop
         geo_rs,geo_cs = raster_rc_to_georc(
         rows=rcs[:,0],
@@ -209,7 +209,7 @@ class SatDataset(object):
         return np.stack([geo_rs,geo_cs], axis=-1).astype(dtype)
 
     def get_halfimg_radius_meter(self,pixel_offset):
-        from rc_offset_to_meter import rc_offset_to_meters
+        from trainer_depends.datasets.transform_raster_rcs import rc_offset_to_meters
         offset_x_m, offset_y_m = rc_offset_to_meters(
             offset_col=pixel_offset,
             offset_row=pixel_offset,

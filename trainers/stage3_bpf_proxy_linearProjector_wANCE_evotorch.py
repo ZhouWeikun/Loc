@@ -131,6 +131,8 @@ class MetricNetTrainer(GridHashFitTrainer):
         """
         在Stage 3初始化网络前，从指定的Stage 2 YAML/opts中按scope继承参数。
         仅开放 network/data/scenes/hardware 四类，避免污染Stage 3自己的exp/learning配置。
+        继承值只补充当前 Stage 3 YAML 未显式声明的键；若 Stage 3 YAML 自己写了同名键，
+        则以 Stage 3 本地配置为准。
         """
         inherit_yaml = getattr(opt, 'inherit_stage2_yaml', '')
         if not inherit_yaml:
@@ -146,9 +148,16 @@ class MetricNetTrainer(GridHashFitTrainer):
         with open(inherit_yaml, 'r', encoding='utf-8') as f:
             stage2_cfg = yaml.safe_load(f) or {}
 
+        explicit_stage3_keys = MetricNetTrainer._collect_stage3_explicit_keys(
+            getattr(opt, 'p_yaml', '')
+        )
         inherited_summary = {}
+        skipped_summary = {}
         for scope in inherit_scopes:
             if scope == 'scenes':
+                if 'scenes_setting' in explicit_stage3_keys:
+                    skipped_summary['scenes_setting'] = ['<explicit_in_stage3_yaml>']
+                    continue
                 scenes_cfg = stage2_cfg.get('scenes_setting')
                 if scenes_cfg:
                     setattr(opt, 'scenes_setting', scenes_cfg)
@@ -159,12 +168,19 @@ class MetricNetTrainer(GridHashFitTrainer):
             section_cfg = stage2_cfg.get(section_name, {})
             if not isinstance(section_cfg, dict):
                 continue
+            explicit_keys = explicit_stage3_keys.get(section_name, set())
             inherited_keys = []
+            skipped_keys = []
             for key, value in section_cfg.items():
+                if key in explicit_keys:
+                    skipped_keys.append(key)
+                    continue
                 setattr(opt, key, value)
                 inherited_keys.append(key)
             if inherited_keys:
                 inherited_summary[section_name] = inherited_keys
+            if skipped_keys:
+                skipped_summary[section_name] = skipped_keys
 
         if inherited_summary:
             print(f"✅ 从Stage 2配置继承参数: {inherit_yaml}")
@@ -173,10 +189,65 @@ class MetricNetTrainer(GridHashFitTrainer):
                 print(f"   {section_name}: {', '.join(keys)}")
         else:
             print(f"⚠️  inherit_stage2_yaml未提供可继承的scope字段: {inherit_yaml}")
+        for section_name, keys in skipped_summary.items():
+            print(f"   skip override by stage3 yaml | {section_name}: {', '.join(keys)}")
 
         opt.inherit_stage2_yaml = inherit_yaml
         opt.inherit_stage2_scope = ','.join(inherit_scopes)
         return opt
+
+    @staticmethod
+    def _load_yaml_dict(yaml_path):
+        if not yaml_path:
+            return {}
+        yaml_path = str(yaml_path).strip()
+        if not yaml_path:
+            return {}
+        yaml_path_abs = yaml_path if os.path.isabs(yaml_path) else os.path.join(project_root, yaml_path)
+        if not os.path.exists(yaml_path_abs):
+            return {}
+        with open(yaml_path_abs, 'r', encoding='utf-8') as f:
+            cfg = yaml.safe_load(f) or {}
+        return cfg if isinstance(cfg, dict) else {}
+
+    @staticmethod
+    def _merge_section_key_sets(target, source):
+        for section_name, keys in source.items():
+            target.setdefault(section_name, set()).update(keys)
+        return target
+
+    @staticmethod
+    def _collect_declared_keys_from_cfg(cfg):
+        declared = {}
+        for section_name in ('data_setting', 'network_setting', 'hardware_setting'):
+            section_cfg = cfg.get(section_name, None)
+            if isinstance(section_cfg, dict):
+                declared[section_name] = set(section_cfg.keys())
+        if isinstance(cfg.get('scenes_setting', None), dict):
+            declared['scenes_setting'] = {'__section__'}
+        return declared
+
+    @classmethod
+    def _collect_stage3_explicit_keys(cls, yaml_path, _visited=None):
+        yaml_path = str(yaml_path or '').strip()
+        if not yaml_path:
+            return {}
+        yaml_path_abs = yaml_path if os.path.isabs(yaml_path) else os.path.join(project_root, yaml_path)
+        if _visited is None:
+            _visited = set()
+        if yaml_path_abs in _visited:
+            return {}
+        _visited.add(yaml_path_abs)
+
+        cfg = cls._load_yaml_dict(yaml_path_abs)
+        if not cfg:
+            return {}
+
+        declared = {}
+        base_yaml = cfg.get('p_yaml') or cfg.get('exp_setting', {}).get('p_yaml')
+        if base_yaml:
+            declared = cls._collect_stage3_explicit_keys(base_yaml, _visited=_visited)
+        return cls._merge_section_key_sets(declared, cls._collect_declared_keys_from_cfg(cfg))
 
     @staticmethod
     def _ensure_param_sequence(value, cast_fn):

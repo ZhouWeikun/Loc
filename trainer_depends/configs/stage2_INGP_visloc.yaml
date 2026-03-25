@@ -1,14 +1,16 @@
 exp_setting:
-  dir2save_log: gen_fm_exps/logs  # 相对于项目根目录
-  dir2save_ckpt: gen_fm_exps/ckpts  # 相对于项目根目录
-  exp_name: stage2_visloc03_tripleLoss_singleEdge_hardest_fm_mask_codebookW19_mlpB2
+  dir2save_log: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/logs  # 绝对路径
+  dir2save_ckpt: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts  # 绝对路径
+  exp_name: stage2_visloc04_tripleLoss_singleEdge_hardest_fm_mask_dinov2B2_codebookW19_mlpB2
   save_freq: 10
   tensorboard: True
   val: False
   val_freq: 1
 
   # load_stage1_ckpt: Stage 1训练好的checkpoint路径（用于初始化训练）
-  load_stage1_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/visloc_stage1_tripleLoss_singleEdge_hardest_fm_mask_woSatQuery_3/epoch099_best.pth"
+  load_stage1_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_splitInterval82_tripleLoss_singleEdge_hardest_fm_mask_dinov2B2/epoch022_03R1=89_04R1=92.pth"
+  inherit_stage1_yaml: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_splitInterval82_tripleLoss_singleEdge_hardest_fm_mask_dinov2B2/opts.yaml"
+  inherit_stage1_scope: "network,data"
 
   # load2train: 继续训练当前Stage时加载的checkpoint（字符串路径）
   load2train: ""
@@ -17,12 +19,12 @@ exp_setting:
   load2test:  ""
 
 # ==================== 数据加载配置 ====================
-data_setting:
-  imgsize2net: 224
-  satimgsize2crop: 244   #satimgsize2crop：res02m:zuchwil=540,zurich=614; res03m:zuchwil=400; res05m:zurich=224
-  n_rand2sample_per_pos: 256 #16
-  split_train_ratio: 0.9
-  split_mode: segment
+#data_setting:
+#  imgsize2net: 224
+#  satimgsize2crop: 244   #satimgsize2crop：res02m:zuchwil=540,zurich=614; res03m:zuchwil=400; res05m:zurich=224
+#  n_rand2sample_per_pos: 256 #16
+#  split_train_ratio: 0.9
+#  split_mode: segment
 
 # ==================== 场景配置 ====================
 # 场景列表（支持任意数量）：
@@ -67,8 +69,6 @@ learning_setting:
   num_epochs: 1000
 
 network_setting:
-  #stage1
-  backbone: dinov3
   #stage2
   p_grid_config_yaml: trainer_depends/configs/nerf_hash_visloc.yaml
   posenc_multires_rc: 8

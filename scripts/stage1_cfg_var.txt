@@ -1,0 +1,31 @@
+# Stage-1 batch override template
+#
+# Usage:
+#   python scripts/run_stage1_with_overrides.py \
+#     --cfg-var-file gen_fm_exps/run_yamls/stage1_cfg_var.txt
+#
+# Notes:
+# - One experiment per line.
+# - Each line is a comma-separated list of key=value pairs.
+# - You can use leaf keys directly when they are unique.
+# - Uncomment and edit one or more examples below before use.
+
+
+# exp_name=visloc_stage1_tripleLoss_singleEdge_hardest_fm_mask_woSatQuery, loss_type=tripleLoss_singleEdge_hardest_fm_mask, sat_as_query=False
+# exp_name=visloc_stage1_tripleLoss_singleEdge_hardest_woSatQuery, loss_type=tripleLoss_singleEdge_hardest_fm_weight, sat_as_query=False
+# exp_name=visloc_stage1_pairLoss_singleEdge_weightedHardest_woSatQuery, loss_type=pairLoss_singleEdge_weightedHardest, sat_as_query=False
+# exp_name=visloc_stage1_pairLoss_singleEdge_hardest_woSatQuery, loss_type=pairLoss_singleEdge_hardest, sat_as_query=False
+
+#exp_name = visloc_stage1_tripleLoss_singleEdge_hardest_fm_mask_splitInterval82,loss_type=tripleLoss_singleEdge_hardest_fm_mask,split_train_ratio=0.8, split_mode=interval
+#exp_name = visloc_stage1_tripleLoss_singleEdge_hardest_fm_mask_splitRandom82,loss_type=tripleLoss_singleEdge_hardest_fm_mask,split_train_ratio=0.8, split_mode=random
+
+#exp_name = visloc_stage1_tripleLoss_singleEdge_hardest_fm_mask_splitInterval82_continued,loss_type=tripleLoss_singleEdge_hardest_fm_mask,split_train_ratio=0.8, split_mode=interval, load2train=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/visloc_stage1_tripleLoss_singleEdge_hardest_fm_mask_splitInterval82/epoch099.pth, num_epochs=200
+#exp_name = visloc_stage1_tripleLoss_singleEdge_hardest_fm_mask_splitRandom82_continued,loss_type=tripleLoss_singleEdge_hardest_fm_mask,split_train_ratio=0.8, split_mode=random
+
+exp_name = stage1_wigntra_tripleLoss_singleEdge_hardest_fm_mask_splitInterval91,loss_type=tripleLoss_singleEdge_hardest_fm_mask,split_train_ratio=0.9, split_mode=interval
+exp_name = stage1_wigntra_tripleLoss_singleEdge_hardest_fm_mask_splitInterval82,loss_type=tripleLoss_singleEdge_hardest_fm_mask,split_train_ratio=0.8, split_mode=interval
+exp_name = stage1_wigntra_tripleLoss_singleEdge_hardest_fm_mask_splitSegment82,loss_type=tripleLoss_singleEdge_hardest_fm_mask,split_train_ratio=0.8, split_mode=segment
+exp_name = stage1_wigntra_tripleLoss_singleEdge_hardest_fm_mask_splitSegment91,loss_type=tripleLoss_singleEdge_hardest_fm_mask,split_train_ratio=0.9, split_mode=segment
+
+
+

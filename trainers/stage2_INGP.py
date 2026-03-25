@@ -21,6 +21,8 @@ import tqdm
 import time
 import sys
 import os
+import yaml
+from collections.abc import Sequence
 
 # 添加项目根目录到路径
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,6 +41,34 @@ from trainers.util_stage2_retrieval_evaluator import (
     Stage2RetrievalEvalConfig,
     Stage2RetrievalEvaluator,
 )
+from trainer_depends.config.parser import get_parse, print_config_summary
+
+
+STAGE1_INHERIT_SCOPES = ('network', 'data', 'scenes', 'hardware')
+STAGE1_INHERIT_SECTION_MAP = {
+    'network': 'network_setting',
+    'data': 'data_setting',
+    'hardware': 'hardware_setting',
+}
+STAGE1_INHERIT_DATA_KEYS = (
+    'pad_mode',
+    'imgsize2net',
+    'satimgsize2crop',
+    'n_rand2sample_per_pos',
+    'split_train_ratio',
+    'split_mode',
+)
+STAGE1_INHERIT_NETWORK_KEYS = (
+    'backbone',
+    'freeze_backbone',
+    'backbone_config',
+    'aggregator_type',
+    'aggregator_config',
+)
+STAGE1_INHERIT_KEY_WHITELIST = {
+    'data_setting': STAGE1_INHERIT_DATA_KEYS,
+    'network_setting': STAGE1_INHERIT_NETWORK_KEYS,
+}
 
 
 class GridHashFitTrainer(BaseTrainer):
@@ -50,6 +80,17 @@ class GridHashFitTrainer(BaseTrainer):
 
     def __init__(self, opt=None):
         """初始化Stage 2 Trainer"""
+        should_print_final_config = (
+            (opt is None)
+            or bool(getattr(opt, 'inherit_stage1_yaml', ''))
+            or not bool(getattr(opt, '_config_summary_printed', False))
+        )
+        if opt is None:
+            opt = get_parse(print_summary=False)
+        opt = self._apply_inherit_stage1_yaml(opt)
+        if should_print_final_config:
+            print_config_summary(opt, header="最终生效配置:")
+
         super().__init__(opt)
 
         # 初始化网络组件
@@ -61,6 +102,161 @@ class GridHashFitTrainer(BaseTrainer):
 
         # 设置可训练参数
         self._setup_trainable_params()
+
+    @staticmethod
+    def _normalize_inherit_stage1_scope(scope_value):
+        if not scope_value:
+            scopes = ['network', 'data']
+        elif isinstance(scope_value, str):
+            scopes = [part.strip() for part in scope_value.split(',') if part.strip()]
+        elif isinstance(scope_value, Sequence):
+            scopes = []
+            for item in scope_value:
+                if isinstance(item, str):
+                    scopes.extend(part.strip() for part in item.split(',') if part.strip())
+                else:
+                    scopes.append(str(item).strip())
+        else:
+            scopes = [str(scope_value).strip()]
+
+        invalid = [scope for scope in scopes if scope not in STAGE1_INHERIT_SCOPES]
+        if invalid:
+            raise ValueError(
+                f"Unsupported inherit_stage1_scope: {invalid}. "
+                f"Supported scopes: {STAGE1_INHERIT_SCOPES}"
+            )
+
+        deduped = []
+        for scope in scopes:
+            if scope not in deduped:
+                deduped.append(scope)
+        return tuple(deduped or ('network', 'data'))
+
+    @staticmethod
+    def _apply_inherit_stage1_yaml(opt):
+        """
+        在Stage 2初始化网络前，从指定的Stage 1 YAML/opts中按scope继承参数。
+        对 data/network 采用白名单，只补充 Stage 2 当前 YAML 未显式声明的 Stage 1 相关配置；
+        scenes/hardware 若显式请求，则整段继承。
+        """
+        inherit_yaml = getattr(opt, 'inherit_stage1_yaml', '')
+        if not inherit_yaml:
+            return opt
+
+        inherit_yaml = os.path.abspath(inherit_yaml)
+        if not os.path.exists(inherit_yaml):
+            raise FileNotFoundError(f"inherit_stage1_yaml not found: {inherit_yaml}")
+        inherit_scopes = GridHashFitTrainer._normalize_inherit_stage1_scope(
+            getattr(opt, 'inherit_stage1_scope', 'network,data')
+        )
+
+        with open(inherit_yaml, 'r', encoding='utf-8') as f:
+            stage1_cfg = yaml.safe_load(f) or {}
+
+        explicit_stage2_keys = GridHashFitTrainer._collect_stage2_explicit_keys(
+            getattr(opt, 'p_yaml', '')
+        )
+        inherited_summary = {}
+        skipped_summary = {}
+        for scope in inherit_scopes:
+            if scope == 'scenes':
+                if 'scenes_setting' in explicit_stage2_keys:
+                    skipped_summary['scenes_setting'] = ['<explicit_in_stage2_yaml>']
+                    continue
+                scenes_cfg = stage1_cfg.get('scenes_setting')
+                if scenes_cfg:
+                    setattr(opt, 'scenes_setting', scenes_cfg)
+                    inherited_summary['scenes_setting'] = list(scenes_cfg.keys())
+                continue
+
+            section_name = STAGE1_INHERIT_SECTION_MAP[scope]
+            section_cfg = stage1_cfg.get(section_name, {})
+            if not isinstance(section_cfg, dict):
+                continue
+
+            allowed_keys = STAGE1_INHERIT_KEY_WHITELIST.get(section_name, None)
+            explicit_keys = explicit_stage2_keys.get(section_name, set())
+            inherited_keys = []
+            skipped_keys = []
+            for key, value in section_cfg.items():
+                if allowed_keys is not None and key not in allowed_keys:
+                    continue
+                if key in explicit_keys:
+                    skipped_keys.append(key)
+                    continue
+                setattr(opt, key, value)
+                inherited_keys.append(key)
+            if inherited_keys:
+                inherited_summary[section_name] = inherited_keys
+            if skipped_keys:
+                skipped_summary[section_name] = skipped_keys
+
+        if inherited_summary:
+            print(f"✅ 从Stage 1配置继承参数: {inherit_yaml}")
+            print(f"   scopes: {', '.join(inherit_scopes)}")
+            for section_name, keys in inherited_summary.items():
+                print(f"   {section_name}: {', '.join(keys)}")
+        else:
+            print(f"⚠️  inherit_stage1_yaml未提供可继承的scope字段: {inherit_yaml}")
+        for section_name, keys in skipped_summary.items():
+            print(f"   skip override by stage2 yaml | {section_name}: {', '.join(keys)}")
+
+        opt.inherit_stage1_yaml = inherit_yaml
+        opt.inherit_stage1_scope = ','.join(inherit_scopes)
+        return opt
+
+    @staticmethod
+    def _load_yaml_dict(yaml_path):
+        if not yaml_path:
+            return {}
+        yaml_path = str(yaml_path).strip()
+        if not yaml_path:
+            return {}
+        yaml_path_abs = yaml_path if os.path.isabs(yaml_path) else os.path.join(project_root, yaml_path)
+        if not os.path.exists(yaml_path_abs):
+            return {}
+        with open(yaml_path_abs, 'r', encoding='utf-8') as f:
+            cfg = yaml.safe_load(f) or {}
+        return cfg if isinstance(cfg, dict) else {}
+
+    @staticmethod
+    def _merge_section_key_sets(target, source):
+        for section_name, keys in source.items():
+            target.setdefault(section_name, set()).update(keys)
+        return target
+
+    @staticmethod
+    def _collect_declared_keys_from_cfg(cfg):
+        declared = {}
+        for section_name in ('data_setting', 'network_setting', 'hardware_setting'):
+            section_cfg = cfg.get(section_name, None)
+            if isinstance(section_cfg, dict):
+                declared[section_name] = set(section_cfg.keys())
+        if isinstance(cfg.get('scenes_setting', None), dict):
+            declared['scenes_setting'] = {'__section__'}
+        return declared
+
+    @classmethod
+    def _collect_stage2_explicit_keys(cls, yaml_path, _visited=None):
+        yaml_path = str(yaml_path or '').strip()
+        if not yaml_path:
+            return {}
+        yaml_path_abs = yaml_path if os.path.isabs(yaml_path) else os.path.join(project_root, yaml_path)
+        if _visited is None:
+            _visited = set()
+        if yaml_path_abs in _visited:
+            return {}
+        _visited.add(yaml_path_abs)
+
+        cfg = cls._load_yaml_dict(yaml_path_abs)
+        if not cfg:
+            return {}
+
+        declared = {}
+        base_yaml = cfg.get('p_yaml') or cfg.get('exp_setting', {}).get('p_yaml')
+        if base_yaml:
+            declared = cls._collect_stage2_explicit_keys(base_yaml, _visited=_visited)
+        return cls._merge_section_key_sets(declared, cls._collect_declared_keys_from_cfg(cfg))
 
     def _get_train_log_filename(self, exp_name):
         return f"{exp_name}.log"
@@ -76,10 +272,11 @@ class GridHashFitTrainer(BaseTrainer):
 
         # Stage 1组件（将被冻结）
         self.vis_encoder = components.create_visual_encoder()
+        self.feat_patch_dim = self.vis_encoder.output_channel
         self.vis_aggregator = components.create_aggregator(
-            self.vis_encoder.output_channel
+            self.feat_patch_dim
         )
-        self.feat_q_dim = self.vis_encoder.output_channel
+        self.feat_q_dim = int(getattr(self.vis_aggregator, 'output_dim', self.feat_patch_dim))
 
         posenc_multires_rc = int(getattr(self.opt, 'posenc_multires_rc', 8))
         posenc_multires_rot = int(getattr(self.opt, 'posenc_multires_rot', 6))
@@ -99,12 +296,14 @@ class GridHashFitTrainer(BaseTrainer):
 
         # Stage 2组件（将被训练）
         self.grid = components.create_grid()
+        self.feat_grid_dim = int(getattr(self.grid, 'output_dim', self.feat_q_dim))
         # version1：
         self.grid_mlp = components.create_grid_mlp(
-            self.feat_q_dim,
+            self.feat_grid_dim,
             self.pos_encoder_grid.out_dim,
             hidden_dim=grid_mlp_hidden_dim,
             num_blocks=grid_mlp_num_blocks,
+            output_dim=self.feat_q_dim,
         )
 
         # 保存grid_args供后续使用
@@ -1183,8 +1382,7 @@ if __name__ == "__main__":
     args.test_mode = 'gallery_bank'
     exp_name_override = None
 
-    from trainer_depends.config.parser import get_parse
-    opt = get_parse()
+    opt = get_parse(print_summary=False)
     if exp_name_override:
         opt.exp_name = exp_name_override
 

@@ -78,6 +78,9 @@ class SALAD_Residual(nn.Module):
         self.with_dustbin = with_dustbin
         self.use_residual = use_residual
         self.base_dim = base_dim
+        self.residual_out_dim = self.num_clusters * self.cluster_dim
+        self.base_expand_factor = max(1, self.residual_out_dim // self.base_dim)
+        self.output_dim = self.residual_out_dim if self.use_residual else (self.base_dim + self.residual_out_dim)
 
         if dropout > 0:
             dropout = nn.Dropout(dropout)
@@ -108,6 +111,12 @@ class SALAD_Residual(nn.Module):
         )
         # Dustbin parameter z
         self.dust_bin = nn.Parameter(torch.tensor(0.)) #todo:改为0初始化看看,org=1.
+
+        # Keep the module schema stable across save/load. Older checkpoints may
+        # contain this projection even before the first forward in a new process.
+        expanded_base_dim = self.base_dim * self.base_expand_factor
+        if self.use_residual and expanded_base_dim != self.residual_out_dim:
+            self.base_projection = nn.Linear(self.base_dim, self.residual_out_dim)
 
     def forward(self, x):
         t = x[:, 0]
@@ -147,15 +156,16 @@ class SALAD_Residual(nn.Module):
             # 方案1: 残差结构（推荐）
             # base是低频，residual是高频修正
             base_expanded = base.unsqueeze(-1).expand(-1, -1,
-                                                      self.num_clusters * self.cluster_dim // self.base_dim)
+                                                      self.base_expand_factor)
             base_expanded = base_expanded.reshape(base.shape[0], -1)
 
             # 确保维度匹配
             if base_expanded.shape[1] != residual_agg.shape[1]:
-                # 用一个线性层调整base维度
                 if not hasattr(self, 'base_projection'):
-                    self.base_projection = nn.Linear(base.shape[1],
-                                                     residual_agg.shape[1]).to(base.device)
+                    raise RuntimeError(
+                        "SALAD_Residual base_projection is required for this configuration "
+                        "but was not initialized in __init__."
+                    )
                 base_expanded = self.base_projection(base)
 
             # feat = base_expanded + residual_agg  # 残差相加

@@ -1,6 +1,6 @@
 exp_setting:
-  dir2save_log: gen_fm_exps/logs  # 相对于项目根目录
-  dir2save_ckpt: gen_fm_exps/ckpts  # 相对于项目根目录
+  dir2save_log: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/logs  # 绝对路径
+  dir2save_ckpt: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts  # 绝对路径
   exp_name: stage1_wingtra_CLsms_woANCE
   save_freq: 5
   tensorboard: True
@@ -80,6 +80,13 @@ learning_setting:
 
 
 network_setting:
+  aggregator_type: salad
+  aggregator_config:
+    output_dim: 1024
+    cluster_dim: 64
+    hidden_layer_dim: 512
+    use_residual: true
+    with_dustbin: true
   backbone: dinov3
   freeze_backbone: true
   backbone_config: {}

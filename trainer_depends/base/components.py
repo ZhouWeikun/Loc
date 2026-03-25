@@ -70,34 +70,86 @@ class NetworkComponents:
             aggregator: 聚合器模型
         """
         agg_type = getattr(self.opt, 'aggregator_type', 'salad')
+        aggregator_config = dict(getattr(self.opt, 'aggregator_config', {}) or {})
         imgsize2net = int(getattr(self.opt, 'imgsize2net', 224))
         backbone_name = str(getattr(self.opt, 'backbone', '')).lower()
         patchsize = 14 if 'dinov2' in backbone_name else 16
 
         if agg_type == 'salad':
             from models.Head.salad_residual import SALAD_Residual
+
+            use_residual = bool(aggregator_config.get('use_residual', True))
+            cluster_dim = int(aggregator_config.get('cluster_dim', 64))
+            num_clusters = aggregator_config.get('num_clusters')
+            output_dim = aggregator_config.get('output_dim')
+            if output_dim is not None:
+                output_dim = int(output_dim)
+                residual_out_dim = output_dim if use_residual else (output_dim - feat_dim)
+                if residual_out_dim <= 0:
+                    raise ValueError(
+                        f"SALAD output_dim must be larger than base_dim={feat_dim} when use_residual={use_residual}, "
+                        f"got output_dim={output_dim}"
+                    )
+                if num_clusters is None:
+                    if residual_out_dim % cluster_dim != 0:
+                        raise ValueError(
+                            f"SALAD output_dim={output_dim} is incompatible with cluster_dim={cluster_dim} "
+                            f"and use_residual={use_residual}"
+                        )
+                    num_clusters = residual_out_dim // cluster_dim
+                else:
+                    num_clusters = int(num_clusters)
+                    if num_clusters * cluster_dim != residual_out_dim:
+                        raise ValueError(
+                            f"SALAD num_clusters * cluster_dim = {num_clusters * cluster_dim} does not match "
+                            f"required residual_out_dim={residual_out_dim} for output_dim={output_dim}"
+                        )
+            else:
+                num_clusters = int(num_clusters) if num_clusters is not None else 16
+
             aggregator = SALAD_Residual(
                 input_feat_dim=feat_dim,
                 base_dim=feat_dim,
                 img_hw=(imgsize2net, imgsize2net),
                 patchsize=patchsize,
-                num_clusters=16,
-                cluster_dim=64
+                num_clusters=num_clusters,
+                cluster_dim=cluster_dim,
+                dropout=float(aggregator_config.get('dropout', 0.3)),
+                with_dustbin=bool(aggregator_config.get('with_dustbin', True)),
+                hidden_layer_dim=int(aggregator_config.get('hidden_layer_dim', 512)),
+                use_residual=use_residual,
             ).to(self.device)
             print(f"✅ 创建SALAD聚合器")
             print(f"   token_grid: {imgsize2net // patchsize}x{imgsize2net // patchsize} (patchsize={patchsize})")
+            print(
+                f"   SALAD配置: num_clusters={num_clusters}, cluster_dim={cluster_dim}, "
+                f"hidden_layer_dim={int(aggregator_config.get('hidden_layer_dim', 512))}, "
+                f"use_residual={use_residual}, with_dustbin={bool(aggregator_config.get('with_dustbin', True))}"
+            )
 
         elif agg_type == 'g2m':
             from models.Head.G2M import G2M
+            out_channels = int(aggregator_config.get('output_dim', aggregator_config.get('out_channels', feat_dim)))
+            rank = int(aggregator_config.get('rank', 1024))
+            p = float(aggregator_config.get('p', 3.0))
+            eps = float(aggregator_config.get('eps', 1e-6))
             aggregator = G2M(
                 in_channels=feat_dim,
-                out_channels=feat_dim,
-                rank=1024
+                out_channels=out_channels,
+                rank=rank,
+                p=p,
+                eps=eps,
             ).to(self.device)
             print(f"✅ 创建G2M聚合器")
+            print(f"   G2M配置: out_channels={out_channels}, rank={rank}, p={p}, eps={eps}")
 
         else:
             raise ValueError(f"未知的聚合器类型: {agg_type}")
+
+        if not hasattr(aggregator, 'output_dim'):
+            aggregator.output_dim = feat_dim
+        print(f"   输入维度: {feat_dim}D")
+        print(f"   输出维度: {int(aggregator.output_dim)}D")
 
         return aggregator
 
@@ -219,9 +271,18 @@ class NetworkComponents:
         blas = instantiate(grid_args.blas, pointcloud=None)
         grid = instantiate(grid_args.grid, blas=blas).to(self.device)
 
+        grid_base_dim = int(getattr(grid, 'feature_dim', 0))
+        grid_num_lods = int(getattr(grid, 'num_lods', len(getattr(grid, 'resolutions', [])) or 1))
+        grid_multiscale_type = str(getattr(grid, 'multiscale_type', 'sum'))
+        grid_output_dim = grid_base_dim * grid_num_lods if grid_multiscale_type == 'cat' else grid_base_dim
+        grid.output_dim = grid_output_dim
+
         print(f"✅ 创建Grid (INGP)")
         print(f"   配置文件: {config_path}")
-        print(f"   特征维度: {grid.feature_dim}")
+        print(f"   单层特征维度: {grid_base_dim}")
+        print(f"   LOD数量: {grid_num_lods}")
+        print(f"   多尺度聚合: {grid_multiscale_type}")
+        print(f"   有效输出维度: {grid_output_dim}")
 
         # 保存grid_args供后续使用
         self.grid_args = grid_args
@@ -229,7 +290,7 @@ class NetworkComponents:
         return grid
 
 
-    def create_grid_mlp(self, input_dim, condition_dim, hidden_dim=512, num_blocks=1):
+    def create_grid_mlp(self, input_dim, condition_dim, hidden_dim=512, num_blocks=1, output_dim=None):
         """
         创建条件MLP (Grid MLP)
 
@@ -238,18 +299,22 @@ class NetworkComponents:
             condition_dim: 条件特征维度（位置编码维度）
             hidden_dim: 隐藏层维度
             num_blocks: MLP块数量
+            output_dim: 输出特征维度；为None时与input_dim相同
 
         Returns:
             grid_mlp: 条件MLP模型
         """
         from models.cond_modulator_shallow_serial import SerialModulatorShallow
 
+        if output_dim is None:
+            output_dim = input_dim
+
         grid_mlp = SerialModulatorShallow(
             input_dim=input_dim,
             condition_dim=condition_dim,
             hidden_dim=hidden_dim,
             num_blocks=num_blocks,
-            output_dim=input_dim,
+            output_dim=output_dim,
             condition_operator='add'
         ).to(self.device)
 
@@ -258,6 +323,7 @@ class NetworkComponents:
         print(f"   条件维度: {condition_dim}D")
         print(f"   隐藏维度: {hidden_dim}D")
         print(f"   块数量: {num_blocks}")
+        print(f"   输出维度: {output_dim}D")
 
         return grid_mlp
 

@@ -37,6 +37,7 @@ class G2M(nn.Module):
             eps (float): Epsilon for numerical stability in GeM.
         """
         super(G2M, self).__init__()
+        self.output_dim = out_channels
 
         # 1. Main Branch
         self.main_gem = GeM(p=p, eps=eps)

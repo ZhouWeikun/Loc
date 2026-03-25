@@ -131,12 +131,13 @@ class VisualEncoderTrainer(BaseTrainer):
 
         # 视觉编码器（冻结）
         self.vis_encoder = components.create_visual_encoder()
-        self.feat_q_dim = self.vis_encoder.output_channel
+        self.feat_patch_dim = self.vis_encoder.output_channel
 
         # 特征聚合器（可训练）
         self.vis_aggregator = components.create_aggregator(
-            self.feat_q_dim
+            self.feat_patch_dim
         )
+        self.feat_q_dim = int(getattr(self.vis_aggregator, 'output_dim', self.feat_patch_dim))
 
         print("="*80 + "\n")
 
@@ -561,7 +562,7 @@ class VisualEncoderTrainer(BaseTrainer):
 
             # 构建 Faiss 索引
             import faiss
-            feat_gallery_index = faiss.IndexFlatL2(self.feat_q_dim)
+            feat_gallery_index = faiss.IndexFlatL2(int(feats_gallery.shape[1]))
             feat_gallery_index.add(feats_gallery.numpy())
 
             # 统计 Recall

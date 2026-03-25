@@ -65,6 +65,8 @@ def get_parse(print_summary=True):
     # Stage checkpoint配置（用于多阶段训练）
     parser.add_argument('--load_stage1_ckpt', default="", type=str, help='Stage 1的checkpoint路径')
     parser.add_argument('--load_stage2_ckpt', default="", type=str, help='Stage 2的checkpoint路径')
+    parser.add_argument('--inherit_stage1_yaml', default="", type=str, help='Stage 2初始化时继承Stage 1配置参数的opts/base yaml路径')
+    parser.add_argument('--inherit_stage1_scope', default='network,data', type=str, help='Stage 2从Stage 1 YAML继承的范围: network,data,scenes,hardware，可用逗号分隔')
     parser.add_argument('--inherit_stage2_yaml', default="", type=str, help='Stage 3初始化时继承Stage 2网络结构参数的opts/base yaml路径')
     parser.add_argument('--inherit_stage2_scope', default='network', type=str, help='Stage 3从Stage 2 YAML继承的范围: network,data,scenes,hardware，可用逗号分隔')
 
@@ -253,13 +255,23 @@ def get_parse(print_summary=True):
         raise TypeError(f"backbone_config must be a dict, got {type(backbone_config).__name__}")
     opt.backbone_config = dict(backbone_config)
 
+    aggregator_config = getattr(opt, 'aggregator_config', {})
+    if aggregator_config is None:
+        aggregator_config = {}
+    if not isinstance(aggregator_config, dict):
+        raise TypeError(f"aggregator_config must be a dict, got {type(aggregator_config).__name__}")
+    opt.aggregator_config = dict(aggregator_config)
+
     # --- 7. 组织参数到 group_dict ---
     group_info = {
         'exp_setting': ['p_yaml', 'exp_name', 'dir2save_log', 'dir2save_ckpt', 'load2train', 'load2test',
-                        'load_stage1_ckpt', 'load_stage2_ckpt', 'inherit_stage2_yaml', 'inherit_stage2_scope', 'tensorboard',
+                        'load_stage1_ckpt', 'load_stage2_ckpt',
+                        'inherit_stage1_yaml', 'inherit_stage1_scope',
+                        'inherit_stage2_yaml', 'inherit_stage2_scope', 'tensorboard',
                         'save_freq', 'val', 'val_freq',
                         'p_satinfo_json', 'p_uavinfo_json', 'p_uav_geocsv'],
         'data_setting': [
+            'pad_mode',
             'imgsize2net',
             'satimgsize2crop',
             'n_rand2sample_per_pos',
@@ -275,6 +287,7 @@ def get_parse(print_summary=True):
             'freeze_backbone',
             'backbone_config',
             'aggregator_type',
+            'aggregator_config',
             'freeze_grid',
             'p_grid_config_yaml',
             'posenc_multires_rc',

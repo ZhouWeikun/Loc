@@ -1,5 +1,6 @@
 import os
 import json
+from fractions import Fraction
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,40).__str__()
 # from torchvision.transforms import InterpolationMode
 from PIL import Image
@@ -306,14 +307,31 @@ class SatDataset(object):
 
         return sat_tiles, nrcs_girdcoord_center
 
-    def mk_sacle_levels(self,n_level=3):
-        # mk a scale_levels
-        delta_scale = (self.satimgsize_scale_to_ref_m_boundary[1]-self.satimgsize_scale_to_ref_m_boundary[0])/n_level
-        lower = torch.linspace(start=self.satimgsize_scale_to_ref_m_boundary[0],end=self.satimgsize_scale_to_ref_m_boundary[1]-delta_scale,steps=n_level,dtype=torch.float32)
-        upper = torch.linspace(start=self.satimgsize_scale_to_ref_m_boundary[0]+delta_scale,end=self.satimgsize_scale_to_ref_m_boundary[1], steps=n_level,dtype=torch.float32)
-        scale_radio_to_200m_list = 0.5*(lower+upper)
-        satimgsize_list = scale_radio_to_200m_list*self.scale_ref_m/self.geo_res_m
-        return scale_radio_to_200m_list,satimgsize_list
+    def mk_sacle_levels(self, n_level=3, scale_mode="linear"):
+        scale_mode = str(scale_mode).strip().lower()
+        if scale_mode not in ("linear", "log"):
+            raise ValueError(f"scale_mode must be 'linear' or 'log', got {scale_mode}")
+        n_level = int(n_level)
+        if n_level <= 0:
+            raise ValueError("n_level must be > 0")
+
+        s_min = float(self.satimgsize_scale_to_ref_m_boundary[0])
+        s_max = float(self.satimgsize_scale_to_ref_m_boundary[1])
+        if scale_mode == "linear":
+            delta_scale = (s_max - s_min) / n_level
+            lower = torch.linspace(start=s_min, end=s_max - delta_scale, steps=n_level, dtype=torch.float32)
+            upper = torch.linspace(start=s_min + delta_scale, end=s_max, steps=n_level, dtype=torch.float32)
+            scale_radio_to_200m_list = 0.5 * (lower + upper)
+        else:
+            log_min = np.log(max(s_min, 1e-6))
+            log_max = np.log(max(s_max, 1e-6))
+            delta_log = (log_max - log_min) / n_level
+            lower = torch.linspace(start=log_min, end=log_max - delta_log, steps=n_level, dtype=torch.float32)
+            upper = torch.linspace(start=log_min + delta_log, end=log_max, steps=n_level, dtype=torch.float32)
+            scale_radio_to_200m_list = torch.exp(0.5 * (lower + upper))
+
+        satimgsize_list = scale_radio_to_200m_list * self.scale_ref_m / self.geo_res_m
+        return scale_radio_to_200m_list, satimgsize_list
 
     """funcs about cropping by 4d coords:"""
     def crop_satimg_by_4d_coords(self, coords_4d, apply_rotation=True, random_satmap=False):
@@ -671,12 +689,16 @@ class UAVDataset(object):
                  use_augmentation=True,
                  name=None,
                  device='cpu',
+                 split_train_ratio=0.9,
+                 split_mode='segment',
                  **kwargs,
                  ):
         # read corresponding uav imgs & mate info
         with open(p_uavinfo_json, "r") as f:
             self.uavinfo_dict = json.load(f)
         self.name = name if name is not None else os.path.splitext(os.path.basename(p_uavinfo_json))[0]
+        self.split_train_ratio = float(split_train_ratio)
+        self.split_mode = str(split_mode).strip().lower()
         self.device = torch.device(device) if isinstance(device, str) else device
         if self.device.type != 'cpu':
             raise ValueError("UAVDataset coords are kept on CPU; pass device='cpu' or leave default.")
@@ -719,7 +741,7 @@ class UAVDataset(object):
         self.uav_rots_torch = torch.from_numpy(self.uav_rots).to(device=self.device, dtype=torch.float32)[...,None]
         self.uav_scales_torch = torch.from_numpy(self.uav_scales).to(device=self.device, dtype=torch.float32)[...,None]
         self.uav_coords_4d_torch = torch.concatenate([self.uav_nrcs_torch, self.uav_rots_torch, self.uav_scales_torch], dim=-1)
-        self.split_uav_dataset()
+        self.split_uav_dataset(train_ratio=self.split_train_ratio, split_mode=self.split_mode)
 
         self.switch_stage(stage)
 
@@ -749,20 +771,56 @@ class UAVDataset(object):
 
 
     """funcs about handling uavings:"""
-    def split_uav_dataset(self, train_radio=0.9):
-        # split the dataset for train/val/test
-        n_train = int(len(self.uavimg_paths) * train_radio)
-        self.n_train = n_train
-        self.train_ratio = train_radio
+    def split_uav_dataset(self, train_ratio=0.9, split_mode='segment'):
+        n_samples = len(self.uavimg_paths)
+        train_ratio = float(train_ratio)
+        split_mode = str(split_mode).strip().lower()
+        if not (0.0 < train_ratio < 1.0):
+            raise ValueError(f"train_ratio must be in (0, 1), got {train_ratio}")
+        if split_mode not in ('segment', 'interval', 'random'):
+            raise ValueError(f"split_mode must be 'segment', 'interval', or 'random', got {split_mode!r}")
 
-        self.uavimg_paths_train = self.uavimg_paths[:n_train]
-        self.uav_lonlats_train = self.uav_latlons[:n_train]
+        indices = np.arange(n_samples, dtype=np.int64)
+        if split_mode == 'segment':
+            n_train = int(n_samples * train_ratio)
+            n_train = min(max(n_train, 1), max(n_samples - 1, 1))
+            train_indices = indices[:n_train]
+            test_indices = indices[n_train:]
+        elif split_mode == 'random':
+            n_train = int(n_samples * train_ratio)
+            n_train = min(max(n_train, 1), max(n_samples - 1, 1))
+            rng = np.random.RandomState(2026)
+            perm = rng.permutation(indices)
+            train_indices = np.sort(perm[:n_train])
+            test_indices = np.sort(perm[n_train:])
+        else:
+            ratio_frac = Fraction(str(train_ratio)).limit_denominator(1000)
+            period = int(ratio_frac.denominator)
+            train_per_period = int(ratio_frac.numerator)
+            offset_in_period = indices % period
+            train_mask = offset_in_period < train_per_period
+            train_indices = indices[train_mask]
+            test_indices = indices[~train_mask]
+            if len(train_indices) == 0 or len(test_indices) == 0:
+                n_train = int(n_samples * train_ratio)
+                n_train = min(max(n_train, 1), max(n_samples - 1, 1))
+                train_indices = indices[:n_train]
+                test_indices = indices[n_train:]
 
-        self.uavimg_paths_test = self.uavimg_paths[n_train:]
-        self.uav_lonlats_test = self.uav_latlons[n_train:]
+        self.n_train = int(len(train_indices))
+        self.train_ratio = train_ratio
+        self.split_mode = split_mode
+        self.train_indices = train_indices
+        self.test_indices = test_indices
 
-        self.uav_coords_4d_torch_train = self.uav_coords_4d_torch[:n_train]
-        self.uav_coords_4d_torch_test = self.uav_coords_4d_torch[n_train:]
+        self.uavimg_paths_train = [self.uavimg_paths[int(i)] for i in train_indices]
+        self.uav_lonlats_train = self.uav_latlons[train_indices]
+
+        self.uavimg_paths_test = [self.uavimg_paths[int(i)] for i in test_indices]
+        self.uav_lonlats_test = self.uav_latlons[test_indices]
+
+        self.uav_coords_4d_torch_train = self.uav_coords_4d_torch[train_indices]
+        self.uav_coords_4d_torch_test = self.uav_coords_4d_torch[test_indices]
 
 
     """funcs about get item:"""

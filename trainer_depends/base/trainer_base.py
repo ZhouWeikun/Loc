@@ -15,7 +15,7 @@ import os
 from torch.utils.tensorboard import SummaryWriter
 
 from trainer_depends.config.parser import get_parse
-from trainer_depends.utils.logger_utils import get_logger, get_unique_exp_dir
+from trainer_depends.utils.logger_utils import get_logger
 # from trainer_depends.datasets.dataset_wingtra_4d import UAVDataset, SatDataset
 from trainer_depends.datasets.dataset_neuloc_4d import UAVDataset, SatDataset
 
@@ -49,6 +49,9 @@ class BaseTrainer:
         self.logger = None
         self.writer = None
         self.exp_dir2save = None
+        self.log_dir2save = None
+        self.ckpt_dir2save = None
+        self._exp_backup_saved = False
 
 
     def _init_device(self):
@@ -64,6 +67,11 @@ class BaseTrainer:
         print(f"✅ 设备初始化: {self.device}")
 
 
+    def _get_train_log_filename(self, exp_name):
+        """返回训练日志文件名。子类可按需覆盖。"""
+        return "train.log"
+
+
     def _init_logger(self, exp_name=None):
         """
         初始化日志系统
@@ -76,20 +84,36 @@ class BaseTrainer:
         if exp_name is None:
             exp_name = opt.exp_name
 
-        # 创建唯一的实验目录
-        exp_name_unique = get_unique_exp_dir(opt.exps_dir, exp_name)
+        log_root = getattr(opt, 'dir2save_log', None) or getattr(opt, 'exps_dir', 'gen_fm_exps/logs')
+        ckpt_root = getattr(opt, 'dir2save_ckpt', None) or log_root
+        os.makedirs(log_root, exist_ok=True)
+
+        exp_name_unique = exp_name
+        counter = 0
+        while (
+            os.path.exists(os.path.join(log_root, exp_name_unique))
+            or os.path.exists(os.path.join(ckpt_root, exp_name_unique))
+        ):
+            counter += 1
+            exp_name_unique = f"{exp_name}_{counter}"
+
         opt.exp_name = exp_name_unique
-        self.exp_dir2save = os.path.join(opt.exps_dir, exp_name_unique)
-        os.makedirs(self.exp_dir2save, exist_ok=True)
+        self.log_dir2save = os.path.join(log_root, exp_name_unique)
+        self.ckpt_dir2save = os.path.join(ckpt_root, exp_name_unique)
+        self.exp_dir2save = self.ckpt_dir2save
+        os.makedirs(self.log_dir2save, exist_ok=True)
 
         # 初始化logger
-        log_path = os.path.join(self.exp_dir2save, "train.log")
+        log_filename = self._get_train_log_filename(exp_name_unique)
+        log_path = os.path.join(self.log_dir2save, log_filename)
         self.logger = get_logger(log_path, 'trainer_logger')
-        self.logger.info(f"实验目录: {self.exp_dir2save}")
+        self.logger.info(f"日志目录: {self.log_dir2save}")
+        self.logger.info(f"日志文件: {log_path}")
+        self.logger.info(f"Checkpoint目录: {self.ckpt_dir2save}")
 
         # 初始化tensorboard
         if opt.tensorboard:
-            tb_path = os.path.join(self.exp_dir2save, "train_tensorboard.log")
+            tb_path = os.path.join(self.log_dir2save, "train_tensorboard.log")
             self.writer = SummaryWriter(tb_path)
             self.logger.info(f"Tensorboard日志: {tb_path}")
 
@@ -106,9 +130,16 @@ class BaseTrainer:
         opt = self.opt
         scenes = opt.scenes_setting['scenes']
 
-        # Avoid CUDA init in forked DataLoader workers by keeping SatDataset on CPU.
+        # Choose where satellite tensors are cached/cropped.
         sat_device = self.device
-        if getattr(opt, "num_worker", 0) > 0 and self.device.type == "cuda":
+        if getattr(opt, "satmaps_on_cpu", False):
+            sat_device = torch.device("cpu")
+            msg = "satmaps_on_cpu=True; using CPU for SatDataset cache and cropping."
+            if self.logger:
+                self.logger.info(msg)
+            else:
+                print(msg)
+        elif getattr(opt, "num_worker", 0) > 0 and self.device.type == "cuda":
             sat_device = torch.device("cpu")
             msg = ("num_worker>0 with CUDA SatDataset triggers CUDA init in forked workers; "
                    "using CPU for SatDataset. Set num_worker=0 to keep CUDA dataset ops.")
@@ -124,6 +155,8 @@ class BaseTrainer:
 
         if create_train_loader:
             self.pair_dataloaders = {}
+
+        pad_mode = getattr(opt, "pad_mode", None)
 
         for scene in scenes:
             scene_name = scene['name']
@@ -142,27 +175,36 @@ class BaseTrainer:
                 imgsize2net=opt.imgsize2net,
                 name=scene_name,
                 device=sat_device,
+                pad_mode=pad_mode,
             )
             self.sat_datasets[scene_name] = sat_dataset
 
             # 创建UAVDataset (train)
             uav_dataset_train = UAVDataset(
                 p_uavinfo_json=scene['p_uavinfo_json'],
+                p_uav_geocsv=scene['p_uav_geocsv'],
                 sat_dataset=sat_dataset,
                 stage='train',
                 name=scene_name,
                 device='cpu',
+                pad_mode=pad_mode,
                 dataset_name=self.opt.scenes_setting['dataset_name'],
+                split_train_ratio=opt.split_train_ratio,
+                split_mode=opt.split_mode,
             )
             self.uav_datasets_train[scene_name] = uav_dataset_train
 
             # 创建UAVDataset (test)
             uav_dataset_test = UAVDataset(
                 p_uavinfo_json=scene['p_uavinfo_json'],
+                p_uav_geocsv=scene['p_uav_geocsv'],
                 sat_dataset=sat_dataset,
                 stage='test',
                 name=scene_name,
+                pad_mode=pad_mode,
                 dataset_name=self.opt.scenes_setting['dataset_name'],
+                split_train_ratio=opt.split_train_ratio,
+                split_mode=opt.split_mode,
             )
             self.uav_datasets_test[scene_name] = uav_dataset_test
 
@@ -255,10 +297,22 @@ class BaseTrainer:
         params_to_save['epoch'] = epoch
 
         # 保存
-        save_param(self.opt.exp_name, params_to_save)
+        save_dir = self.ckpt_dir2save or self.exp_dir2save or self.opt.exp_name
+        save_param(save_dir, params_to_save)
+
+        if (not self._exp_backup_saved) and save_dir:
+            try:
+                from tool.util_backup_exp_by_git import backup_experiment
+                backup_experiment(save_dir, self.opt)
+                self._exp_backup_saved = True
+            except Exception as exc:
+                if self.logger:
+                    self.logger.warning(f"首次checkpoint后备份实验信息失败: {exc}")
+                else:
+                    print(f"Warning: 首次checkpoint后备份实验信息失败: {exc}")
 
         if self.logger:
-            self.logger.info(f"✅ 已保存checkpoint: epoch {epoch}")
+            self.logger.info(f"✅ 已保存checkpoint: epoch {epoch}, dir={save_dir}")
 
 
     def _get_feats_fm_imgs(self, imgs):

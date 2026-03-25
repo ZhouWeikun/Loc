@@ -142,3 +142,12 @@ evaluate_img_encdoer/
 trainers/.exps/
 trainers/exps/
 trainers/vis_results/
+tmp_gallery_bank/
+
+train_img_encoder/
+train_map_singlemlp/
+train_map_multimlp/
+scripts/tmp_run_yamls/
+gen_fm_exps/
+fine_vis4paper/
+

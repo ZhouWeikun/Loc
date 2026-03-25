@@ -27,7 +27,7 @@ import numpy as np
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from trainers.stage2_grid_hashfit import GridHashFitTrainer
+from trainers.stage2_INGP import GridHashFitTrainer
 # from trainer_depends.base.components import NetworkComponents
 # import torch.nn.functional as F
 
@@ -686,7 +686,7 @@ class MetricNetTrainer(GridHashFitTrainer):
         Returns:
             dict: 包含各种准确率指标的字典
         """
-        from trainer_depends.datasets.util_loc_in_girds import (
+        from trainer_depends.datasets.util_core_loc_in_girds import (
             agg_seq_pdf,
             compute_agged_pred_nneighbors_id
         )
@@ -1640,7 +1640,11 @@ class MetricNetTrainer(GridHashFitTrainer):
         print(f"测试样本数: {n_samples if n_samples else '全部'}")
         print(f"数据集: {'训练集' if use_train_uav else '测试集'}")
         print(f"{'=' * 60}\n")
-        from util_analyze_pred3d import compute_top_k_accuracy, print_accuracy_results, convert_3d_to_2d_predictions
+        from scripts.analysis.util_stage3_analyze_pred3d import (
+            compute_top_k_accuracy,
+            print_accuracy_results,
+            convert_3d_to_2d_predictions,
+        )
 
         # 获取数据集
         dataset = self.uav_dataset_train if use_train_uav else self.uav_dataset_test
@@ -1756,7 +1760,7 @@ class MetricNetTrainer(GridHashFitTrainer):
             raw_diff = torch.diff(coords_gt_all[:, 2])
             diff_rot_rad = (raw_diff + torch.pi) % (2 * torch.pi) - torch.pi
             pred_pdf_3d_shaped = pred_pdf_3d_all.reshape(-1, *n_coarse_3d)
-            from util_histogram_filter_3d import HistogramFilter3D
+            from util_core_histogram_filter_3d import HistogramFilter3D
             histfilter = HistogramFilter3D(H=n_coarse_3d[0], W=n_coarse_3d[1], O=n_coarse_3d[2],
                                            device=pred_pdf_3d_shaped.device)
             pred_pdf_3d_hist = pred_pdf_3d_shaped.permute(0, 3, 1, 2)
@@ -1883,7 +1887,10 @@ class MetricNetTrainer(GridHashFitTrainer):
                 ], dim=1)  # [N, M, 4]
 
             #评估&输出
-            from util_analyze_pred3d import compute_topN_acc_given_threshold,print_topN_acc_results
+            from scripts.analysis.util_stage3_analyze_pred3d import (
+                compute_topN_acc_given_threshold,
+                print_topN_acc_results,
+            )
             dist_lambda=1.0
             thresh_cfg = {
                 'norm_dist': self.sat_dataset.halfimg_radius_nrc*dist_lambda,  # 例如 3米 或 3个Grid单位
@@ -1931,7 +1938,11 @@ class MetricNetTrainer(GridHashFitTrainer):
         print(f"测试样本数: {n_samples if n_samples else '全部'}")
         print(f"数据集: {'训练集' if use_train_uav else '测试集'}")
         print(f"{'='*60}\n")
-        from util_analyze_pred3d import compute_top_k_accuracy,print_accuracy_results,convert_3d_to_2d_predictions
+        from scripts.analysis.util_stage3_analyze_pred3d import (
+            compute_top_k_accuracy,
+            print_accuracy_results,
+            convert_3d_to_2d_predictions,
+        )
 
         # 获取数据集
         dataset = self.uav_dataset_train if use_train_uav else self.uav_dataset_test
@@ -2047,7 +2058,7 @@ class MetricNetTrainer(GridHashFitTrainer):
             raw_diff = torch.diff(coords_gt_all[:, 2])
             diff_rot_rad = (raw_diff + torch.pi) % (2 * torch.pi) - torch.pi
             pred_pdf_3d_shaped = pred_pdf_3d_all.reshape(-1,*n_coarse_3d)
-            from util_histogram_filter_3d import HistogramFilter3D
+            from util_core_histogram_filter_3d import HistogramFilter3D
             histfilter = HistogramFilter3D(H=n_coarse_3d[0], W=n_coarse_3d[1], O=n_coarse_3d[2],device=pred_pdf_3d_shaped.device)
             pred_pdf_3d_hist = pred_pdf_3d_shaped.permute(0, 3, 1, 2)
             preds_filtered = []
@@ -3149,7 +3160,7 @@ class MetricNetTrainer(GridHashFitTrainer):
         from trainer_depends.datasets.util_coords_4d_to_euc5d import CoordsNormProcessor
         self.coord_normer = CoordsNormProcessor(self.sat_dataset)
 
-        from trainer_depends.datasets.util_subspace_sampler import SubspaceSampler
+        from trainer_depends.datasets.util_core_subspace_sampler import SubspaceSampler
         self.subspace_sampler = SubspaceSampler(
             sat_dataset=self.sat_dataset,
             n_coarse=self.n_coarse,
@@ -3311,7 +3322,7 @@ class MetricNetTrainer(GridHashFitTrainer):
 
         # 4.5 初始化4d坐标处理工具
         # from trainer_depends.datasets.util_coords_4d_to_euc5d import CoordsNormProcessor
-        from trainer_depends.datasets.util_coords_translater import CoordsNormProcessor
+        from trainer_depends.datasets.util_core_coords_translater import CoordsNormProcessor
         self.coord_normer = CoordsNormProcessor(self.sat_dataset)
 
         # 初始化高斯邻域重要性采样器
@@ -3322,7 +3333,7 @@ class MetricNetTrainer(GridHashFitTrainer):
         self.gs_sampler = NormalizedGaussianSampler(self.normed_sigmas,device=self.device)
 
         # 初始化子空间采样器（替代原来的 coord_sampler 和 udf_computer）
-        from trainer_depends.datasets.util_subspace_sampler import SubspaceSampler
+        from trainer_depends.datasets.util_core_subspace_sampler import SubspaceSampler
         self.n_points_per_subspace = getattr(opt, 'n_points_per_subspace', 1)
         self.subspace_sampler = SubspaceSampler(
             sat_dataset=self.sat_dataset,
@@ -3330,11 +3341,14 @@ class MetricNetTrainer(GridHashFitTrainer):
             n_fine_per_coarse=self.n_fine_per_coarse
         )
 
-        from losses.CL_loss_fm_weight import SoftWeightedRelativeMSLoss,UnifiedGeometricContrastiveLoss,SimpleUnifiedContrastiveLoss
+        from losses.CL_losses_w_weight import SoftWeightedRelativeMSLoss,UnifiedGeometricContrastiveLoss,SimpleUnifiedContrastiveLoss
         sw_msloss = SoftWeightedRelativeMSLoss(mining_mode='max', beta=10.0, margin=0.)
         sgc_loss = SimpleUnifiedContrastiveLoss()
         # whm_loss = WeightedHardMiningLoss()
         # dwh_loss = DecoupledWeightedHardMiningLoss()
+        # 其他候选loss：
+        from losses.WeightedSoftTripletLoss_fm_mat import SWTLoss_fm_mat
+        loss_sws = SWTLoss_fm_mat(decoupling=False)
 
         # 6. 训练循环
         num_epochs = opt.num_epochs

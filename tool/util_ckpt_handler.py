@@ -12,15 +12,24 @@ import torch
 #     save_path = os.path.join('./exps', dirname, save_filename)
 #
 #     torch.save(dict2save, save_path)
-def save_param(dirname, dict2save):
+def _resolve_save_dir(save_dir_or_exp_name):
+    save_dir_or_exp_name = str(save_dir_or_exp_name)
+    if (
+        os.path.isabs(save_dir_or_exp_name)
+        or os.path.dirname(save_dir_or_exp_name)
+        or save_dir_or_exp_name.startswith(".")
+    ):
+        return save_dir_or_exp_name
+    return os.path.join('./gen_fm_exps/ckpts', save_dir_or_exp_name)
+
+
+def save_param(save_dir_or_exp_name, dict2save):
     """
     保存参数字典到文件。
     该函数会自动处理字典中的 PyTorch 模块，调用 .state_dict() 方法。
     """
-    if not os.path.isdir('./exps/'):
-        os.mkdir('./exps/')
-    if not os.path.isdir('./exps/' + dirname):
-        os.mkdir('./exps/' + dirname)
+    save_dir = _resolve_save_dir(save_dir_or_exp_name)
+    os.makedirs(save_dir, exist_ok=True)
 
     # 1. 准备要保存的 state_dict 字典
     state_dict_to_save = {}
@@ -45,7 +54,7 @@ def save_param(dirname, dict2save):
     else:
         save_filename = 'epoch%s.pth' % epoch_label
 
-    save_path = os.path.join('./exps', dirname, save_filename)
+    save_path = os.path.join(save_dir, save_filename)
 
     # 3. 保存处理后的 state_dict 字典
     torch.save(state_dict_to_save, save_path)

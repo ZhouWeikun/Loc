@@ -168,8 +168,7 @@ class VisualEncoderTrainer(BaseTrainer):
     def _init_multi_scene_dataloader(self):
         """初始化多场景训练数据加载器"""
         from trainer_depends.datasets.dataset_neuloc_4d_uav_sat_pair import UAVSatPairDataset, collate_uav_sat_pair
-        from trainer_depends.utils.util_sample_neg_nrcs import BoundedNegativeCoordinateSampler
-        from trainer_depends.datasets.util_coords_translater import CoordsNormProcessor
+        from trainer_depends.datasets.util_core_coords_translater import CoordsNormProcessor
 
         opt = self.opt
         scenes = opt.scenes_setting['scenes']
@@ -186,14 +185,12 @@ class VisualEncoderTrainer(BaseTrainer):
             sat_dataset = self.sat_datasets[scene_name]
             uav_dataset_train = self.uav_datasets_train[scene_name]
 
-            satmap_sampler = BoundedNegativeCoordinateSampler(self.device)
             pair_dataset = UAVSatPairDataset(
                 uav_dataset=uav_dataset_train,
                 sat_dataset=sat_dataset,
-                satmap_sampler=satmap_sampler,
                 device=self.device,
-                n_neg_per_sample=opt.batchsize_sat // opt.batchsize_uav, #控制负样本数=正样本数的倍率
-                use_bounded_sampling=False,
+                n_neg_per_query=opt.batchsize_sat // opt.batchsize_uav, #控制负样本数=正样本数的倍率
+                nrc_reject_sampling=False,
             )
 
             # 创建DataLoader
@@ -205,7 +202,7 @@ class VisualEncoderTrainer(BaseTrainer):
                 drop_last=True,
                 pin_memory=True,
                 collate_fn=collate_uav_sat_pair,
-                persistent_workers=True
+                persistent_workers=(opt.num_worker > 0)
             )
 
             pair_dataloaders[scene_name] = pair_dataloader
@@ -251,9 +248,9 @@ class VisualEncoderTrainer(BaseTrainer):
             print("✅ 启用混合精度训练 (AMP)")
 
         # 0.5 初始化可学习的权重损失（用于学习beta）
-        from losses.CL_loss_fm_weight import SoftMultiSimLoss_WeightedMax
-        self.sms_loss = SoftMultiSimLoss_WeightedMax(
-            init_beta=10.0,
+        from losses.CL_losses_w_weight import pairLoss_singleEdge_weightedHardest
+        self.sms_loss = pairLoss_singleEdge_weightedHardest(
+            beta=10.0,
             margin=0.0,
             learnable_beta=True
         ).to(self.device)
@@ -296,10 +293,10 @@ class VisualEncoderTrainer(BaseTrainer):
             for it, batch in tqdm.tqdm(enumerate(self.dataloader_train)):
                 # 获取图像数据
                 coords_uav = batch['coords_uav'].to(self.device)
-                uavimgs = batch['uav_imgs'].to(self.device)  # [B, C, H, W]
-                satimgs_pos = batch['sat_imgs_pos'].to(self.device)  # [B, C, H, W]
+                uavimgs = batch['uavimgs'].to(self.device)  # [B, C, H, W]
+                satimgs_pos = batch['satimgs_pos'].to(self.device)  # [B, C, H, W]
                 # 获取坐标数据
-                satimgs_neg = batch['sat_imgs_neg'].to(self.device)  # [B, C, H, W]
+                satimgs_neg = batch['satimgs_neg'].to(self.device)  # [B, C, H, W]
                 coords_neg = batch['coords_neg'].to(self.device)
                 if len(satimgs_neg.shape)>4:
                     satimgs_neg = satimgs_neg.reshape(-1,*satimgs_neg.shape[2:])
@@ -327,9 +324,10 @@ class VisualEncoderTrainer(BaseTrainer):
 
                 # =====================处理坐标&权重&loss=====================
                 # 由坐标计算坐标权重矩阵（与 feats_ref 顺序对齐：pos 在前，neg 在后）
+                compute_weights=False
                 weights_ref = None
                 scene_name = batch.get('scene_name', None)
-                if scene_name in self.coord_normers:
+                if scene_name in self.coord_normers and compute_weights:
                     coord_normer = self.coord_normers[scene_name]
                     normed_sigmas = self.coord_normed_sigmas[scene_name]
                     coords_ref = torch.cat([coords_uav, coords_neg], dim=0)
@@ -346,15 +344,15 @@ class VisualEncoderTrainer(BaseTrainer):
                     ).squeeze(1)
 
                 #version1:
-                loss_pos, loss_neg = self.sms_loss(feat_dist_mat, weights_ref, 1 - weights_ref)
-                loss = loss_pos + loss_neg
+                # loss_pos, loss_neg = self.sms_loss(feat_dist_mat, weights_ref, 1 - weights_ref)
+                # loss = loss_pos + loss_neg
                 # version0,sml_loss,不使用距离权重，硬HardMining:
-                # if not hasattr(self, 'pos_mask_mat'):
-                #     self.pos_mask_mat = torch.cat([
-                #         torch.eye(B),
-                #         torch.zeros(feat_dist_mat.shape[0],feat_dist_mat.shape[1]-B)
-                #     ], dim=-1).bool()  # [B, 2B]
-                # loss = loss_swt(feat_dist_mat, self.pos_mask_mat)
+                if not hasattr(self, 'pos_mask_mat'):
+                    self.pos_mask_mat = torch.cat([
+                        torch.eye(B),
+                        torch.zeros(feat_dist_mat.shape[0],feat_dist_mat.shape[1]-B)
+                    ], dim=-1).bool()  # [B, 2B]
+                loss = loss_swt(feat_dist_mat, self.pos_mask_mat)
 
                 # 反向传播
                 self.optimizer.zero_grad()

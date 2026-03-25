@@ -26,7 +26,7 @@ import os
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from trainers.stage2_grid_hashfit import GridHashFitTrainer
+from trainers.stage2_INGP import GridHashFitTrainer
 from trainer_depends.base.components import NetworkComponents
 from trainer_depends.utils.util_udf_computer import UDFComputer
 from models.pos_encoder import encode_4d_coords

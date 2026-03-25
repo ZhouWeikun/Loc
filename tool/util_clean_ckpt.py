@@ -140,6 +140,6 @@ if __name__ == "__main__":
     #         exit()
 
     # clean_checkpoints(args.directory, args.keep_interval, args.dry_run)
-
-    clean_checkpoints('/home/data/zwk/pyproj_neuloc_v0/trainers/exps/stage2_grid_hashfit_14'
-                      , 100, False)
+    #todo:先确定最优ckpt后再清理
+    clean_checkpoints('/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc03_tripleLoss_singleEdge_hardest_fm_mask_codebookW19_mlpH1024B1_PN1cubie'
+                      , 50, False)

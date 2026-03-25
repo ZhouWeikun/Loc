@@ -94,9 +94,8 @@ def copy_file_or_tree(path, target_dir):
         copyfile(path, target_path)
 
 def copyfiles2checkpoints(opt):
-    dir_name = os.path.join('exps', opt.exp_name)
-    if not os.path.isdir(dir_name):
-        os.mkdir(dir_name)
+    dir_name = os.path.join('gen_fm_exps', 'ckpts', opt.exp_name)
+    os.makedirs(dir_name, exist_ok=True)
 
     # record every run
     copy_file_or_tree('evaluate_retrieval_relrot_wingtra.py', dir_name)
@@ -124,9 +123,9 @@ def copyfiles2checkpoints(opt):
 
 
 def copyfiles2checkpoints_map_learner(opt):
-    dir_name = os.path.join(opt.exps_dir, opt.exp_name)
-    if not os.path.isdir(dir_name):
-        os.mkdir(dir_name)
+    base_dir = getattr(opt, 'dir2save_ckpt', None) or getattr(opt, 'exps_dir', 'gen_fm_exps/ckpts')
+    dir_name = os.path.join(base_dir, opt.exp_name)
+    os.makedirs(dir_name, exist_ok=True)
 
     # 1. 使用 vars() 将 Namespace 对象转换为字典
     args_dict = vars(opt)
@@ -172,25 +171,25 @@ def get_model_list(dirname, key):
 
 
 def save_network(network, dirname, epoch_label):
-    if not os.path.isdir('./exps/'+dirname):
-        os.mkdir('./exps/'+dirname)
+    save_dir = os.path.join('./gen_fm_exps/ckpts', dirname)
+    os.makedirs(save_dir, exist_ok=True)
     if isinstance(epoch_label, int):
         save_filename = 'epoch%03d.pth' % epoch_label
     else:
         save_filename = 'epoch%s.pth' % epoch_label
-    save_path = os.path.join('./exps', dirname, save_filename)
+    save_path = os.path.join(save_dir, save_filename)
     torch.save(network.cpu().state_dict(), save_path)
     if torch.cuda.is_available:
         network.cuda()
 
 def save_param(dirname, dict2save,epoch_label):
-    if not os.path.isdir('./exps/'+dirname):
-        os.mkdir('./exps/'+dirname)
+    save_dir = os.path.join('./gen_fm_exps/ckpts', dirname)
+    os.makedirs(save_dir, exist_ok=True)
     if isinstance(epoch_label, int):
         save_filename = 'epoch%03d.pth' % epoch_label
     else:
         save_filename = 'epoch%s.pth' % epoch_label
-    save_path = os.path.join('./exps', dirname, save_filename)
+    save_path = os.path.join(save_dir, save_filename)
 
     torch.save(dict2save, save_path)
 
@@ -329,7 +328,7 @@ def Distance(lata, loga, latb, logb):
     return distance
 
 
-LOG_FILENAME = "/exps/debug/train_w_uavre.log"
+LOG_FILENAME = "gen_fm_exps/logs/debug/train_w_uavre.log"
 def run_test():
     print("--- 开始日志调试 ---")
 

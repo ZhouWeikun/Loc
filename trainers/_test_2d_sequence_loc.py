@@ -39,7 +39,7 @@ def _test_2d_sequence_localization_accuracy(
     Returns:
         dict: 包含各种准确率指标的字典
     """
-    from trainer_depends.datasets.util_loc_in_girds import (
+    from trainer_depends.datasets.util_core_loc_in_girds import (
         agg_seq_pdf,
         compute_agged_pred_nneighbors_id
     )

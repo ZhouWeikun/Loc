@@ -6,6 +6,10 @@ def backup_experiment(exp_dir,opt=None):
     """
     将当前 Git 仓库的 commit hash 和未提交的修改保存到实验目录。
     """
+    if not exp_dir or not os.path.isdir(exp_dir):
+        print(f"跳过实验备份：目录不存在 {exp_dir}")
+        return
+
     git_info_path = os.path.join(exp_dir, 'git_info.txt')
 
     print("正在保存 Git 信息...")

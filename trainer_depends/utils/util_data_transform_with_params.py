@@ -75,11 +75,12 @@ class RandomScaleWithParams(torch.nn.Module):
 
     注意：这个transform应该在旋转之前应用，以保留更多有效图像内容
     """
-    def __init__(self, scale_range=(0.8, 1.2), base_size=224, interpolation=transforms.InterpolationMode.BILINEAR):
+    def __init__(self, scale_range=(0.8, 1.2), base_size=224, interpolation=transforms.InterpolationMode.BILINEAR, pad_mode=None):
         super().__init__()
         self.scale_range = scale_range
         self.base_size = base_size
         self.interpolation = interpolation
+        self.pad_mode = str(pad_mode).lower() if pad_mode is not None else None
         self.last_scale = None  # 记录最后一次使用的缩放因子
 
     def forward(self, img):
@@ -112,7 +113,10 @@ class RandomScaleWithParams(torch.nn.Module):
             pad_right = pad_total - pad_left
             pad_bottom = pad_total - pad_top
 
-            fill_val = _resolve_fill_value(img_resized, "mean")
+            if self.pad_mode in {"zero", "zeros", "0"}:
+                fill_val = 0
+            else:
+                fill_val = _resolve_fill_value(img_resized, "mean")
             if torch.is_tensor(img_resized):
                 if img_resized.ndim == 2:
                     if isinstance(fill_val, (list, tuple, np.ndarray)):
@@ -227,6 +231,7 @@ def mk_pil_transform_with_params(
         color_jitter=False,
         center_crop=False,
         rand_crop=False,
+        pad_mode=None,
 ):
     """
     创建带参数追踪的transform pipeline
@@ -255,19 +260,24 @@ def mk_pil_transform_with_params(
     if rand_crop:
         transform_list.append(transforms.RandomCrop(imgsize2net))
 
+    pad_mode_norm = str(pad_mode).lower() if pad_mode is not None else None
+    use_zero = pad_mode_norm in {"zero", "zeros", "0"}
+
     # ===== 关键顺序：先缩放，再旋转 =====
     # 1. 先添加可追踪的缩放（避免旋转导致的内容丢失）
     if rand_scale:
         transform_list.append(RandomScaleWithParams(
             scale_range=scale_range,
-            base_size=imgsize2net
+            base_size=imgsize2net,
+            pad_mode=pad_mode_norm,
         ))
 
     # 2. 再添加可追踪的旋转
     if rand_rot:
         transform_list.append(RandomRotationWithParams(
             degrees=rotation_range_deg,
-            interpolation=transforms.InterpolationMode.BILINEAR
+            interpolation=transforms.InterpolationMode.BILINEAR,
+            fill=0 if use_zero else "mean"
         ))
 
     # 其他标准transforms
@@ -294,7 +304,7 @@ def mk_pil_transform_with_params(
                 mean_arr = mean_arr * 255.0
             return tuple(int(round(x)) for x in mean_arr.tolist())
 
-        fill_val = _mean_fill_from_stats(mean)
+        fill_val = 0 if use_zero else _mean_fill_from_stats(mean)
         transform_list.append(
             transforms.RandomAffine(
                 **default_affine_params,
@@ -312,7 +322,7 @@ def mk_pil_transform_with_params(
 
     if rand_erase:
         transform_list.append(
-            transforms.RandomErasing(p=0.1, scale=(0.05, 0.15), ratio=(0.3, 3.3), value=1)
+            transforms.RandomErasing(p=0.1, scale=(0.05, 0.15), ratio=(0.3, 3.3), value=0.)
         )
 
     transform_list.append(transforms.Normalize(mean=mean, std=std))

@@ -1,5 +1,6 @@
 import os
 import json
+from fractions import Fraction
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,40).__str__()
 # from torchvision.transforms import InterpolationMode
 from PIL import Image
@@ -17,6 +18,9 @@ from trainer_depends.utils.util_data_transform_with_params import mk_pil_transfo
 from trainer_depends.utils.util_batch_rotation import batch_rotate_images_per_sample
 
 
+# ------------------------------------------------------------------
+# deug
+# ------------------------------------------------------------------
 def debug_plot_scale_hist(
         satimgsize_scale_to_ref_m,
         aff2d_corrected_mask,
@@ -67,6 +71,9 @@ def debug_plot_scale_hist(
         plt.show()
     plt.close()
 
+# ------------------------------------------------------------------
+# tools be used by dataset
+# ------------------------------------------------------------------
 def get_valid_range_mad(data, thresh=3.5):
     median = np.median(data)
     mad = np.median(np.abs(data - median))
@@ -107,6 +114,48 @@ def _compute_scale_filter_from_df(df, geo_res_m, scale_ref_m=None):
         "scale_mask": scale_mask,
     }
 
+
+def _compute_split_indices(n_samples, train_ratio=0.9, split_mode='segment'):
+    n_samples = int(n_samples)
+    train_ratio = float(train_ratio)
+    split_mode = str(split_mode).strip().lower()
+
+    if n_samples <= 0:
+        return np.array([], dtype=np.int64), np.array([], dtype=np.int64)
+    if not (0.0 < train_ratio < 1.0):
+        raise ValueError(f"train_ratio must be in (0, 1), got {train_ratio}")
+    if split_mode not in ('segment', 'interval', 'random'):
+        raise ValueError(f"split_mode must be 'segment', 'interval', or 'random', got {split_mode!r}")
+
+    indices = np.arange(n_samples, dtype=np.int64)
+    if split_mode == 'segment':
+        n_train = int(n_samples * train_ratio)
+        n_train = min(max(n_train, 1), max(n_samples - 1, 1))
+        return indices[:n_train], indices[n_train:]
+
+    if split_mode == 'random':
+        n_train = int(n_samples * train_ratio)
+        n_train = min(max(n_train, 1), max(n_samples - 1, 1))
+        rng = np.random.RandomState(2026)
+        perm = rng.permutation(indices)
+        train_indices = np.sort(perm[:n_train])
+        test_indices = np.sort(perm[n_train:])
+        return train_indices, test_indices
+
+    ratio_frac = Fraction(str(train_ratio)).limit_denominator(1000)
+    period = int(ratio_frac.denominator)
+    train_per_period = int(ratio_frac.numerator)
+    offset_in_period = indices % period
+    train_mask = offset_in_period < train_per_period
+    train_indices = indices[train_mask]
+    test_indices = indices[~train_mask]
+    if len(train_indices) == 0 or len(test_indices) == 0:
+        n_train = int(n_samples * train_ratio)
+        n_train = min(max(n_train, 1), max(n_samples - 1, 1))
+        return indices[:n_train], indices[n_train:]
+    return train_indices, test_indices
+
+
 class SatDataset(object):
     def __init__(self,
                  p_satinfo_json,
@@ -116,6 +165,7 @@ class SatDataset(object):
                  p_uav_geocsv=None,
                  return_pair=False,
                  name=None,
+                 pad_mode=None,
                  **kwargs,
                  ):
         # config device for cached tensors
@@ -129,6 +179,7 @@ class SatDataset(object):
         with open(p_satinfo_json, "r") as f:
             sat_infodict = json.load(f)
         self.satinfo_dict= sat_infodict
+        self.pad_mode = str(pad_mode).lower() if pad_mode is not None else None
         self.geo_transform = self.satinfo_dict['geo_transform']
         self.epsg_code = int(self.satinfo_dict['epsg_code'])
         self.geo_res_m = 0.5 * (abs(self.satinfo_dict['x_resolution_m'])+abs(self.satinfo_dict['y_resolution_m']))
@@ -160,20 +211,28 @@ class SatDataset(object):
         # for defining the scale to sample
         self.p_uav_geocsv = p_uav_geocsv
         df = pd.read_csv(p_uav_geocsv)
-        scale_info = _compute_scale_filter_from_df(df, self.geo_res_m, scale_ref_m)
-        uav_h_cover_m = scale_info["uav_h_cover_m"]
-        # aff2d_corrected_mask = scale_info["aff2d_corrected_mask"]
-        self.scale_ref_m = scale_info["scale_ref_m"]
-        # satimgsize_scale_to_ref_m = scale_info["satimgsize_scale_to_ref_m"]
-        # lower_bound = scale_info["lower_bound"]
-        # upper_bound = scale_info["upper_bound"]
-        scale_mask = scale_info["scale_mask"]
-        # without filtering:
-        # scale_mask = aff2d_corrected_mask
-        #
+        # filtering by the scale
+        # old verison for wingtra:
+        if 'wingtra'in name.lower():
+            self.scale_ref_m=200
+            uav_h_cover_m = df['h_cover_m']
+            aff2d_corrected_mask = df['aff2d_corrected']
+            uav_h_cover_m_corrected = uav_h_cover_m[aff2d_corrected_mask]
+            satimgsize_scale_to_ref_m_corrected = np.array(uav_h_cover_m_corrected/ self.geo_res_m)* self.geo_res_m/self.scale_ref_m
+            lower_bound = np.percentile( satimgsize_scale_to_ref_m_corrected, 2)
+            upper_bound = np.percentile( satimgsize_scale_to_ref_m_corrected, 99)
+            satimgsize_scale_to_ref_m = np.array(uav_h_cover_m /  self.geo_res_m) *  self.geo_res_m / self.scale_ref_m
+            scale_mask = (satimgsize_scale_to_ref_m > lower_bound) * (satimgsize_scale_to_ref_m < upper_bound) * aff2d_corrected_mask
+        else:
+            scale_info = _compute_scale_filter_from_df(df, self.geo_res_m, scale_ref_m)
+            uav_h_cover_m = scale_info["uav_h_cover_m"]
+            self.scale_ref_m = scale_info["scale_ref_m"]
+            scale_mask = scale_info["scale_mask"]
+            # without filtering:
+            # scale_mask = aff2d_corrected_mask
         # debug: visualize scale distribution (optional)
         # if kwargs.get("debug_scale_hist", False):
-        # _debug_plot_scale_hist(
+        # debug_plot_scale_hist(
         #     satimgsize_scale_to_ref_m,
         #     aff2d_corrected_mask,
         #     lower_bound,
@@ -181,7 +240,6 @@ class SatDataset(object):
         #     title=f"satimgsize_scale_to_ref_m ({self.name})",
         #     save_path=kwargs.get("debug_scale_hist_path", None),
         # )
-
         # config the satimgsize2crop
         self.satimgsize_correspond2uav_list = uav_h_cover_m[scale_mask] / self.geo_res_m
         self.satimgsize2crop_mean = self.satimgsize_correspond2uav_list.mean()
@@ -193,7 +251,7 @@ class SatDataset(object):
         self.satimgsize_scale_to_ref_m_mean = self.satimgsize_scale_to_ref_m_list.mean()
 
         #  define the range when sampling the satmap:
-        self.satmap_edge_pixs = self.satimgsize2crop_boundary[1]+8
+        self.satmap_edge_pixs = self.satimgsize2crop_boundary[1] + 224 #
         self.nr2sample_min = self.satmap_edge_pixs / self.satmap_hw_max
         self.nc2sample_min = self.nr2sample_min
         self.nr2sample_max = (self.satmap_h - self.satmap_edge_pixs) / self.satmap_hw_max
@@ -353,53 +411,162 @@ class SatDataset(object):
         meter_radius = 0.5*(np.abs(offset_x_m)+np.abs(offset_y_m))
         return meter_radius
 
-    def crop_sat_unifrom(self, size2clip=224, overlap=0., only_nrcs=False):
-        # get all sattiles:
-        sat_rows = self.satmap_h
-        sat_cols = self.satmap_w
-        n_pix_perstep = int(size2clip * (1. - overlap))
-        n_colsteps = 1. * (sat_cols - size2clip) / n_pix_perstep
-        n_rowsteps = 1. * (sat_rows - size2clip) / n_pix_perstep
+    @staticmethod
+    def _represent_overlap_from_step_size(crop_size_px, step_size_px):
+        crop_size_px = float(crop_size_px)
+        step_size_px = int(step_size_px)
+        upper = max(0.0, min(1.0, 1.0 - float(step_size_px) / crop_size_px))
+        lower = max(0.0, min(1.0, 1.0 - float(step_size_px + 1) / crop_size_px))
+        if upper > lower:
+            overlap = 0.5 * (lower + upper)
+        else:
+            overlap = upper
+        return float(overlap)
 
-        r_ids_begin = np.linspace(start=0, stop=int(n_rowsteps - 1), num=int(n_rowsteps), dtype=np.int16)
-        c_ids_begin = np.linspace(start=0, stop=int(n_colsteps - 1), num=int(n_colsteps), dtype=np.int16)
-        rcs_begincoord = np.stack(np.meshgrid(c_ids_begin, r_ids_begin), axis=-1)[:, :, ::-1] * n_pix_perstep
-        rcs_endcoord = rcs_begincoord + np.array([size2clip, size2clip])
-        # rcs_girdcoord = np.concatenate([rcs_begincoord, rcs_endcoord], axis=-1)
+    def _build_uniform_crop_layout(self, size2clip=224, overlap=None, step_size_px=None):
+        crop_size_px = float(size2clip)
+        if crop_size_px <= 0:
+            raise ValueError(f"size2clip must be positive, got {size2clip}")
 
-        # rc2nrc:
-        rcs_girdcoord_center = (rcs_begincoord + rcs_endcoord) / 2
-        nrcs_girdcoord_center = rcs_girdcoord_center / self.satmap_hw_max
+        if overlap is None and step_size_px is None:
+            raise ValueError("Either overlap or step_size_px must be provided.")
+        if overlap is not None and step_size_px is not None:
+            raise ValueError("Provide either overlap or step_size_px, not both.")
 
-        # Ensure sampling falls within the valid range:
+        if overlap is not None:
+            overlap = float(overlap)
+            if not (0.0 <= overlap < 1.0):
+                raise ValueError(f"overlap must be in [0, 1), got {overlap}")
+            # Keep the old discretization so existing gallery shapes do not shift.
+            step_size_px = int(crop_size_px * (1.0 - overlap))
+        else:
+            step_size_px = int(step_size_px)
+            if step_size_px <= 0:
+                raise ValueError(f"step_size_px must be positive, got {step_size_px}")
+            overlap = self._represent_overlap_from_step_size(crop_size_px, step_size_px)
+
+        if step_size_px <= 0:
+            raise ValueError(
+                f"overlap={overlap:.6f} is too dense for crop_size={crop_size_px:.3f}; "
+                "it makes the pixel step become 0."
+            )
+
+        sat_rows = float(self.satmap_h)
+        sat_cols = float(self.satmap_w)
+        n_rowsteps = int((sat_rows - crop_size_px) / step_size_px)
+        n_colsteps = int((sat_cols - crop_size_px) / step_size_px)
+        row_ids = np.arange(max(n_rowsteps, 0), dtype=np.int32)
+        col_ids = np.arange(max(n_colsteps, 0), dtype=np.int32)
+
+        row_centers = (row_ids.astype(np.float32) * step_size_px + crop_size_px / 2.0) / float(self.satmap_hw_max)
+        col_centers = (col_ids.astype(np.float32) * step_size_px + crop_size_px / 2.0) / float(self.satmap_hw_max)
+
         nr_min, nr_max = self.nr2sample_range
         nc_min, nc_max = self.nc2sample_range
-        row_centers = nrcs_girdcoord_center[:, 0, 0]
-        col_centers = nrcs_girdcoord_center[0, :, 1]
         row_mask = (row_centers >= nr_min) & (row_centers <= nr_max)
         col_mask = (col_centers >= nc_min) & (col_centers <= nc_max)
-        if row_mask.sum() == 0 or col_mask.sum() == 0:
+
+        rr, cc = np.meshgrid(row_ids, col_ids, indexing='ij')
+        rcs_begincoord = np.stack([rr, cc], axis=-1).astype(np.float32) * float(step_size_px)
+        rcs_endcoord = rcs_begincoord + np.array([crop_size_px, crop_size_px], dtype=np.float32)
+        nrcs_girdcoord_center = (rcs_begincoord + rcs_endcoord) / 2.0 / float(self.satmap_hw_max)
+
+        rcs_begincoord = rcs_begincoord[row_mask][:, col_mask]
+        rcs_endcoord = rcs_endcoord[row_mask][:, col_mask]
+        nrcs_girdcoord_center = nrcs_girdcoord_center[row_mask][:, col_mask]
+        rcs_girdcoord = np.concatenate([rcs_begincoord, rcs_endcoord], axis=-1)
+
+        row_centers_valid = row_centers[row_mask]
+        col_centers_valid = col_centers[col_mask]
+        return {
+            "overlap": float(overlap),
+            "crop_size_px": crop_size_px,
+            "crop_size_int": int(crop_size_px),
+            "step_size_px": int(step_size_px),
+            "grid_rows": int(row_mask.sum()),
+            "grid_cols": int(col_mask.sum()),
+            "row_centers_nrc_range": (
+                float(row_centers_valid[0]),
+                float(row_centers_valid[-1]),
+            ) if row_centers_valid.size > 0 else (None, None),
+            "col_centers_nrc_range": (
+                float(col_centers_valid[0]),
+                float(col_centers_valid[-1]),
+            ) if col_centers_valid.size > 0 else (None, None),
+            "rcs_begincoord": rcs_begincoord,
+            "rcs_endcoord": rcs_endcoord,
+            "rcs_girdcoord": rcs_girdcoord,
+            "nrcs_girdcoord_center": nrcs_girdcoord_center,
+        }
+
+    def estimate_grid_shape_from_overlap(self, size2clip=224, overlap=0.):
+        layout = self._build_uniform_crop_layout(size2clip=size2clip, overlap=overlap)
+        return {
+            "overlap": float(layout["overlap"]),
+            "crop_size_px": float(layout["crop_size_px"]),
+            "step_size_px": int(layout["step_size_px"]),
+            "grid_rows": int(layout["grid_rows"]),
+            "grid_cols": int(layout["grid_cols"]),
+            "row_centers_nrc_range": layout["row_centers_nrc_range"],
+            "col_centers_nrc_range": layout["col_centers_nrc_range"],
+        }
+
+    def estimate_overlap_from_grid_shape(self, size2clip=224, grid_rows=None, grid_cols=None, allow_approx=False):
+        if grid_rows is None or grid_cols is None:
+            raise ValueError("grid_rows and grid_cols must both be provided.")
+
+        target_rows = int(grid_rows)
+        target_cols = int(grid_cols)
+        if target_rows <= 0 or target_cols <= 0:
+            raise ValueError(f"grid_rows/grid_cols must be positive, got ({grid_rows}, {grid_cols})")
+
+        crop_size_px = float(size2clip)
+        max_step_px = max(1, int(crop_size_px))
+        best_match = None
+
+        for step_size_px in range(1, max_step_px + 1):
+            layout = self._build_uniform_crop_layout(size2clip=size2clip, step_size_px=step_size_px)
+            cur_rows = int(layout["grid_rows"])
+            cur_cols = int(layout["grid_cols"])
+            row_diff = abs(cur_rows - target_rows)
+            col_diff = abs(cur_cols - target_cols)
+            score = row_diff + col_diff
+            candidate = (score, row_diff, col_diff, float(layout["overlap"]))
+            if best_match is None or candidate < best_match:
+                best_match = candidate
+            if score == 0:
+                return float(layout["overlap"])
+
+        if allow_approx and best_match is not None:
+            return float(best_match[-1])
+
+        raise ValueError(
+            f"Failed to estimate overlap from grid shape ({target_rows}, {target_cols}) "
+            f"with size2clip={size2clip}."
+        )
+
+    def crop_sat_unifrom(self, size2clip=224, overlap=0., only_nrcs=False):
+        layout = self._build_uniform_crop_layout(size2clip=size2clip, overlap=overlap)
+        nrcs_girdcoord_center = layout["nrcs_girdcoord_center"]
+
+        if layout["grid_rows"] == 0 or layout["grid_cols"] == 0:
             if only_nrcs:
                 return nrcs_girdcoord_center[:0, :0]
             empty_tiles = torch.empty(
-                (0, 0, 3, int(size2clip), int(size2clip)),
+                (0, 0, 3, layout["crop_size_int"], layout["crop_size_int"]),
                 device=self.satmaps_tensor[0].device
             )
             return empty_tiles, nrcs_girdcoord_center[:0, :0]
-        rcs_begincoord = rcs_begincoord[row_mask][:, col_mask]
-        rcs_endcoord = rcs_endcoord[row_mask][:, col_mask]
-        # rcs_girdcoord_center = rcs_girdcoord_center[row_mask][:, col_mask]
-        nrcs_girdcoord_center = nrcs_girdcoord_center[row_mask][:, col_mask]
-        rcs_girdcoord = np.concatenate([rcs_begincoord, rcs_endcoord], axis=-1)
 
         if only_nrcs:
             return nrcs_girdcoord_center
 
-        # self.satmap_tensor = self.satmap_tensor.cuda() if not self.satmap_tensor.is_cuda and torch.cuda.is_available() else self.satmap_tensor
+        rcs_girdcoord = layout["rcs_girdcoord"]
         n, m, _ = rcs_girdcoord.shape
-        # sat_tiles = torch.empty((n, m, 3, size2clip, size2clip), device=self.satmaps_tensor[0].device)
-        sat_tiles = torch.empty((n, m, 3, int(size2clip), int(size2clip)), device=self.satmaps_tensor[0].device)
-        # 向量化提取所有窗口
+        sat_tiles = torch.empty(
+            (n, m, 3, layout["crop_size_int"], layout["crop_size_int"]),
+            device=self.satmaps_tensor[0].device
+        )
         for i in range(n):
             for j in range(m):
                 rb, cb, re, ce = rcs_girdcoord[i, j]
@@ -407,14 +574,31 @@ class SatDataset(object):
 
         return sat_tiles, nrcs_girdcoord_center
 
-    def mk_sacle_levels(self,n_level=3):
-        # mk a scale_levels
-        delta_scale = (self.satimgsize_scale_to_ref_m_boundary[1]-self.satimgsize_scale_to_ref_m_boundary[0])/n_level
-        lower = torch.linspace(start=self.satimgsize_scale_to_ref_m_boundary[0],end=self.satimgsize_scale_to_ref_m_boundary[1]-delta_scale,steps=n_level,dtype=torch.float32)
-        upper = torch.linspace(start=self.satimgsize_scale_to_ref_m_boundary[0]+delta_scale,end=self.satimgsize_scale_to_ref_m_boundary[1], steps=n_level,dtype=torch.float32)
-        scale_radio_to_200m_list = 0.5*(lower+upper)
-        satimgsize_list = scale_radio_to_200m_list*self.scale_ref_m/self.geo_res_m
-        return scale_radio_to_200m_list,satimgsize_list
+    def mk_sacle_levels(self, n_level=3, scale_mode="linear"):
+        scale_mode = str(scale_mode).strip().lower()
+        if scale_mode not in ("linear", "log"):
+            raise ValueError(f"scale_mode must be 'linear' or 'log', got {scale_mode}")
+        n_level = int(n_level)
+        if n_level <= 0:
+            raise ValueError("n_level must be > 0")
+
+        s_min = float(self.satimgsize_scale_to_ref_m_boundary[0])
+        s_max = float(self.satimgsize_scale_to_ref_m_boundary[1])
+        if scale_mode == "linear":
+            delta_scale = (s_max - s_min) / n_level
+            lower = torch.linspace(start=s_min, end=s_max - delta_scale, steps=n_level, dtype=torch.float32)
+            upper = torch.linspace(start=s_min + delta_scale, end=s_max, steps=n_level, dtype=torch.float32)
+            scale_radio_to_200m_list = 0.5 * (lower + upper)
+        else:
+            log_min = np.log(max(s_min, 1e-6))
+            log_max = np.log(max(s_max, 1e-6))
+            delta_log = (log_max - log_min) / n_level
+            lower = torch.linspace(start=log_min, end=log_max - delta_log, steps=n_level, dtype=torch.float32)
+            upper = torch.linspace(start=log_min + delta_log, end=log_max, steps=n_level, dtype=torch.float32)
+            scale_radio_to_200m_list = torch.exp(0.5 * (lower + upper))
+
+        satimgsize_list = scale_radio_to_200m_list * self.scale_ref_m / self.geo_res_m
+        return scale_radio_to_200m_list, satimgsize_list
 
     def _get_base_grid(self, out_h, out_w, device, dtype):
         """crop_satimg_by_4d_coords_fast depends on this func"""
@@ -430,7 +614,15 @@ class SatDataset(object):
             self._base_grid_cache[key] = torch.stack([xx, yy], dim=-1)  # [H, W, 2]
         return self._base_grid_cache[key]
 
-    def crop_satimg_by_4d_coords_fast(self, coords_4d, apply_rotation=True, chunk_size=1024, random_satmap=False, id_satmap2sample=None):
+    def crop_satimg_by_4d_coords_fast(
+            self,
+            coords_4d,
+            apply_rotation=True,
+            chunk_size=1024,
+            random_satmap=False,
+            id_satmap2sample=None,
+            return_satmap_id=False,
+    ):
         """
         Faster crop: fuse crop+rotation into a single grid_sample, supports per-sample scale/rot.
 
@@ -472,14 +664,19 @@ class SatDataset(object):
 
         # choose the satmap to be sampled
         if id_satmap2sample is not None:
-            satmap_tensor = self.satmaps_tensor[int(id_satmap2sample)]
+            selected_satmap_id = int(id_satmap2sample)
+            satmap_tensor = self.satmaps_tensor[selected_satmap_id]
         elif random_satmap and self.n_satmaps > 1:
-            satmap_tensor = random.choice(self.satmaps_tensor)
+            selected_satmap_id = random.randrange(self.n_satmaps)
+            satmap_tensor = self.satmaps_tensor[selected_satmap_id]
         else:
+            selected_satmap_id = 0
             satmap_tensor = self.satmaps_tensor[0]
 
         sat_h = self.satmap_h
         sat_w = self.satmap_w
+
+        padding_mode = 'zeros' if self.pad_mode in {"zero", "zeros", "0"} else 'border'
 
         outputs = []
         n_total = coords_4d.shape[0]
@@ -513,7 +710,7 @@ class SatDataset(object):
                 sat_in,
                 sample_grid,
                 mode='bilinear',
-                padding_mode='border',
+                padding_mode=padding_mode,
                 align_corners=False
             )  # [B,C,H,W]
             outputs.append(satimgs)
@@ -522,7 +719,10 @@ class SatDataset(object):
         if single_input:
             satimgs = satimgs[0]
 
+        if return_satmap_id:
+            return satimgs, selected_satmap_id
         return satimgs
+
 
     """funcs about getting item:"""
     def __getitem__(self,index):
@@ -578,7 +778,16 @@ class SatDataset(object):
 
 
     """funcs about fine loc:"""
-    def sample_sats_in_rect(self, nrc_topleft, nrc_buttonright, n2sample_h=128, n2sample_w=128, satimgsize2crop=224, type2clip='tensor'):
+    def sample_sats_in_rect(
+            self,
+            nrc_topleft,
+            nrc_buttonright,
+            n2sample_h=128,
+            n2sample_w=128,
+            satimgsize2crop=224,
+            type2clip='tensor',
+            satimg_id=0,
+    ):
         halfimg_width = satimgsize2crop/2
         half_img_h = halfimg_width / self.satmap_hw_max
         half_img_w = half_img_h
@@ -594,20 +803,28 @@ class SatDataset(object):
 
         nrr, ncc = torch.meshgrid(nrs_center, ncs_center, indexing='ij')  # 'ij' 表示 y 行, x 列的顺序
         nrc_center_meshgrid = torch.stack([nrr, ncc]).permute(1, 2, 0)
+        satimg_id = int(satimg_id)
+        if satimg_id < 0 or satimg_id >= self.n_satmaps:
+            raise IndexError(f"satimg_id out of range: {satimg_id}, n_satmaps={self.n_satmaps}")
 
         if type2clip == 'tensor':
-            sat_tiles = torch.empty((n2sample_h, n2sample_w, 3, satimgsize2crop, satimgsize2crop),
-                                    device=self.satmap_tensor.device)
+            satmap_tensor = self.satmaps_tensor[satimg_id]
+            sat_tiles = torch.empty(
+                (n2sample_h, n2sample_w, 3, satimgsize2crop, satimgsize2crop),
+                device=satmap_tensor.device
+            )
             for i in range(rows_begin.shape[0]):
                 for j in range(cols_begin.shape[0]):
                     rb, cb, re, ce = rows_begin[i], cols_begin[j], rows_end[i], cols_end[j]
-                    sat_tiles[i, j] = self.satmap_tensor[:, rb:re, cb:ce]  # [C, H, W]
+                    sat_tiles[i, j] = satmap_tensor[:, rb:re, cb:ce]  # [C, H, W]
         else:
+            satmap = self.satmaps[satimg_id]
             sat_tiles = np.zeros((n2sample_h, n2sample_w, 3, satimgsize2crop, satimgsize2crop)).astype(np.float32)
             for i in range(rows_begin.shape[0]):
                 for j in range(cols_begin.shape[0]):
                     rb, cb, re, ce = rows_begin[i], cols_begin[j], rows_end[i], cols_end[j]
-                    sat_tiles[i, j] = self.satmap[:, rb:re, cb:ce]  # [C, H, W]
+                    satimg_np = np.asarray(satmap.crop((int(cb), int(rb), int(ce), int(re))), dtype=np.float32)
+                    sat_tiles[i, j] = np.transpose(satimg_np, (2, 0, 1))  # [C, H, W]
 
         return sat_tiles,nrc_center_meshgrid
 
@@ -620,16 +837,19 @@ class SatDataset(object):
         img_np = np.clip(img_np * 255, 0, 255).astype(np.uint8)
         return img_np
 
-    def crop_rect_satimg(self, nrc_topleft,nrc_rightbottom, type='tensor'):
+    def crop_rect_satimg(self, nrc_topleft, nrc_rightbottom, type='tensor', satimg_id=0):
         row_begin = int(nrc_topleft[0]*self.satmap_hw_max)
         col_begin = int(nrc_topleft[1]*self.satmap_hw_max)
         row_end = int(nrc_rightbottom[0]*self.satmap_hw_max)
         col_end = int(nrc_rightbottom[1]*self.satmap_hw_max)
+        satimg_id = int(satimg_id)
+        if satimg_id < 0 or satimg_id >= self.n_satmaps:
+            raise IndexError(f"satimg_id out of range: {satimg_id}, n_satmaps={self.n_satmaps}")
 
         if type == 'tensor':
-            satimg = self.satmap_tensor[:, int(row_begin):int(row_end),int(col_begin):int(col_end)]  # chw for sat_img_tensor
+            satimg = self.satmaps_tensor[satimg_id][:, int(row_begin):int(row_end), int(col_begin):int(col_end)]
         else:
-            satimg = self.satmap.crop((int(col_begin), int(row_begin), int(col_end), int(row_end)))
+            satimg = self.satmaps[satimg_id].crop((int(col_begin), int(row_begin), int(col_end), int(row_end)))
 
         return satimg
 
@@ -637,6 +857,7 @@ class SatDataset(object):
 class UAVDataset(object):
     def __init__(self,
                  p_uavinfo_json,
+                 p_uav_geocsv,
                  imgsize2net=224,
                  sat_dataset=None,
                  scale_ref_m=None,
@@ -644,30 +865,48 @@ class UAVDataset(object):
                  use_augmentation=True,
                  name=None,
                  device='cpu',
+                 pad_mode=None,
                  dataset_name = 'visloc',
+                 split_train_ratio=0.9,
+                 split_mode='segment',
                  **kwargs,
                  ):
         # read corresponding uav imgs & mate info
         with open(p_uavinfo_json, "r") as f:
             self.uavinfo_dict = json.load(f)
         self.name = name if name is not None else os.path.splitext(os.path.basename(p_uavinfo_json))[0]
+        self.p_uavinfo_json = p_uavinfo_json
+        self.p_uav_geocsv = p_uav_geocsv
+        self.split_train_ratio = float(split_train_ratio)
+        self.split_mode = str(split_mode).strip().lower()
         self.device = torch.device(device) if isinstance(device, str) else device
         if self.device.type != 'cpu':
             raise ValueError("UAVDataset coords are kept on CPU; pass device='cpu' or leave default.")
-        df = pd.read_csv(self.uavinfo_dict['uavimgs_geocsv_path'])
+        if not p_uav_geocsv:
+            raise ValueError("UAVDataset requires p_uav_geocsv; do not read UAV geo CSV from p_uavinfo_json anymore.")
+        df = pd.read_csv(p_uav_geocsv)
         self.uav_df = df
 
         if sat_dataset is not None:
             self.geo_res_m = sat_dataset.geo_res_m
 
         # filtering by the scale
-        scale_ref_m_used = scale_ref_m
-        if scale_ref_m_used is None and sat_dataset is not None and hasattr(sat_dataset, "scale_ref_m"):
-            scale_ref_m_used = sat_dataset.scale_ref_m
-        scale_info = _compute_scale_filter_from_df(df, self.geo_res_m, scale_ref_m_used)
-        uav_h_cover_m = scale_info["uav_h_cover_m"]
-        scale_mask = scale_info["scale_mask"]
-        self.scale_ref_m = scale_info["scale_ref_m"]
+        # old verison for wingtra:
+        if 'wingtra'in name.lower():
+            self.scale_ref_m=200
+            uav_h_cover_m = df['h_cover_m']
+            aff2d_corrected_mask = df['aff2d_corrected']
+            uav_h_cover_m_corrected = uav_h_cover_m[aff2d_corrected_mask]
+            satimgsize_scale_to_ref_m_corrected = np.array(uav_h_cover_m_corrected/ self.geo_res_m)* self.geo_res_m/self.scale_ref_m
+            lower_bound = np.percentile( satimgsize_scale_to_ref_m_corrected, 2)
+            upper_bound = np.percentile( satimgsize_scale_to_ref_m_corrected, 99)
+            satimgsize_scale_to_ref_m = np.array(uav_h_cover_m /  self.geo_res_m) *  self.geo_res_m / self.scale_ref_m
+            scale_mask = (satimgsize_scale_to_ref_m > lower_bound) * (satimgsize_scale_to_ref_m < upper_bound) * aff2d_corrected_mask
+        else:
+            scale_info = _compute_scale_filter_from_df(df, self.geo_res_m, scale_ref_m)
+            uav_h_cover_m = scale_info["uav_h_cover_m"]
+            self.scale_ref_m = scale_info["scale_ref_m"]
+            scale_mask = scale_info["scale_mask"]
 
         uav_names = self.uav_df['filename'][scale_mask]
         uavimgs_dir = self.uavinfo_dict['uavimgs_dir']
@@ -696,13 +935,14 @@ class UAVDataset(object):
         self.uav_rots_torch = torch.from_numpy(self.uav_rots).to(device=self.device, dtype=torch.float32)[...,None]
         self.uav_scales_torch = torch.from_numpy(self.uav_scales).to(device=self.device, dtype=torch.float32)[...,None]
         self.uav_coords_4d_torch = torch.concatenate([self.uav_nrcs_torch, self.uav_rots_torch, self.uav_scales_torch], dim=-1)
-        self.split_uav_dataset()
+        self.split_uav_dataset(train_ratio=self.split_train_ratio, split_mode=self.split_mode)
 
         self.switch_stage(stage)
 
         # config transform for uavimgs
         self.imgsize2net = imgsize2net
         self.use_augmentation = use_augmentation
+        self.pad_mode = str(pad_mode).lower() if pad_mode is not None else None
 
         # Test transform (无数据增强)
         self.uav_transform_test = mk_pil_transform(
@@ -719,27 +959,32 @@ class UAVDataset(object):
                 rand_rot=True, #该参数会让坐标标签跟着改变
                 rand_scale=True, scale_range=(0.95, 1.05), # scale_factor > 1 (图像放大，"zoom in")->scale 坐标会变小
                 rand_affine=True, affine_para={'degrees': 0, 'translate': (0.0, 0.0), 'scale': (1., 1.), 'shear': 10}, #坐标标签不会改变，为了增加一定鲁棒性
-                rand_erase=False, center_crop=True, rand_crop=False)
+                rand_erase=True, center_crop=True, rand_crop=False,
+                pad_mode=self.pad_mode)
         else:
             # 不使用数据增强，直接使用test transform
             self.uav_transform_train = self.uav_transform_test
 
 
     """funcs about handling uavings:"""
-    def split_uav_dataset(self, train_radio=0.9):
-        # split the dataset for train/val/test
-        n_train = int(len(self.uavimg_paths) * train_radio)
-        self.n_train = n_train
-        self.train_ratio = train_radio
+    def split_uav_dataset(self, train_ratio=0.9, split_mode='segment'):
+        train_indices, test_indices = _compute_split_indices(
+            len(self.uavimg_paths), train_ratio=train_ratio, split_mode=split_mode
+        )
+        self.n_train = int(len(train_indices))
+        self.train_ratio = float(train_ratio)
+        self.split_mode = str(split_mode).strip().lower()
+        self.train_indices = train_indices
+        self.test_indices = test_indices
 
-        self.uavimg_paths_train = self.uavimg_paths[:n_train]
-        self.uav_lonlats_train = self.uav_latlons[:n_train]
+        self.uavimg_paths_train = [self.uavimg_paths[int(i)] for i in train_indices]
+        self.uav_lonlats_train = self.uav_latlons[train_indices]
 
-        self.uavimg_paths_test = self.uavimg_paths[n_train:]
-        self.uav_lonlats_test = self.uav_latlons[n_train:]
+        self.uavimg_paths_test = [self.uavimg_paths[int(i)] for i in test_indices]
+        self.uav_lonlats_test = self.uav_latlons[test_indices]
 
-        self.uav_coords_4d_torch_train = self.uav_coords_4d_torch[:n_train]
-        self.uav_coords_4d_torch_test = self.uav_coords_4d_torch[n_train:]
+        self.uav_coords_4d_torch_train = self.uav_coords_4d_torch[train_indices]
+        self.uav_coords_4d_torch_test = self.uav_coords_4d_torch[test_indices]
 
 
     """funcs about get item:"""
@@ -862,30 +1107,59 @@ class UAVDataset(object):
         return img_np
 
 
+def export_scene_attributes(
+        p_satinfo_json,
+        p_uav_geocsv,
+        output_json,
+        imgsize2net=224,
+        name=None,
+        **kwargs,
+):
+    sat_dataset = SatDataset(
+        p_satinfo_json=p_satinfo_json,
+        p_uav_geocsv=p_uav_geocsv,
+        imgsize2net=imgsize2net,
+        name=name,
+        **kwargs,
+    )
+    scene_attrs = {
+        'name': sat_dataset.name,
+        'p_satinfo_json': p_satinfo_json,
+        'p_uav_geocsv': p_uav_geocsv,
+        'imgsize2net': int(imgsize2net),
+        'geo_res_m': float(sat_dataset.geo_res_m),
+        'scale_ref_m': float(sat_dataset.scale_ref_m),
+        'halfimg_radius_nrc': float(sat_dataset.halfimg_radius_nrc),
+        'halfimg_radius_meter': float(sat_dataset.halfimg_radius_meter),
+        'nrc2meter_factor': float(sat_dataset.halfimg_radius_meter / sat_dataset.halfimg_radius_nrc),
+    }
+    output_dir = os.path.dirname(output_json)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    with open(output_json, 'w') as f:
+        json.dump(scene_attrs, f, indent=2)
+    return scene_attrs
+
+
 
 if __name__ == '__main__':
-    # import pandas as pd
-    # p2csv = '/home/data/zwk/data_uavimgs_wingtra/Zurich/IMAGES_info/uavimgs_geo_corrected_v1.csv'
-    # df=pd.read_csv(p2csv)
-    # ratio = df['cover_ratio_to_200m*200m']
-    # aff2d_corrected = df['aff2d_corrected']
-    # # ratio = ratio[aff2d_corrected]
-    # ratio = np.array(ratio)
-    # x2 = 40000/384/576*ratio
-    # x = np.sqrt(x2)
-    # h_m = 384*x
-    # w_m = 576*x
-    # df['h_cover_m'] = h_m
-    # df['w_cvoer_m'] = w_m
-    # df.to_csv('/home/data/zwk/data_uavimgs_wingtra/Zurich/IMAGES_info/uavimgs_geo_corrected_v1.csv', index=False)
+    #debug:
+    sat_dataset = SatDataset(
+        p_satinfo_json='/home/data/zwk/data_uavimgs_wingtra/Zurich/zurich_blocks12_proj2056_res03m.json',
+        p_uav_geocsv='/home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info/uavimgs_geo_corrected_v1.csv',
+        imgsize2net=224,
+        name='wingtra',
+    )
 
     sat_dataset = SatDataset(
         p_satinfo_json='/home/data/zwk/dataset_UAV-VisLoc/04/satellite04_epsg32650_res03m_multi_tifs.json',
         p_uav_geocsv='/home/data/zwk/dataset_UAV-VisLoc/04/uavimgs_geo_corrected.csv',
         imgsize2net=224,
     )
+
     uav_dataset = UAVDataset(
         p_uavinfo_json = '/home/data/zwk/dataset_UAV-VisLoc/04/uavimgs_metainfo.json',
+        p_uav_geocsv='/home/data/zwk/dataset_UAV-VisLoc/04/uavimgs_geo_corrected.csv',
         trans_georc2nrc_func = sat_dataset.transfrom_georc_to_nrc,
         sat_dataset=sat_dataset,
         # geo_res_m=0.3,

@@ -14,7 +14,32 @@ import yaml
 import os
 
 
-def get_parse():
+def print_config_summary(opt, header="最终配置:"):
+    """打印当前opt中的配置摘要。"""
+    scenes_setting = getattr(opt, 'scenes_setting', None)
+    if isinstance(scenes_setting, dict):
+        scenes = scenes_setting.get('scenes', [])
+        print(f"\n{'='*60}")
+        print(f"场景配置: {'多场景模式' if len(scenes) > 1 else '单场景模式'} ({len(scenes)}个场景)")
+        for i, scene in enumerate(scenes):
+            print(f"  场景{i+1}: {scene.get('name', f'scene_{i+1}')}")
+        if len(scenes) > 1 and 'sampling_strategy' in scenes_setting:
+            print(f"  采样策略: {scenes_setting['sampling_strategy']}")
+        print(f"{'='*60}\n")
+
+    print(header)
+    for group_name, keys in getattr(opt, 'group_dict', {}).items():
+        print(f"  [{group_name}]")
+        for key in keys:
+            if hasattr(opt, key):
+                print(f"    {key}: {getattr(opt, key)}")
+    if hasattr(opt, 'scenes_setting'):
+        print(f"  [scenes_setting]: {opt.scenes_setting}")
+
+    opt._config_summary_printed = True
+
+
+def get_parse(print_summary=True):
     """
     解析命令行参数和YAML配置
     优先级：命令行参数 > 实验日志YAML > 基础配置YAML > 默认参数
@@ -27,7 +52,9 @@ def get_parse():
                         type=str, help='YAML配置文件路径 (通常指向opts.yaml或基础配置)')
 
     # 实验配置
-    parser.add_argument('--exps_dir', default='.exps/', type=str, help='实验保存目录')
+    parser.add_argument('--dir2save_log', default='gen_fm_exps/logs', type=str, help='日志与TensorBoard保存根目录')
+    parser.add_argument('--dir2save_ckpt', default='gen_fm_exps/ckpts', type=str, help='Checkpoint保存根目录')
+    parser.add_argument('--exps_dir', default=None, type=str, help=argparse.SUPPRESS)
     parser.add_argument('--exp_name', default='debug', type=str, help='实验名称')
     parser.add_argument('--tensorboard', action='store_true', default=True, help='是否使用tensorboard')
 
@@ -38,10 +65,18 @@ def get_parse():
     # Stage checkpoint配置（用于多阶段训练）
     parser.add_argument('--load_stage1_ckpt', default="", type=str, help='Stage 1的checkpoint路径')
     parser.add_argument('--load_stage2_ckpt', default="", type=str, help='Stage 2的checkpoint路径')
+    parser.add_argument('--inherit_stage2_yaml', default="", type=str, help='Stage 3初始化时继承Stage 2网络结构参数的opts/base yaml路径')
+    parser.add_argument('--inherit_stage2_scope', default='network', type=str, help='Stage 3从Stage 2 YAML继承的范围: network,data,scenes,hardware，可用逗号分隔')
 
     # 硬件配置
     parser.add_argument('--gpu_ids', default='0', type=str, help='GPU IDs, 例如: 0 或 0,1,2')
     parser.add_argument('--num_worker', default=8, type=int, help='DataLoader worker数量')
+    parser.add_argument(
+        '--satmaps_on_cpu',
+        default=False,
+        type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'},
+        help='是否将 SatDataset 的整图缓存与裁图留在 CPU 上',
+    )
     parser.add_argument('--autocast', action='store_true', default=False, help='是否使用混合精度训练')
 
     # 网络配置
@@ -52,6 +87,26 @@ def get_parse():
 
     # 训练配置
     parser.add_argument('--num_epochs', default=100, type=int, help='训练轮数')
+    parser.add_argument('--split_train_ratio', default=0.9, type=float, help='UAV 数据集训练集比例')
+    parser.add_argument(
+        '--split_mode',
+        default='segment',
+        type=str,
+        choices=('segment', 'interval', 'random'),
+        help='UAV 数据集切分模式: segment=前段训练后段测试, interval=按固定间隔交错切分, random=固定随机种子划分',
+    )
+    parser.add_argument(
+        '--add_random_satimg_negs',
+        default=True,
+        type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'},
+        help='是否为每个query额外添加随机采样的satellite negatives',
+    )
+    parser.add_argument(
+        '--sat_as_query',
+        default=False,
+        type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'},
+        help='是否将sat image也作为query构造配对样本',
+    )
 
     # Grid配置
     parser.add_argument('--freeze_grid', action='store_true', default=False,
@@ -170,38 +225,56 @@ def get_parse():
             }]
         }
 
-    # --- 7. 打印场景配置信息 ---
-    num_scenes = len(opt.scenes_setting['scenes'])
-    print(f"\n{'='*60}")
-    print(f"场景配置: {'多场景模式' if num_scenes > 1 else '单场景模式'} ({num_scenes}个场景)")
-    for i, scene in enumerate(opt.scenes_setting['scenes']):
-        print(f"  场景{i+1}: {scene['name']}")
-    if num_scenes > 1:
-        print(f"  采样策略: {opt.scenes_setting['sampling_strategy']}")
-    print(f"{'='*60}\n")
+    legacy_exps_dir = getattr(opt, 'exps_dir', None)
+    if not getattr(opt, 'dir2save_log', None):
+        opt.dir2save_log = default_args.dir2save_log
+    if not getattr(opt, 'dir2save_ckpt', None):
+        opt.dir2save_ckpt = default_args.dir2save_ckpt
+    if legacy_exps_dir:
+        if opt.dir2save_log == default_args.dir2save_log:
+            opt.dir2save_log = legacy_exps_dir
+        if opt.dir2save_ckpt == default_args.dir2save_ckpt:
+            opt.dir2save_ckpt = legacy_exps_dir
+        print("提示: `exps_dir` 已废弃，请改用 `dir2save_log` 和 `dir2save_ckpt`。")
 
-    # --- 8. 组织参数到 group_dict ---
+    # 兼容仍然直接读取 opt.exps_dir 的旧代码；语义上将其映射为日志根目录。
+    opt.exps_dir = opt.dir2save_log
+
+    # --- 7. 组织参数到 group_dict ---
     group_info = {
-        'exp_setting': ['p_yaml', 'exp_name', 'exps_dir', 'load2train', 'load2test',
-                        'load_stage1_ckpt', 'load_stage2_ckpt', 'tensorboard',
+        'exp_setting': ['p_yaml', 'exp_name', 'dir2save_log', 'dir2save_ckpt', 'load2train', 'load2test',
+                        'load_stage1_ckpt', 'load_stage2_ckpt', 'inherit_stage2_yaml', 'inherit_stage2_scope', 'tensorboard',
                         'save_freq', 'val', 'val_freq',
                         'p_satinfo_json', 'p_uavinfo_json', 'p_uav_geocsv'],
-        'data_setting': ['imgsize2net', 'satimgsize2crop', 'n_rand2sample_per_pos'],
-        'hardware_setting': ['gpu_ids', 'num_worker', 'autocast',
+        'data_setting': [
+            'imgsize2net',
+            'satimgsize2crop',
+            'n_rand2sample_per_pos',
+            'split_train_ratio',
+            'split_mode',
+            'add_random_satimg_negs',
+            'sat_as_query',
+        ],
+        'hardware_setting': ['gpu_ids', 'num_worker', 'satmaps_on_cpu', 'autocast',
                             'batchsize_sat', 'batchsize_uav', 'batchsize_uav_test'],
-        'network_setting': ['backbone', 'aggregator_type', 'freeze_grid'],
+        'network_setting': [
+            'backbone',
+            'aggregator_type',
+            'freeze_grid',
+            'p_grid_config_yaml',
+            'posenc_multires_rc',
+            'posenc_multires_rot',
+            'posenc_multires_scale',
+            'grid_mlp_hidden_dim',
+            'grid_mlp_num_blocks',
+        ],
         'learning_setting': ['num_epochs'],
     }
     opt.group_dict = group_info
+    opt._config_summary_printed = False
 
-    # --- 9. 最终打印和返回 ---
-    print("最终配置:")
-    for group_name, keys in opt.group_dict.items():
-        print(f"  [{group_name}]")
-        for key in keys:
-            if hasattr(opt, key):
-                print(f"    {key}: {getattr(opt, key)}")
-    if hasattr(opt, 'scenes_setting'):
-        print(f"  [scenes_setting]: {opt.scenes_setting}")
+    # --- 8. 最终打印和返回 ---
+    if print_summary:
+        print_config_summary(opt)
 
     return opt

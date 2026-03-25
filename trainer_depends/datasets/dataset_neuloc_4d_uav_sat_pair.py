@@ -6,9 +6,9 @@ UAV-Satellite Pair Dataset
 import torch
 from torch.utils.data import Dataset
 import numpy as np
+import os
 
 from .dataset_neuloc_4d  import UAVDataset, SatDataset
-from trainer_depends.utils.util_sample_neg_nrcs import BoundedNegativeCoordinateSampler
 from torch.utils.data import DataLoader
 import time
 
@@ -30,35 +30,31 @@ class UAVSatPairDataset(Dataset):
         self,
         uav_dataset,
         sat_dataset,
-        satmap_sampler=None,
         device='cuda',
         n_neg_per_query=1,
         sat_as_query=False,
-        n_sat_query=1,
         nrc_reject_sampling=False,
     ):
         """
         Args:
             uav_dataset: UAVDataset实例
             sat_dataset: SatDataset实例
-            satmap_sampler: BoundedNegativeCoordinateSampler实例（n_neg=0时可为None）
             device: 设备（用于负样本采示样）
             n_neg_per_query: 每个样本的负样本数量（0表不采样负样本,此时负样本来自其他正样本）
             nrc_reject_sampling: bool, 是否使用正样本领域拒绝采样（True）还是完全随机采样（False）
         """
         self.uav_dataset = uav_dataset
         self.sat_dataset = sat_dataset
-        self.satmap_sampler = satmap_sampler
         self.device = device
         self.n_neg_per_query = n_neg_per_query
         self.nrc_reject_sampling = nrc_reject_sampling
         # 如果有多时相遥感图，则遥感图之间可相互检索
         self.n_satmaps = len(self.sat_dataset.satmaps)
         self.sat_as_query = sat_as_query
-        self.n_sat_query = n_sat_query
-
-        if n_neg_per_query > 0 and nrc_reject_sampling and satmap_sampler is None:
-            raise ValueError("satmap_sampler cannot be None when n_neg_per_query > 0 and nrc_reject_sampling=True")
+        if self.sat_as_query and self.n_satmaps <= 1:
+            raise ValueError(
+                f"sat_as_query=True requires at least 2 satellite images, got n_satmaps={self.n_satmaps}"
+            )
 
     def __len__(self):
         return len(self.uav_dataset)
@@ -81,18 +77,24 @@ class UAVSatPairDataset(Dataset):
         uavimg, coords_uav = self.uav_dataset[index]
 
         # 2. 采样正样本卫星图（与UAV位置对应）
-        satimgs_pos = self.sat_dataset.crop_satimg_by_4d_coords_fast(coords_uav)
+        satimgs_pos, satmap_id_pos = self.sat_dataset.crop_satimg_by_4d_coords_fast(
+            coords_uav, return_satmap_id=True
+        )
 
         # 多遥感图时，为 query/pos 各自随机采样一张图
-        if self.n_satmaps > 1 and self.sat_as_query:
+        satmap_id_query = None
+        satmap_id_pos2satimg_query = None
+        if self.sat_as_query:
             perm = torch.randperm(self.n_satmaps)
-            query_id,pos_id = perm[0],perm[1]
-            coords_sat_qeury = self.sat_dataset.mk_rand_coords_4d(n_rand=1,return_tensor=True).squeeze()
+            query_id, pos_id = perm[0], perm[1]
+            satmap_id_query = int(query_id)
+            satmap_id_pos2satimg_query = int(pos_id)
+            coords_sat_query = self.sat_dataset.mk_rand_coords_4d(n_rand=1, return_tensor=True).squeeze()
             satimg_query = self.sat_dataset.crop_satimg_by_4d_coords_fast(
-                coords_sat_qeury, id_satmap2sample=query_id,
+                coords_sat_query, id_satmap2sample=query_id,
             ).squeeze()
             satimg_pos2satimg_query = self.sat_dataset.crop_satimg_by_4d_coords_fast(
-                coords_uav, id_satmap2sample=pos_id,
+                coords_sat_query, id_satmap2sample=pos_id,
             ).squeeze()
         
         # debug
@@ -107,6 +109,7 @@ class UAVSatPairDataset(Dataset):
         # 3. 采样负样本（如果需要）
         satimgs_neg = None
         coords_uav_neg = None
+        satmap_id_neg = None
         if self.n_neg_per_query > 0:
             # 根据开关选择采样策略
             if self.nrc_reject_sampling:
@@ -142,7 +145,9 @@ class UAVSatPairDataset(Dataset):
             ], dim=-1)
 
             # 采样负样本卫星图
-            satimgs_neg = self.sat_dataset.crop_satimg_by_4d_coords_fast(coords_uav_neg,random_satmap=True)
+            satimgs_neg, satmap_id_neg = self.sat_dataset.crop_satimg_by_4d_coords_fast(
+                coords_uav_neg, random_satmap=True, return_satmap_id=True
+            )
 
         dict2return = {
             'uavimg': uavimg,
@@ -150,14 +155,191 @@ class UAVSatPairDataset(Dataset):
             'satimgs_neg': satimgs_neg,
             'coords_uav': coords_uav,
             'coords_uav_neg': coords_uav_neg,
+            'satmap_id_pos': satmap_id_pos,
+            'satmap_id_neg': satmap_id_neg,
         }
         if self.sat_as_query:
             dict2return.update({
             'satimg_query': satimg_query,
             'satimg_pos2satimg_query': satimg_pos2satimg_query,
-            'coords_sat_query':coords_sat_qeury,
+            'coords_sat_query': coords_sat_query,
+            'satmap_id_query': satmap_id_query,
+            'satmap_id_pos2satimg_query': satmap_id_pos2satimg_query,
             })
+        # self._maybe_debug_visualize_sample(index, dict2return,save_dir='/home/data/zwk/pyproj_neuloc_v0/trainers/vis_results')
         return dict2return
+
+    def _maybe_debug_visualize_sample(self, index, sample_dict, max_samples=1, save_dir='/home/data/zwk/pyproj_neuloc_v0/trainers/vis_results'):
+        func = type(self)._maybe_debug_visualize_sample
+        debug_vis_count = int(getattr(func, "_debug_vis_count", 0))
+        if max_samples > 0 and debug_vis_count >= max_samples:
+            return
+        try:
+            import matplotlib.pyplot as plt
+        except Exception as exc:
+            print(f"[UAVSatPairDataset] debug visualize skipped: matplotlib unavailable ({exc})")
+            return
+
+        def _coords_to_tensor(coords):
+            if coords is None:
+                return None
+            if isinstance(coords, torch.Tensor):
+                return coords.detach().cpu().to(dtype=torch.float32)
+            try:
+                return torch.as_tensor(coords, dtype=torch.float32)
+            except Exception:
+                return None
+
+        def _wrap_rad(rad_value):
+            if rad_value is None:
+                return None
+            return float(np.arctan2(np.sin(rad_value), np.cos(rad_value)))
+
+        def _format_deg(rad_value):
+            if rad_value is None:
+                return "None"
+            return f"{(float(rad_value) * 180.0 / np.pi):.1f}deg"
+
+        def _short_name(path_str, keep=32):
+            if not path_str:
+                return "unknown"
+            base = os.path.basename(path_str)
+            if len(base) <= keep:
+                return base
+            head = max(keep // 2 - 2, 8)
+            tail = max(keep - head - 3, 8)
+            return f"{base[:head]}...{base[-tail:]}"
+
+        def _get_uav_raw_coords(index_value):
+            stage = getattr(self.uav_dataset, "stage", "train")
+            if stage == 'train' and hasattr(self.uav_dataset, 'uav_coords_4d_torch_train'):
+                return self.uav_dataset.uav_coords_4d_torch_train[index_value]
+            if stage != 'train' and hasattr(self.uav_dataset, 'uav_coords_4d_torch_test'):
+                return self.uav_dataset.uav_coords_4d_torch_test[index_value]
+            return None
+
+        def _format_uav_title(title_prefix, coords_tensor, index_value):
+            raw_coords = _coords_to_tensor(_get_uav_raw_coords(index_value))
+            final_coords = _coords_to_tensor(coords_tensor)
+            raw_rot = float(raw_coords[2].item()) if raw_coords is not None and raw_coords.numel() >= 3 else None
+            final_rot = float(final_coords[2].item()) if final_coords is not None and final_coords.numel() >= 3 else None
+            aug_rot = None
+            if raw_rot is not None and final_rot is not None:
+                aug_rot = _wrap_rad(final_rot - raw_rot)
+            return (
+                f"{title_prefix}\n"
+                f"rot_raw={_format_deg(raw_rot)}\n"
+                f"rot_aug={_format_deg(aug_rot)}\n"
+                f"rot_final={_format_deg(final_rot)}"
+            )
+
+        def _format_sat_title(title_prefix, coords_tensor):
+            satmap_id = None
+            satmap_label = None
+            if "|" in title_prefix:
+                title_prefix, satmap_label = title_prefix.split("|", 1)
+                if satmap_label.startswith("satmap_id="):
+                    try:
+                        satmap_id = int(satmap_label.split("=", 1)[1])
+                    except Exception:
+                        satmap_id = None
+            rot_deg = None
+            if coords_tensor is not None and coords_tensor.numel() >= 3:
+                rot_deg = float(coords_tensor[2].item()) * 180.0 / np.pi
+            satmap_desc = ""
+            if satmap_id is not None:
+                satmap_paths = self.sat_dataset.satinfo_dict.get('filepaths', [])
+                if 0 <= satmap_id < len(satmap_paths):
+                    satmap_desc = (
+                        f"\nsatmap_id={satmap_id}"
+                        f"\nsrc={_short_name(satmap_paths[satmap_id])}"
+                    )
+                else:
+                    satmap_desc = f"\nsatmap_id={satmap_id}"
+            rot_line = ""
+            if rot_deg is not None:
+                rot_line = f"\nrot={rot_deg:.1f}deg"
+            return (
+                f"{title_prefix}\n"
+                f"{rot_line}"
+                f"{satmap_desc}"
+            )
+
+        def _append_images(images, title_prefix, tensor, denorm_fn, coords=None, satmap_id=None, max_items=4):
+            if tensor is None:
+                return
+            if not isinstance(tensor, torch.Tensor):
+                return
+            tensor_cpu = tensor.detach().cpu()
+            coords_cpu = _coords_to_tensor(coords)
+            if tensor_cpu.ndim == 3:
+                if title_prefix == "uavimg":
+                    title_prefix = _format_uav_title(title_prefix, coords_cpu, int(index))
+                if title_prefix.startswith("sat"):
+                    title_prefix = _format_sat_title(f"{title_prefix}|satmap_id={satmap_id}", coords_cpu)
+                images.append((title_prefix, denorm_fn(tensor_cpu)))
+                return
+            if tensor_cpu.ndim == 4:
+                n_show = min(int(tensor_cpu.shape[0]), int(max_items))
+                for i in range(n_show):
+                    item_title = f"{title_prefix}[{i}]"
+                    item_coords = None
+                    if coords_cpu is not None:
+                        if coords_cpu.ndim == 1:
+                            item_coords = coords_cpu
+                        elif coords_cpu.ndim >= 2 and i < int(coords_cpu.shape[0]):
+                            item_coords = coords_cpu[i]
+                    if title_prefix.startswith("sat"):
+                        item_title = _format_sat_title(f"{item_title}|satmap_id={satmap_id}", item_coords)
+                    images.append((item_title, denorm_fn(tensor_cpu[i])))
+
+        images = []
+        _append_images(
+            images, "uavimg", sample_dict.get('uavimg'), self.uav_dataset.denormalize_img,
+            coords=sample_dict.get('coords_uav'), max_items=1
+        )
+        _append_images(
+            images, "satimgs_pos", sample_dict.get('satimgs_pos'), self.sat_dataset.denormalize_img,
+            coords=sample_dict.get('coords_uav'), satmap_id=sample_dict.get('satmap_id_pos'),
+        )
+        _append_images(
+            images, "satimgs_neg", sample_dict.get('satimgs_neg'), self.sat_dataset.denormalize_img,
+            coords=sample_dict.get('coords_uav_neg'), satmap_id=sample_dict.get('satmap_id_neg'),
+        )
+        _append_images(
+            images, "satimg_query", sample_dict.get('satimg_query'), self.sat_dataset.denormalize_img,
+            coords=sample_dict.get('coords_sat_query'), satmap_id=sample_dict.get('satmap_id_query'), max_items=1,
+        )
+        _append_images(
+            images, "satimg_pos2satimg_query", sample_dict.get('satimg_pos2satimg_query'), self.sat_dataset.denormalize_img,
+            coords=sample_dict.get('coords_sat_query'), satmap_id=sample_dict.get('satmap_id_pos2satimg_query'), max_items=1,
+        )
+
+        if not images:
+            return
+
+        fig, axes = plt.subplots(1, len(images), figsize=(4 * len(images), 4))
+        if len(images) == 1:
+            axes = [axes]
+        for ax, (title, image_np) in zip(axes, images):
+            ax.imshow(image_np)
+            ax.set_title(title)
+            ax.axis('off')
+        fig.suptitle(f"UAVSatPairDataset debug sample idx={index}, pid={os.getpid()}")
+        fig.tight_layout()
+
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(
+                save_dir,
+                f"pair_debug_pid{os.getpid()}_idx{int(index)}_{debug_vis_count:03d}.png",
+            )
+            fig.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"[UAVSatPairDataset] debug visualization saved to: {save_path}")
+        else:
+            plt.show()
+        plt.close(fig)
+        setattr(func, "_debug_vis_count", debug_vis_count + 1)
 
     def _sample_negatives_cpu(self, nrcs, threshold, row_range, col_range, total_num_negatives, ret_tensor=False):
         """
@@ -221,7 +403,7 @@ def collate_uav_sat_pair(batch):
     Returns:
         dict: {
             'uavimgs': [B, C, H, W]
-            'sat_imgs_pos': [B, C, H, W]
+            'satimgs_pos': [B, C, H, W]
             'satimgs_neg': [B, C, H, W] 或 [B, n_neg, C, H, W] 或 None（如果n_neg=0）
             'coords_uav': [B, 4]
         }
@@ -273,11 +455,10 @@ if __name__ == '__main__':
 
     uav_dataset = UAVDataset(
         p_uavinfo_json='/home/data/zwk/dataset_UAV-VisLoc/04/uavimgs_metainfo.json',
+        p_uav_geocsv='/home/data/zwk/dataset_UAV-VisLoc/04/uavimgs_geo_corrected.csv',
         sat_dataset=sat_dataset,
         stage='train'
     )
-
-    satmap_sampler = BoundedNegativeCoordinateSampler(device='cuda')
 
     # ========== 测试1：n_neg=1, 使用bounded sampling ==========
     print("=" * 50)
@@ -287,7 +468,6 @@ if __name__ == '__main__':
     pair_dataset = UAVSatPairDataset(
         uav_dataset=uav_dataset,
         sat_dataset=sat_dataset,
-        satmap_sampler=satmap_sampler,
         device='cuda',
         n_neg_per_query=1,
         nrc_reject_sampling=True,  # 使用正样本领域拒绝采样
@@ -316,7 +496,7 @@ if __name__ == '__main__':
     for i, batch in enumerate(dataloader):
         print(f"Batch {i}:")
         print(f"  UAV images: {batch['uavimgs'].shape}")
-        print(f"  Sat pos images: {batch['sat_imgs_pos'].shape}")
+        print(f"  Sat pos images: {batch['satimgs_pos'].shape}")
         print(f"  Sat neg images: {batch['satimgs_neg'].shape}")
         print(f"  Coords: {batch['coords_uav'].shape}")
         if i >= 1:
@@ -330,7 +510,6 @@ if __name__ == '__main__':
     pair_dataset_random = UAVSatPairDataset(
         uav_dataset=uav_dataset,
         sat_dataset=sat_dataset,
-        satmap_sampler=None,  # random sampling 不需要 sampler
         device='cuda',
         n_neg_per_query=1,
         nrc_reject_sampling=False,  # 使用完全随机采样
@@ -351,7 +530,6 @@ if __name__ == '__main__':
     pair_dataset_no_neg = UAVSatPairDataset(
         uav_dataset=uav_dataset,
         sat_dataset=sat_dataset,
-        satmap_sampler=None,  # n_neg=0时可以为None
         device='cuda',
         n_neg_per_query=0,
     )
@@ -376,7 +554,7 @@ if __name__ == '__main__':
     for i, batch in enumerate(dataloader_no_neg):
         print(f"Batch {i}:")
         print(f"  UAV images: {batch['uavimgs'].shape}")
-        print(f"  Sat pos images: {batch['sat_imgs_pos'].shape}")
+        print(f"  Sat pos images: {batch['satimgs_pos'].shape}")
         print(f"  Sat neg images: {batch['satimgs_neg']}")  # 应该是None
         print(f"  Coords: {batch['coords_uav'].shape}")
         if i >= 1:

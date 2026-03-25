@@ -26,7 +26,7 @@ import os
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from trainers.stage2_grid_hashfit import GridHashFitTrainer
+from trainers.stage2_INGP import GridHashFitTrainer
 from trainer_depends.base.components import NetworkComponents
 
 
@@ -1799,7 +1799,7 @@ class MetricNetTrainer(GridHashFitTrainer):
             model.eval()
 
 
-        from trainer_depends.datasets.util_subspace_sampler import SubspaceSampler
+        from trainer_depends.datasets.util_core_subspace_sampler import SubspaceSampler
         self.n_subspaces_to_sample = getattr(opt, 'n_subspaces_to_sample', 256)
         self.n_points_per_subspace = getattr(opt, 'n_points_per_subspace', 8)
         self.subspace_sampler = SubspaceSampler(
@@ -1950,7 +1950,7 @@ class MetricNetTrainer(GridHashFitTrainer):
         )
 
         # 初始化子空间采样器（替代原来的 coord_sampler 和 udf_computer）
-        from trainer_depends.datasets.util_subspace_sampler import SubspaceSampler
+        from trainer_depends.datasets.util_core_subspace_sampler import SubspaceSampler
         self.n_subspaces_to_sample = getattr(opt, 'n_subspaces_to_sample', 256)
         self.n_points_per_subspace = getattr(opt, 'n_points_per_subspace', 8)
         self.infonce_temperature = getattr(opt, 'infonce_temperature', 1.0)

@@ -179,11 +179,20 @@ class NetworkComponents:
         from wisp.config import instantiate
         import sys
 
+        import os
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
         if config_path is None:
-            # 使用 trainer_depends 中的配置文件
-            import os
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            config_path = getattr(self.opt, 'p_grid_config_yaml', None)
+
+        if not config_path:
             config_path = os.path.join(project_root, 'trainer_depends/configs/nerf_hash.yaml')
+        elif not os.path.isabs(str(config_path)):
+            config_path = os.path.join(project_root, str(config_path))
+
+        config_path = os.path.abspath(config_path)
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Grid config YAML not found: {config_path}")
 
         # 临时保存并清空 sys.argv，避免与 tyro 的参数解析冲突
         original_argv = sys.argv.copy()

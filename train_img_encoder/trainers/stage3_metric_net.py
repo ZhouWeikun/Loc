@@ -30,7 +30,7 @@ project_root = os.path.dirname(train_img_encoder_dir)  # pyproj_neuloc_v0/
 sys.path.insert(0, train_img_encoder_dir)  # 用于导入core, models等
 sys.path.insert(0, project_root)  # 用于导入tool模块
 
-from trainers.stage2_grid_hashfit import GridHashFitTrainer
+from trainers.stage2_grid_hashfit_v0 import GridHashFitTrainer
 from core.base.components import NetworkComponents
 from util_udf_computer import UDFComputer
 from models.pos_encoder import encode_4d_coords

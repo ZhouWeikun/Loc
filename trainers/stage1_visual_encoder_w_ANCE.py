@@ -15,13 +15,16 @@ Stage 1: Visual Encoder Trainer
 - 支持多场景训练
 """
 
+import os
+import re
+import sys
+import time
+import argparse
+
+import numpy as np
 import torch
 import torch.nn.functional as TF
 import tqdm
-import time
-import sys
-import os
-import numpy as np
 
 # 添加项目根目录到路径
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,79 +32,15 @@ sys.path.insert(0, project_root)
 
 from trainer_depends.base.trainer_base import BaseTrainer
 from trainer_depends.base.components import NetworkComponents
-from trainer_depends.miners import MultiSceneANCEMiner, SatGalleryProvider, SceneNegMasker
-
-class MultiSceneDataLoader:
-    """
-    多场景数据加载器
-
-    支持多种采样策略：
-    - round_robin: 轮流采样各场景
-    - random: 随机采样场景
-    - weighted: 按权重采样场景
-    """
-
-    def __init__(self, dataloaders, sampling_strategy='round_robin'):
-        """
-        Args:
-            dataloaders: dict, {scene_name: DataLoader}
-            sampling_strategy: str, 采样策略 ('round_robin', 'random', 'weighted')
-        """
-        self.dataloaders = dataloaders
-        self.scene_names = list(dataloaders.keys())
-        self.num_scenes = len(self.scene_names)
-        self.sampling_strategy = sampling_strategy
-
-        # 计算总迭代次数（所有场景的总batch数）
-        self.total_batches = sum(len(dl) for dl in dataloaders.values())
-
-        # 初始化迭代器
-        self.scene_iters = {}
-        self.current_scene_idx = 0
-        self.current_iter = 0
-
-    def __len__(self):
-        return self.total_batches
-
-    def __iter__(self):
-        """每个epoch开始时重置所有迭代器"""
-        self.scene_iters = {name: iter(dl) for name, dl in self.dataloaders.items()}
-        self.current_scene_idx = 0
-        self.current_iter = 0
-        return self
-
-    def __next__(self):
-        """获取下一个batch"""
-        if self.current_iter >= self.total_batches:
-            raise StopIteration
-
-        # 选择场景
-        if self.sampling_strategy == 'round_robin':
-            scene_name = self.scene_names[self.current_scene_idx]
-            self.current_scene_idx = (self.current_scene_idx + 1) % self.num_scenes
-        elif self.sampling_strategy == 'random':
-            scene_name = np.random.choice(self.scene_names)
-        elif self.sampling_strategy == 'weighted':
-            weights = [self.dataloaders[name].dataset.weight for name in self.scene_names]
-            scene_name = np.random.choice(self.scene_names, p=np.array(weights)/sum(weights))
-        else:
-            raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")
-
-        # 获取该场景的 batch
-        try:
-            batch = next(self.scene_iters[scene_name])
-        except StopIteration:
-            # 该场景遍历完，重新开始（在epoch内循环）
-            self.scene_iters[scene_name] = iter(self.dataloaders[scene_name])
-            batch = next(self.scene_iters[scene_name])
-
-        # 在 batch 中添加场景名称标记
-        batch['scene_name'] = scene_name
-
-        # 更新迭代计数器
-        self.current_iter += 1
-
-        return batch
+from trainers.util_core_eval import compute_topk_acc_from_coords
+from trainers.util_stage1_ance import Stage1ANCEHelper
+from trainers.util_stage1_gallery_manager import (
+    Stage1ReferenceGalleryBank,
+    Stage1ReferenceGalleryFeatureConfig,
+    Stage1ReferenceGalleryLayoutConfig,
+)
+from trainers.util_stage1_multi_scene_dataloader import MultiSceneDataLoader
+from trainers.util_stage1_retrieval_evaluator import Stage1RetrievalEvalConfig, Stage1RetrievalEvaluator
 
 
 class VisualEncoderTrainer(BaseTrainer):
@@ -111,6 +50,9 @@ class VisualEncoderTrainer(BaseTrainer):
     训练视觉特征聚合器（vis_aggregator）
     """
 
+    # ------------------------------------------------------------------
+    # Initialization
+    # ------------------------------------------------------------------
     def __init__(self, opt=None):
         """初始化Stage 1 Trainer"""
         super().__init__(opt)
@@ -120,6 +62,9 @@ class VisualEncoderTrainer(BaseTrainer):
 
         # 设置可训练参数
         self._setup_trainable_params()
+
+    def _get_train_log_filename(self, exp_name):
+        return f"{exp_name}.log"
 
     def _init_networks(self):
         """初始化所有网络组件"""
@@ -139,7 +84,6 @@ class VisualEncoderTrainer(BaseTrainer):
         )
 
         print("="*80 + "\n")
-
 
     def _setup_trainable_params(self):
         """设置可训练参数"""
@@ -164,15 +108,80 @@ class VisualEncoderTrainer(BaseTrainer):
         print(f"  可训练: {trainable_names}")
         print(f"  冻结:   {frozen_names}\n")
 
+    # ------------------------------------------------------------------
+    # Checkpoint Helpers
+    # ------------------------------------------------------------------
+    def _resolve_eval_ckpt_config(self, ckpt_config=None):
+        ckpt2load = ckpt_config
+        if ckpt2load is None:
+            ckpt2load = getattr(self.opt, "load2test", "")
+            if not ckpt2load:
+                ckpt2load = getattr(self.opt, "load2train", "")
+        return ckpt2load
 
+    def _pick_ckpt_path_for_log(self, ckpt_config):
+        if isinstance(ckpt_config, dict):
+            for value in ckpt_config.values():
+                if value:
+                    return value
+            return None
+        return ckpt_config or None
+
+    @staticmethod
+    def _resolve_gallery_ckpt_tag(ckpt_path):
+        if not ckpt_path:
+            return None
+        exp_name = os.path.basename(os.path.dirname(os.path.abspath(ckpt_path)))
+        ckpt_base = os.path.basename(ckpt_path)
+        match = re.search(r"(epoch\d+)", ckpt_base)
+        epoch_tag = match.group(1) if match else os.path.splitext(ckpt_base)[0]
+        if exp_name:
+            return f"{exp_name}_{epoch_tag}"
+        return epoch_tag
+
+    def load_eval_checkpoint(self, ckpt_config=None, verbose=True):
+        """
+        Load the evaluation checkpoint for vis_encoder / vis_aggregator.
+
+        This wraps the stage1 test-time checkpoint logic so demos and evaluators
+        do not need to duplicate the same load2test -> load2train fallback.
+        """
+        ckpt2load = self._resolve_eval_ckpt_config(ckpt_config)
+        if not ckpt2load:
+            self.last_eval_ckpt_path = None
+            if verbose:
+                print("[Checkpoint] warning: no load2test/load2train checkpoint configured, using randomly initialized vis_aggregator.")
+            return None
+
+        self._load_checkpoint(
+            ckpt2load,
+            {**self.param2optimize, **self.param2freeze},
+            optimizer=None,
+            mode="test",
+        )
+        ckpt_path = self._pick_ckpt_path_for_log(ckpt2load)
+        self.last_eval_ckpt_path = ckpt_path
+        if verbose:
+            print(f"[Checkpoint] loaded stage1 weights from {ckpt_path}")
+        return ckpt_path
+
+    # ------------------------------------------------------------------
+    # Data Loading
+    # ------------------------------------------------------------------
     def _init_multi_scene_dataloader(self):
         """初始化多场景训练数据加载器"""
         from trainer_depends.datasets.dataset_neuloc_4d_uav_sat_pair import UAVSatPairDataset, collate_uav_sat_pair
-        from trainer_depends.utils.util_sample_neg_nrcs import BoundedNegativeCoordinateSampler
-        from trainer_depends.datasets.util_coords_translater import CoordsNormProcessor
+        from trainer_depends.datasets.util_core_coords_translater import CoordsNormProcessor
 
         opt = self.opt
         scenes = opt.scenes_setting['scenes']
+        add_random_satimg_negs = bool(getattr(opt, "add_random_satimg_negs", True))
+
+        if getattr(opt, "ance_enabled", False) and add_random_satimg_negs:
+            raise ValueError(
+                "Configuration conflict: ance_enabled=True cannot be combined with "
+                "add_random_satimg_negs=True."
+            )
 
         # 为每个场景创建pair dataloader
         pair_dataloaders = {}
@@ -186,15 +195,15 @@ class VisualEncoderTrainer(BaseTrainer):
             sat_dataset = self.sat_datasets[scene_name]
             uav_dataset_train = self.uav_datasets_train[scene_name]
 
-            satmap_sampler = BoundedNegativeCoordinateSampler(self.device)
             if getattr(opt, "ance_enabled", False):
+                n_neg_per_query = 0
+            elif not add_random_satimg_negs:
                 n_neg_per_query = 0
             else:
                 n_neg_per_query = opt.batchsize_sat // opt.batchsize_uav
             pair_dataset = UAVSatPairDataset(
                 uav_dataset=uav_dataset_train,
                 sat_dataset=sat_dataset,
-                satmap_sampler=satmap_sampler,
                 device= self.device,
                 n_neg_per_query=n_neg_per_query, #控制负样本数=正样本数的倍率
                 sat_as_query=opt.sat_as_query,
@@ -208,9 +217,9 @@ class VisualEncoderTrainer(BaseTrainer):
                 num_workers=opt.num_worker,
                 shuffle=True,
                 drop_last=True,
-                pin_memory=True,
+                pin_memory=False,
                 collate_fn=collate_uav_sat_pair,
-                persistent_workers=True
+                persistent_workers=(opt.num_worker > 0)
             )
 
             pair_dataloaders[scene_name] = pair_dataloader
@@ -237,194 +246,442 @@ class VisualEncoderTrainer(BaseTrainer):
                         f"总计{self.dataloader_train.total_batches}个batches, "
                         f"采样策略={opt.scenes_setting['sampling_strategy']}\n")
 
-    def _warp_uav_imgs(self, imgs, rot_rad=None, scale_f=None):
-        if rot_rad is None and scale_f is None:
-            return imgs
-        b = imgs.shape[0]
-        device = imgs.device
-        dtype = imgs.dtype
-        if rot_rad is None:
-            rot_rad = torch.zeros(b, device=device, dtype=dtype)
-        else:
-            rot_rad = rot_rad.to(device=device, dtype=dtype)
-        if scale_f is None:
-            scale_f = torch.ones(b, device=device, dtype=dtype)
-        else:
-            scale_f = scale_f.to(device=device, dtype=dtype)
-        cos_v = torch.cos(rot_rad)
-        sin_v = torch.sin(rot_rad)
-        theta = torch.zeros(b, 2, 3, device=device, dtype=dtype)
-        theta[:, 0, 0] = cos_v * scale_f
-        theta[:, 0, 1] = sin_v * scale_f
-        theta[:, 1, 0] = -sin_v * scale_f
-        theta[:, 1, 1] = cos_v * scale_f
-        grid = TF.affine_grid(theta, imgs.size(), align_corners=False)
-        return TF.grid_sample(imgs, grid, mode='bilinear', padding_mode='border', align_corners=False)
+    # ------------------------------------------------------------------
+    # ANCE Integration
+    # ------------------------------------------------------------------
+    def _init_ance_helper(self):
+        self.ance_helper = Stage1ANCEHelper(self)
+        self.ance_helper.initialize()
+        self.ance_enabled = self.ance_helper.enabled
+        self.ance_gallery_info = self.ance_helper.gallery_info
 
-    def _jitter_ance_neg_coords(self, coords, sat_dataset):
-        if coords is None:
-            return coords
-        radii = getattr(sat_dataset, "ance_filter_radius", None)
-        if not radii:
-            radii = getattr(sat_dataset, "ance_neg_radii", None)
-        if not radii:
-            return coords
-
-        coords_t = coords if torch.is_tensor(coords) else torch.as_tensor(coords, dtype=torch.float32)
-        coords_t = coords_t.clone()
-
-        radius_nrc = float(radii.get("radius_nrc", 0.0) or 0.0)
-        radius_rot = float(radii.get("radius_rot_rad", 0.0) or 0.0)
-        radius_scale_log = radii.get("radius_scale_log", None)
-
-        if radius_nrc > 0 and coords_t.shape[-1] >= 2:
-            noise = (torch.rand_like(coords_t[..., :2]) * 2.0 - 1.0) * radius_nrc
-            coords_t[..., :2] = coords_t[..., :2] + noise
-            nr_min, nr_max = sat_dataset.nr2sample_range
-            nc_min, nc_max = sat_dataset.nc2sample_range
-            coords_t[..., 0] = coords_t[..., 0].clamp(min=float(nr_min), max=float(nr_max))
-            coords_t[..., 1] = coords_t[..., 1].clamp(min=float(nc_min), max=float(nc_max))
-
-        if radius_rot > 0 and coords_t.shape[-1] >= 3:
-            noise = (torch.rand_like(coords_t[..., 2]) * 2.0 - 1.0) * radius_rot
-            coords_t[..., 2] = coords_t[..., 2] + noise
-            coords_t[..., 2] = (coords_t[..., 2] + torch.pi) % (2 * torch.pi) - torch.pi
-
-        if radius_scale_log is not None and coords_t.shape[-1] >= 4:
-            radius_scale_log = float(radius_scale_log)
-            noise = (torch.rand_like(coords_t[..., 3]) * 2.0 - 1.0) * radius_scale_log
-            coords_t[..., 3] = coords_t[..., 3] * (1.0 + noise)
-            s_min, s_max = sat_dataset.satimgsize_scale_to_ref_m_boundary
-            coords_t[..., 3] = coords_t[..., 3].clamp(min=float(s_min), max=float(s_max))
-
-        return coords_t
-
-    def _init_ance_miners(self):
-        opt = self.opt
-        self.ance_enabled = getattr(opt, "ance_enabled", False)
-        if not self.ance_enabled:
+    def _maybe_refresh_ance_gallery(self, epoch):
+        if not getattr(self, "ance_enabled", False):
             return
-        self.ance_backend = getattr(opt, "ance_backend", "faiss")
-        self.ance_metric = getattr(opt, "ance_metric", "l2")
-        self.ance_use_gpu_index = getattr(opt, "ance_use_gpu_index", False)
-        self.ance_top_k = getattr(opt, "ance_top_k", 1024)  #top_k 决定 从 gallery 里先取多少个最相似候选
-        self.ance_n_neg = getattr(opt, "ance_n_neg", opt.batchsize_sat // opt.batchsize_uav) #再用 neg_mask 过滤掉“正样本半径内”的候选，最后从剩下的里取 n_neg
-        self.ance_refresh_epoch = getattr(opt, "ance_refresh_epoch", 2)
-        self.ance_gallery_chunk_size = getattr(opt, "ance_gallery_chunk_size", int(1024))
-        #about how to construct Gallery, controlling the sampling ratio
-        self.ance_overlap = getattr(opt, "ance_overlap", 0.5)
-        self.ance_rot_rad_resolution = getattr(opt, "ance_rot_rad_resolution", np.float32(np.pi / 18.))
-        self.ance_rot_list = getattr(opt, "ance_rot_list", None)
-        self.ance_consider_scale = getattr(opt, "ance_consider_scale", False) #负样本挖掘时是否考虑scale轴的影响
-        #about SatGalleryProvider
-        self.ance_ref_wo_rot_var = getattr(opt, "ance_ref_wo_rot_var", False)
-        self.ance_ref_wo_scale_var = getattr(opt, "ance_ref_wo_scale_var", True)
-        #about how to handling query when mining
-        self.ance_query_rot2uniform = getattr(opt, "ance_query_rot2uniform", False)
-        self.ance_query_scale2uniform = getattr(opt, "ance_query_scale2uniform", False)
-        self.ance_recompute_pos = getattr(opt, "ance_recompute_pos", True)
+        self.ance_helper.maybe_refresh(epoch)
+        self.ance_gallery_info = self.ance_helper.gallery_info
 
-        #about how to define the negatives
-        maskers_by_scene = {}
-        scenes = self.opt.scenes_setting['scenes']
-        for scene in scenes:
-            scene_name = scene['name']
-            sat_dataset = self.sat_datasets[scene_name]
-            sigma = self.coord_normed_sigmas[scene_name]
-            sigma_nrc = float(sigma[0].item())
-            sigma_rot = float(sigma[2].item())
-            sigma_scale_log = float(sigma[3].item())
-            gs_factor = float(getattr(self, "gs_sigma2radius_factor", 2.0))
-            radius_nrc = sigma_nrc * sat_dataset.halfimg_radius_nrc * gs_factor
-            radius_rot = sigma_rot * gs_factor
-            radius_scale_log = sigma_scale_log * gs_factor
-            sat_dataset.ance_filter_radius = {
-                "radius_nrc": radius_nrc,
-                "radius_rot_rad": radius_rot,
-                "radius_scale_log": radius_scale_log if self.ance_consider_scale else None,
-            }
-            sat_dataset.ance_neg_radii = sat_dataset.ance_filter_radius
-            maskers_by_scene[scene_name] = SceneNegMasker(
-                radius_nrc=radius_nrc,
-                radius_rot_rad=radius_rot,
-                radius_scale_log=radius_scale_log if self.ance_consider_scale else None,
-            )
-
-        self.ance_miners = MultiSceneANCEMiner(
-            backend=self.ance_backend,
-            use_gpu=self.ance_use_gpu_index,
-            metric=self.ance_metric,
-            maskers_by_scene=maskers_by_scene,
+    # ------------------------------------------------------------------
+    # Loss & Training Strategy
+    # ------------------------------------------------------------------
+    def _init_loss_modules(self):
+        from losses.CL_losses_w_weight import (
+            pairLoss_multiEdge_logSum,
+            pairLoss_singleEdge_hardest,
+            pairLoss_singleEdge_weightedHardest,
         )
-        self.ance_gallery_info = {}
-        self.ance_last_refresh_epoch = None
+        from losses.CL_losses_wo_weight import (
+            tripleLoss_singleEdge_hardest_fm_mask,
+            tripleLoss_singleEdge_hardest_fm_weight,
+        )
 
-    def _refresh_ance_gallery(self, scene_name=None):
-        if not self.ance_enabled:
-            return
-        if not self.ance_ref_wo_scale_var:
-            raise NotImplementedError("ANCE gallery with ref_wo_scale_var=False is not implemented yet.")
-        scenes = self.opt.scenes_setting['scenes']
-        if scene_name is None:
-            scene_names = [s['name'] for s in scenes]
-        else:
-            scene_names = [scene_name]
+        self.active_loss_type = str(getattr(self.opt, "loss_type", "tripleLoss_singleEdge_hardest_fm_weight")).lower()
+        loss_registry = {
+            "pairloss_singleedge_weightedhardest": {
+                "factory": lambda: pairLoss_singleEdge_weightedHardest(
+                    beta=5.0,
+                    margin=0.0,
+                    learnable_beta=True,
+                ),
+                "input_mode": "weights",
+                "output_mode": "pair",
+                "module_name": "loss_fm_weight",
+            },
+            "pairloss_singleedge_hardest": {
+                "factory": lambda: pairLoss_singleEdge_hardest(
+                    beta=5.0,
+                    margin=0.0,
+                ),
+                "input_mode": "weights",
+                "output_mode": "pair",
+                "module_name": "loss_fm_weight",
+            },
+            "pairloss_multiedge_logsum": {
+                "factory": lambda: pairLoss_multiEdge_logSum(
+                    beta=5.0,
+                    margin=0.0,
+                    learnable_beta=True,
+                ),
+                "input_mode": "weights",
+                "output_mode": "pair",
+                "module_name": "loss_fm_weight",
+            },
+            "tripleloss_singleedge_hardest_fm_weight": {
+                "factory": lambda: tripleLoss_singleEdge_hardest_fm_weight(
+                    beta=5.0,
+                    margin=0.0,
+                    learnable_beta=True,
+                ),
+                "input_mode": "weights",
+                "output_mode": "scalar",
+                "module_name": "loss_fm_weight",
+            },
+            "tripleloss_singleedge_hardest_fm_mask": {
+                "factory": lambda: tripleLoss_singleEdge_hardest_fm_mask(),
+                "input_mode": "mask",
+                "output_mode": "scalar",
+                "module_name": "loss_fm_mask",
+            },
+        }
+        if self.active_loss_type not in loss_registry:
+            supported = ", ".join(sorted(loss_registry.keys()))
+            raise ValueError(
+                f"Unsupported loss_type: {self.active_loss_type}. "
+                f"Supported: {supported}"
+            )
 
-        for name in scene_names:
-            sat_dataset = self.sat_datasets[name]
-            provider = SatGalleryProvider(
-                sat_dataset,
-                overlap=self.ance_overlap,
-                ref_wo_rot_var=self.ance_ref_wo_rot_var,
-                ref_wo_scale_var=self.ance_ref_wo_scale_var,
-                rot_rad_resolution=self.ance_rot_rad_resolution,
-                rot_list=self.ance_rot_list
-            )
-            coords_gallery = provider.build_coords()
-            feats_gallery_chunks = []
-            apply_rot_gallery = not self.ance_ref_wo_rot_var
-            chunk_iter = tqdm.tqdm(
-                range(0, coords_gallery.shape[0], self.ance_gallery_chunk_size),
-                desc=f"[ANCE] gallery {name}",
-                leave=False
-            )
-            with torch.inference_mode():
-                for start in chunk_iter:
-                    end = min(start + self.ance_gallery_chunk_size, coords_gallery.shape[0])
-                    coords_chunk = coords_gallery[start:end]
-                    satimgs = sat_dataset.crop_satimg_by_4d_coords_fast(
-                        coords_chunk, apply_rotation=apply_rot_gallery, chunk_size=self.ance_gallery_chunk_size, random_satmap=True,
+        loss_spec = loss_registry[self.active_loss_type]
+        self.active_loss_input_mode = loss_spec["input_mode"]
+        self.active_loss_output_mode = loss_spec["output_mode"]
+        self.loss_w_weight = self.active_loss_input_mode == "weights"
+        self.active_loss_module_name = loss_spec["module_name"]
+        self.active_loss_module = loss_spec["factory"]().to(self.device)
+        self._register_active_loss_module()
+
+    def _register_active_loss_module(self):
+        self.param2optimize.pop("loss_fm_weight", None)
+        self.param2optimize.pop("loss_fm_mask", None)
+        self.param2optimize[self.active_loss_module_name] = self.active_loss_module
+        print(
+            f"Loss配置: loss_type={self.active_loss_type}, "
+            f"active_loss_module={self.active_loss_module_name}, "
+            f"input_mode={self.active_loss_input_mode}, "
+            f"output_mode={self.active_loss_output_mode}"
+        )
+
+    def _reduce_loss_output(self, loss_output):
+        if self.active_loss_output_mode == "pair":
+            loss_pos, loss_neg = loss_output
+            return loss_pos + loss_neg
+        return loss_output
+
+    def _build_train_ckpt_modules(self):
+        modules = {
+            "vis_aggregator": self.vis_aggregator,
+            "vis_encoder": self.vis_encoder,
+            self.active_loss_module_name: self.active_loss_module,
+            "loss_type": self.active_loss_type,
+        }
+        if getattr(self.opt, "autocast", False) and hasattr(self, "scaler") and self.scaler is not None:
+            modules["amp_scaler"] = self.scaler
+        return modules
+
+    def _load_module_state_from_checkpoint(self, checkpoint, module_name, module, strict=True):
+        if module_name not in checkpoint:
+            return False
+        try:
+            incompatible = module.load_state_dict(checkpoint[module_name], strict=strict)
+            if not strict:
+                missing = getattr(incompatible, "missing_keys", [])
+                unexpected = getattr(incompatible, "unexpected_keys", [])
+                if missing or unexpected:
+                    self.logger.info(
+                        f"[Checkpoint] relaxed load for {module_name}: "
+                        f"missing={missing}, unexpected={unexpected}"
+                    ) if self.logger else print(
+                        f"[Checkpoint] relaxed load for {module_name}: "
+                        f"missing={missing}, unexpected={unexpected}"
                     )
-                    satimgs = satimgs.to(self.device)
-                    if self.opt.autocast:
-                        with torch.cuda.amp.autocast():
-                            feats = self._get_feats_fm_imgs(satimgs)
-                    else:
-                        feats = self._get_feats_fm_imgs(satimgs)
-                    feats_gallery_chunks.append(feats.detach().cpu())
-                    del satimgs, feats
-                    if self.device.type == "cuda":
-                        torch.cuda.empty_cache()
-            feats_gallery = torch.cat(feats_gallery_chunks, dim=0).numpy()
-            self.ance_miners.update_scene(name, feats_gallery, coords_gallery)
-            n_rot = int(provider.rot_list.numel()) if getattr(provider, "rot_list", None) is not None else 1
-            self.ance_gallery_info[name] = {
-                "scale": float(provider.ref_scale),
-                "rot": float(provider.rot_list[0]) if n_rot == 1 else None,
-                "n_rot": n_rot,
-                "ref_wo_rot_var": bool(self.ance_ref_wo_rot_var),
-                "ref_wo_scale_var": bool(self.ance_ref_wo_scale_var),
-                "rot_rad_resolution": self.ance_rot_rad_resolution,
-                "rot_list": self.ance_rot_list,
-                "overlap": float(self.ance_overlap),
-                "size": int(coords_gallery.shape[0])
+        except RuntimeError as exc:
+            if strict:
+                raise exc
+            incompatible = module.load_state_dict(checkpoint[module_name], strict=False)
+            missing = getattr(incompatible, "missing_keys", [])
+            unexpected = getattr(incompatible, "unexpected_keys", [])
+            msg = (
+                f"[Checkpoint] non-strict load for {module_name} after mismatch: "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+            if self.logger:
+                self.logger.info(msg)
+            else:
+                print(msg)
+        return True
+
+    def _load_module_from_file(self, ckpt_path, module_name, module, strict=True):
+        checkpoint = torch.load(ckpt_path, map_location=lambda storage, loc: storage)
+        if isinstance(checkpoint, dict) and module_name in checkpoint:
+            state_dict = checkpoint[module_name]
+        else:
+            state_dict = checkpoint
+        module.load_state_dict(state_dict, strict=strict)
+        return checkpoint
+
+    def _load_train_checkpoint(self, ckpt_config):
+        begin_epoch = 0
+        if not ckpt_config:
+            return begin_epoch
+
+        if isinstance(ckpt_config, dict):
+            module_map = {
+                "vis_aggregator": self.vis_aggregator,
+                "vis_encoder": self.vis_encoder,
+                self.active_loss_module_name: self.active_loss_module,
             }
-            if self.logger is not None:
-                self.logger.info(
-                    f"[ANCE] refresh gallery {name}: {coords_gallery.shape[0]} pts"
+            for module_name, ckpt_path in ckpt_config.items():
+                if not ckpt_path:
+                    continue
+                if module_name not in module_map:
+                    continue
+                self._load_module_from_file(ckpt_path, module_name, module_map[module_name], strict=True)
+                msg = f"✅ 加载{module_name}模块: {ckpt_path}"
+                if self.logger:
+                    self.logger.info(msg)
+                else:
+                    print(msg)
+            return begin_epoch
+
+        checkpoint = torch.load(ckpt_config, map_location=lambda storage, loc: storage)
+        self._load_module_state_from_checkpoint(checkpoint, "vis_aggregator", self.vis_aggregator, strict=True)
+        self._load_module_state_from_checkpoint(checkpoint, "vis_encoder", self.vis_encoder, strict=True)
+
+        loss_type_in_ckpt = checkpoint.get("loss_type", None)
+        if loss_type_in_ckpt is not None and str(loss_type_in_ckpt).lower() != self.active_loss_type:
+            msg = (
+                f"[Checkpoint] loss_type mismatch: ckpt={loss_type_in_ckpt}, "
+                f"current={self.active_loss_type}. Try loading active loss module with fallback."
+            )
+            if self.logger:
+                self.logger.info(msg)
+            else:
+                print(msg)
+
+        try:
+            loaded_loss = self._load_module_state_from_checkpoint(
+                checkpoint,
+                self.active_loss_module_name,
+                self.active_loss_module,
+                strict=True,
+            )
+        except RuntimeError:
+            loaded_loss = self._load_module_state_from_checkpoint(
+                checkpoint,
+                self.active_loss_module_name,
+                self.active_loss_module,
+                strict=False,
+            )
+
+        if "optimizer_state" in checkpoint:
+            self.optimizer.load_state_dict(checkpoint["optimizer_state"])
+
+        if "amp_scaler" in checkpoint and getattr(self.opt, "autocast", False) and hasattr(self, "scaler"):
+            self.scaler.load_state_dict(checkpoint["amp_scaler"])
+
+        if "epoch" in checkpoint:
+            begin_epoch = checkpoint["epoch"] + 1
+
+        msg = f"✅ 加载checkpoint: {ckpt_config}, 从epoch {begin_epoch}继续训练"
+        if self.logger:
+            self.logger.info(msg)
+        else:
+            print(msg)
+        return begin_epoch
+
+    def _compute_weighted_metric_loss(
+            self,
+            scene_name,
+            feat_dist_mat,
+            coords_uav,
+            coords_uav_neg_flat,
+            has_sat_query=False,
+            b_uav=0,
+            b_sat=0,
+    ):
+        # 备用的加权度量学习分支：先用坐标邻近性生成 soft weight，
+        # 再把 feature distance 拆成正负项损失，避免这部分细节堆在 train() 主循环里。
+        weights_ref = None
+        if scene_name in self.coord_normers:
+            coord_normer = self.coord_normers[scene_name]
+            normed_sigmas = self.coord_normed_sigmas[scene_name]
+            if coords_uav_neg_flat is None:
+                coords_ref = coords_uav
+            else:
+                coords_ref = torch.cat([coords_uav, coords_uav_neg_flat], dim=0)
+            coords_uav_linear = coord_normer.raw_to_linear(coords_uav)
+            coords_ref_linear = coord_normer.raw_to_linear(coords_ref)
+            coords_ref_linear = coords_ref_linear.unsqueeze(0).expand(
+                coords_uav_linear.shape[0], -1, -1
+            )
+            weights_ref = coord_normer.compute_weight_matrix_linear(
+                coords_uav_linear.unsqueeze(1),
+                coords_ref_linear,
+                normed_sigmas,
+                ignore_dim=None
+            ).squeeze(1)
+
+        if weights_ref is None:
+            raise ValueError(
+                f"Weighted metric loss requires coord_normer for scene '{scene_name}'."
+            )
+
+        if has_sat_query and b_sat > 0:
+            feat_dist_mat_uav = feat_dist_mat[:b_uav]
+            feat_dist_mat_sat = feat_dist_mat[b_uav:]
+            weights_ref_uav = weights_ref[:b_uav]
+            weights_ref_sat = weights_ref[b_uav:]
+
+            loss_uav = self._reduce_loss_output(
+                self.active_loss_module(
+                    feat_dist_mat_uav, weights_ref_uav, 1 - weights_ref_uav
                 )
+            )
+            loss_sat = self._reduce_loss_output(
+                self.active_loss_module(
+                    feat_dist_mat_sat, weights_ref_sat, 1 - weights_ref_sat
+                )
+            )
+            sat_query_loss_weight = float(0.1)
+            return loss_uav + sat_query_loss_weight * loss_sat
 
+        return self._reduce_loss_output(
+            self.active_loss_module(feat_dist_mat, weights_ref, 1 - weights_ref)
+        )
 
+    def _build_pos_mask(self, batch_size, num_refs, device):
+        # 当前默认的 hard-positive mask 构造逻辑：
+        # query 与同索引正样本配对，其余 reference 视为负样本，便于 SWS/SWT 类损失直接复用。
+        if (not hasattr(self, "pos_mask_mat")
+                or self.pos_mask_mat.shape[0] != batch_size
+                or self.pos_mask_mat.shape[1] != num_refs):
+            self.pos_mask_mat = torch.cat([
+                torch.eye(batch_size, device=device),
+                torch.zeros(
+                    batch_size,
+                    num_refs - batch_size,
+                    device=device,
+                )
+            ], dim=-1).bool()
+        return self.pos_mask_mat
+
+    # ------------------------------------------------------------------
+    # Batch Parsing & Forward Helpers
+    # ------------------------------------------------------------------
+    def _extract_train_batch(self, batch):
+        scene_name = batch.get('scene_name', None)
+        sat_dataset = self.sat_datasets.get(scene_name, self.sat_dataset)
+
+        uavimgs = batch['uavimgs'].to(self.device)
+        satimgs_pos = batch['satimgs_pos'].to(self.device)
+        coords_uav = batch['coords_uav'].to(self.device)
+
+        has_sat_query = 'satimgs_query' in batch
+        b_uav = uavimgs.shape[0]
+        b_sat = 0
+        if has_sat_query:
+            satimgs_query = batch['satimgs_query'].to(self.device)
+            satimgs_pos2satimg_query = batch['satimgs_pos2satimg_query'].to(self.device)
+            coords_sat_query = batch['coords_sat_query'].to(self.device)
+            b_sat = satimgs_query.shape[0]
+            uavimgs = torch.cat([uavimgs, satimgs_query], dim=0)
+            satimgs_pos = torch.cat([satimgs_pos, satimgs_pos2satimg_query], dim=0)
+            coords_uav = torch.cat([coords_uav, coords_sat_query], dim=0)
+
+        return {
+            "scene_name": scene_name,
+            "sat_dataset": sat_dataset,
+            "uavimgs": uavimgs,
+            "satimgs_pos": satimgs_pos,
+            "coords_uav": coords_uav,
+            "has_sat_query": has_sat_query,
+            "b_uav": b_uav,
+            "b_sat": b_sat,
+        }
+
+    def _load_batch_negatives(self, batch):
+        if 'satimgs_neg' not in batch:
+            return None, None
+
+        satimgs_neg = batch['satimgs_neg'].to(self.device)
+        coords_uav_neg = batch['coords_uav_neg'].to(self.device)
+        satimgs_neg_flat = satimgs_neg.reshape(-1, *satimgs_neg.shape[2:])
+        coords_uav_neg_flat = coords_uav_neg.reshape(-1, *coords_uav_neg.shape[2:])
+        return satimgs_neg_flat, coords_uav_neg_flat
+
+    def _prepare_batch_negatives(self, batch_state, batch):
+        satimgs_neg_flat, coords_uav_neg_flat = self._load_batch_negatives(batch)
+        if getattr(self, "ance_enabled", False):
+            ance_batch = self.ance_helper.prepare_batch(
+                scene_name=batch_state["scene_name"],
+                sat_dataset=batch_state["sat_dataset"],
+                uavimgs=batch_state["uavimgs"],
+                coords_uav=batch_state["coords_uav"],
+            )
+            batch_state["uavimgs"] = ance_batch["uavimgs"]
+            batch_state["coords_uav"] = ance_batch["coords_uav"]
+            satimgs_neg_flat = ance_batch["satimgs_neg_flat"]
+            coords_uav_neg_flat = ance_batch["coords_uav_neg_flat"]
+
+        if satimgs_neg_flat is None and coords_uav_neg_flat is None:
+            if getattr(self, "ance_enabled", False):
+                raise ValueError("ANCE is enabled but did not return negatives.")
+            if bool(getattr(self.opt, "add_random_satimg_negs", True)):
+                raise ValueError("Random satimg negatives are enabled but the batch did not provide them.")
+            return None, None
+        if satimgs_neg_flat is None or coords_uav_neg_flat is None:
+            raise ValueError("Training batch does not provide negatives and ANCE is disabled.")
+        return satimgs_neg_flat, coords_uav_neg_flat
+
+    def _forward_train_batch(self, uavimgs, satimgs_pos, satimgs_neg_flat):
+        if satimgs_neg_flat is None:
+            imgs_input = torch.cat([uavimgs, satimgs_pos], dim=0)
+        else:
+            imgs_input = torch.cat([uavimgs, satimgs_pos, satimgs_neg_flat], dim=0)
+        with torch.no_grad():
+            feats_patch = self.vis_encoder(imgs_input)
+
+        feats_agg = self.vis_aggregator(feats_patch)
+        batch_size = uavimgs.shape[0]
+        feats_q = feats_agg[:batch_size]
+        feats_ref = feats_agg[batch_size:]
+        feat_dist_mat = torch.norm(
+            feats_q.unsqueeze(1) - feats_ref.unsqueeze(0),
+            p=2,
+            dim=-1
+        )
+        return {
+            "batch_size": batch_size,
+            "feats_q": feats_q,
+            "feats_ref": feats_ref,
+            "feat_dist_mat": feat_dist_mat,
+        }
+
+    def _log_feature_variance_stats(self, feats_q, feats_ref):
+        q_var_mean = torch.var(feats_q, dim=0).mean().item()
+        ref_var_mean = torch.var(feats_ref, dim=0).mean().item()
+
+        self.logger.info(f"FeatQ方差均值: {q_var_mean:.4e}")
+        self.logger.info(f"FeatRef方差均值: {ref_var_mean:.4e}")
+
+    @staticmethod
+    def _optimizer_has_any_grad(optimizer):
+        for group in optimizer.param_groups:
+            for param in group["params"]:
+                if param.grad is not None:
+                    return True
+        return False
+
+    def _compute_train_loss(self, batch_state, feat_dist_mat, coords_uav_neg_flat):
+        if self.active_loss_input_mode == "mask":
+            pos_mask_mat = self._build_pos_mask(
+                batch_size=feat_dist_mat.shape[0],
+                num_refs=feat_dist_mat.shape[1],
+                device=feat_dist_mat.device,
+            )
+            return self._reduce_loss_output(self.active_loss_module(feat_dist_mat, pos_mask_mat))
+
+        return self._compute_weighted_metric_loss(
+            scene_name=batch_state["scene_name"],
+            feat_dist_mat=feat_dist_mat,
+            coords_uav=batch_state["coords_uav"],
+            coords_uav_neg_flat=coords_uav_neg_flat,
+            has_sat_query=batch_state["has_sat_query"],
+            b_uav=batch_state["b_uav"],
+            b_sat=batch_state["b_sat"],
+        )
+
+    # ------------------------------------------------------------------
+    # Training Loop
+    # ------------------------------------------------------------------
     def train(self):
         """Stage 1训练主循环"""
         opt = self.opt
@@ -439,29 +696,14 @@ class VisualEncoderTrainer(BaseTrainer):
             self.scaler = GradScaler()
             print("✅ 启用混合精度训练 (AMP)")
 
-        # 0.5 初始化可学习的权重损失（用于学习beta）
-        from losses.CL_loss_fm_weight import SoftMultiSimLoss_WeightedMax
-        self.sms_loss = SoftMultiSimLoss_WeightedMax(
-            init_beta=10.0,
-            margin=0.0,
-            learnable_beta=True
-        ).to(self.device)
-        self.param2optimize['loss_fn'] = self.sms_loss
-        # 其他候选loss：
-        # from losses.WeightedSoftTripletLoss_fm_mat import SWTLoss_fm_mat
-        # loss_swt = SWTLoss_fm_mat(decoupling=False)
+        self._init_loss_modules()
 
         # 1. 优化器
         from tool.util_mk_optimizer import create_optimizer_w_temple
         self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam')
 
         # 2. 加载checkpoint（如果继续训练）
-        begin_epoch = self._load_checkpoint(
-            opt.load2train,
-            self.param2optimize,
-            self.optimizer,
-            mode='train'
-        )
+        begin_epoch = self._load_train_checkpoint(opt.load2train)
 
         # 3. 初始化日志
         self._init_logger()
@@ -472,8 +714,8 @@ class VisualEncoderTrainer(BaseTrainer):
         # 5. 创建多场景DataLoader
         self._init_multi_scene_dataloader()
 
-        # 6. 初始化 ANCE miners（可选）
-        self._init_ance_miners()
+        # 6. 初始化 ANCE helper（可选）
+        self._init_ance_helper()
 
         # 7. 训练循环
         num_epochs = opt.num_epochs
@@ -485,180 +727,35 @@ class VisualEncoderTrainer(BaseTrainer):
         for epoch in range(begin_epoch, num_epochs):
             self.logger.info(f'Epoch {epoch}/{num_epochs - 1}')
 
-            #刷新 ANCE gallery
-            if self.ance_enabled and (
-                    self.ance_last_refresh_epoch is None
-                    or (epoch - self.ance_last_refresh_epoch) >= self.ance_refresh_epoch
-            ):
-                self._refresh_ance_gallery()
-                self.ance_last_refresh_epoch = epoch
+            self._maybe_refresh_ance_gallery(epoch)
 
             for it, batch in tqdm.tqdm(enumerate(self.dataloader_train)):
-                scene_name = batch.get('scene_name', None)
-                sat_dataset = self.sat_datasets.get(scene_name, self.sat_dataset)
-
-                # basic
-                uavimgs = batch['uavimgs'].to(self.device)  # [B, C, H, W]
-                satimgs_pos = batch['satimgs_pos'].to(self.device)  # [B, C, H, W]
-                coords_uav = batch['coords_uav'].to(self.device)
-
-                # 处理satimgs as query的情况（区分 UAV/SAT query）
-                has_sat_query = 'satimgs_query' in batch
-                b_uav = uavimgs.shape[0]
-                b_sat = 0
-                if has_sat_query:
-                    satimgs_query = batch['satimgs_query'].to(self.device)
-                    satimgs_pos2satimg_query = batch['satimgs_pos2satimg_query'].to(self.device)
-                    coords_sat_query = batch['coords_sat_query'].to(self.device)
-                    b_sat = satimgs_query.shape[0]
-                    uavimgs = torch.cat([uavimgs, satimgs_query], dim=0)
-                    satimgs_pos = torch.cat([satimgs_pos, satimgs_pos2satimg_query], dim=0)
-                    coords_uav = torch.cat([coords_uav, coords_sat_query], dim=0)
-
-                # sample neg for per query (may be None when ANCE is enabled)
-                if 'satimgs_neg' in batch:
-                    satimgs_neg = batch.get('satimgs_neg')
-                    coords_uav_neg = batch.get('coords_uav_neg')
-                    satimgs_neg = satimgs_neg.to(self.device)
-                    coords_uav_neg = coords_uav_neg.to(self.device)
-                    satimgs_neg_flat = satimgs_neg.reshape(-1, *satimgs_neg.shape[2:])
-                    coords_uav_neg_flat = coords_uav_neg.reshape(-1, *coords_uav_neg.shape[2:])
-
-                # ANCE hard negative mining for gening satimgs_neg
-                if self.ance_enabled and scene_name in self.ance_miners.miners:
-                    gallery_info = self.ance_gallery_info.get(scene_name, None)
-                    gallery_scale = gallery_info["scale"] if gallery_info is not None else float(sat_dataset.satimgsize_scale_to_ref_m_mean)
-
-                    rot_align = -coords_uav[:, 2] if self.ance_query_rot2uniform else None
-                    scale_f = None
-                    if self.ance_query_scale2uniform:
-                        scale_f = gallery_scale / coords_uav[:, 3].clamp(min=1e-6)
-
-                    if self.ance_query_rot2uniform or self.ance_query_scale2uniform:
-                        uavimgs = self._warp_uav_imgs(uavimgs, rot_rad=rot_align, scale_f=scale_f)
-                        coords_uav = coords_uav.clone()
-                        if self.ance_query_rot2uniform:
-                            coords_uav[:, 2] = 0
-                        if self.ance_query_scale2uniform:
-                            coords_uav[:, 3] = gallery_scale
-
-                        if self.ance_recompute_pos:
-                            #query 是对齐后的图像，而sat正样本还是原始姿态的 sat 裁剪，两者不一致，所以对sat正样本也进行重剪裁
-                            coords_uav_cpu = coords_uav.detach().cpu()
-                            apply_rot = not self.ance_ref_wo_rot_var
-                            satimgs_pos = sat_dataset.crop_satimg_by_4d_coords_fast(
-                                coords_uav_cpu, apply_rotation=apply_rot, chunk_size=self.ance_gallery_chunk_size, random_satmap=True,
-                            )
-                            satimgs_pos = satimgs_pos.to(self.device)
-
-                    # mine negatives
-                    with torch.no_grad():
-                        feats_q_mining = self._get_feats_fm_imgs(uavimgs).detach().cpu().numpy()
-                    coords_uav_neg = self.ance_miners.mine(
-                        scene_name,
-                        feats_q_mining,
-                        coords_uav.detach().cpu(),
-                        top_k=self.ance_top_k,
-                        n_neg=self.ance_n_neg,
-                    )
-                    coords_uav_neg_jittered = self._jitter_ance_neg_coords(coords_uav_neg, sat_dataset)
-
-                    coords_uav_neg_flat = coords_uav_neg_jittered.reshape(-1, coords_uav_neg.shape[-1])
-                    if gallery_info is not None:
-                        apply_rot_neg = gallery_info.get("n_rot", 1) > 1
-                    else:
-                        apply_rot_neg = not self.ance_ref_wo_rot_var
-                    satimgs_neg_flat = sat_dataset.crop_satimg_by_4d_coords_fast(
-                        coords_uav_neg_flat, apply_rotation=apply_rot_neg, chunk_size=self.ance_gallery_chunk_size,random_satmap=True,
-                    )
-                    satimgs_neg_flat = satimgs_neg_flat.to(self.device)
-                    coords_uav_neg_flat = coords_uav_neg_flat.to(self.device)
-
-                # debug2vis
-                # id2vis = 13
-                # img2vis_sat1 =  self.sat_datasets[scene_name].denormalize_img(satimgs_pos[id2vis])
-                # img2vis_sat2 =  self.sat_datasets[scene_name].denormalize_img(satimgs_neg[id2vis*self.ance_n_neg])
-                # img2vis_uav =  self.uav_datasets_train[scene_name].denormalize_img(uavimgs[id2vis])
-                # from matplotlib import pyplot as plt
-                # fig, (ax1, ax2, ax3) = plt.subplots(nrows=1, ncols=3, figsize=(15, 5))
-                # ax1.imshow(img2vis_sat1)
-                # ax2.imshow(img2vis_sat2)
-                # ax3.imshow(img2vis_uav)
-                # plt.show()
-
-                #=====================处理图像特征=====================
-                imgs_input = torch.cat([uavimgs, satimgs_pos, satimgs_neg_flat], dim=0)
-                with torch.no_grad():
-                    feats_patch = self.vis_encoder(imgs_input)
-
-                # 聚合器处理（可训练）
-                feats_agg = self.vis_aggregator(feats_patch)  # [3B, feat_dim]
-
-                # 分离query和reference特征
-                B = uavimgs.shape[0]
-                feats_q = feats_agg[:B]  # UAV特征
-                feats_ref = feats_agg[B:]  # SAT特征（正样本+负样本）
-
-                # 计算特征距离矩阵
-                feat_dist_mat = torch.norm(
-                    feats_q.unsqueeze(1) - feats_ref.unsqueeze(0),
-                    p=2,
-                    dim=-1
-                )  # [B, 2B]
-
-                # =====================处理坐标&权重&loss=====================
-                # 由坐标计算坐标权重矩阵（与 feats_ref 顺序对齐：pos 在前，neg 在后）
-                weights_ref = None
-                scene_name = batch.get('scene_name', None)
-                if scene_name in self.coord_normers:
-                    coord_normer = self.coord_normers[scene_name]
-                    normed_sigmas = self.coord_normed_sigmas[scene_name]
-                    coords_ref = torch.cat([coords_uav, coords_uav_neg_flat], dim=0)
-                    coords_uav_linear = coord_normer.raw_to_linear(coords_uav)
-                    coords_ref_linear = coord_normer.raw_to_linear(coords_ref)
-                    coords_ref_linear = coords_ref_linear.unsqueeze(0).expand(
-                        coords_uav_linear.shape[0], -1, -1
-                    )
-                    weights_ref = coord_normer.compute_weight_matrix_linear(
-                        coords_uav_linear.unsqueeze(1),
-                        coords_ref_linear,
-                        normed_sigmas,
-                        ignore_dim=None
-                    ).squeeze(1)
-
-                if has_sat_query and b_sat > 0:
-                    feat_dist_mat_uav = feat_dist_mat[:b_uav]
-                    feat_dist_mat_sat = feat_dist_mat[b_uav:]
-                    weights_ref_uav = weights_ref[:b_uav] if weights_ref is not None else None
-                    weights_ref_sat = weights_ref[b_uav:] if weights_ref is not None else None
-
-                    loss_pos_uav, loss_neg_uav = self.sms_loss(
-                        feat_dist_mat_uav, weights_ref_uav, 1 - weights_ref_uav
-                    )
-                    loss_pos_sat, loss_neg_sat = self.sms_loss(
-                        feat_dist_mat_sat, weights_ref_sat, 1 - weights_ref_sat
-                    )
-
-                    loss_uav = loss_pos_uav + loss_neg_uav
-                    loss_sat = loss_pos_sat + loss_neg_sat
-
-                    sat_query_loss_weight = float(0.1)
-                    loss = loss_uav + sat_query_loss_weight * loss_sat
-                else:
-                    loss_pos, loss_neg = self.sms_loss(feat_dist_mat, weights_ref, 1 - weights_ref)
-                    loss = loss_pos + loss_neg
-                # version0,sml_loss,不使用距离权重，硬HardMining:
-                # if not hasattr(self, 'pos_mask_mat'):
-                #     self.pos_mask_mat = torch.cat([
-                #         torch.eye(B),
-                #         torch.zeros(feat_dist_mat.shape[0],feat_dist_mat.shape[1]-B)
-                #     ], dim=-1).bool()  # [B, 2B]
-                # loss = loss_swt(feat_dist_mat, self.pos_mask_mat)
+                batch_state = self._extract_train_batch(batch)
+                satimgs_neg_flat, coords_uav_neg_flat = self._prepare_batch_negatives(batch_state, batch)
+                forward_state = self._forward_train_batch(
+                    uavimgs=batch_state["uavimgs"],
+                    satimgs_pos=batch_state["satimgs_pos"],
+                    satimgs_neg_flat=satimgs_neg_flat,
+                )
+                feat_dist_mat = forward_state["feat_dist_mat"]
+                loss = self._compute_train_loss(
+                    batch_state=batch_state,
+                    feat_dist_mat=feat_dist_mat,
+                    coords_uav_neg_flat=coords_uav_neg_flat,
+                )
 
                 # 反向传播
                 self.optimizer.zero_grad()
                 if opt.autocast:
                     self.scaler.scale(loss).backward()
+                    if not self._optimizer_has_any_grad(self.optimizer):
+                        self.logger.warning(
+                            "Skip AMP optimizer step at epoch=%d iter=%d because no gradients were produced. loss=%.6f",
+                            epoch,
+                            it,
+                            float(loss.detach().item()),
+                        )
+                        continue
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
@@ -671,65 +768,35 @@ class VisualEncoderTrainer(BaseTrainer):
                         self.writer.add_scalar('loss_it', loss.item(), step)
 
                     # 计算Recall@1
+                    batch_size = forward_state["batch_size"]
                     recall1 = (torch.argmin(feat_dist_mat, dim=-1) == torch.arange(
-                        0, B, device=feat_dist_mat.device
-                    )).sum() / B
+                        0, batch_size, device=feat_dist_mat.device
+                    )).sum() / batch_size
 
                     # 显示场景信息
                     scene_info = f" [{batch.get('scene_name', 'unknown')}]" if len(opt.scenes_setting['scenes']) > 1 else ""
                     self.logger.info(f'training set{scene_info} recall1={recall1.item():.4f}')
+                    self._log_feature_variance_stats(
+                        forward_state["feats_q"],
+                        forward_state["feats_ref"],
+                    )
 
                 step += 1
 
             # 每个epoch结束后（固定间隔 + 最后一个epoch）
-            # if ((epoch % 5 == 0) and (epoch > 0)) or (epoch == num_epochs - 1):
-            self._save_checkpoint(
-                epoch,
-                {**self.param2optimize, **self.param2freeze},
-                self.optimizer
-            )
+            if ((epoch % 5 == 0) and (epoch > 0)) or (epoch == num_epochs - 1):
+                self._save_checkpoint(
+                    epoch,
+                    self._build_train_ckpt_modules(),
+                    self.optimizer
+                )
 
-            # epoch 结束后刷新 ANCE gallery（按频次）
-            if self.ance_enabled and (
-                self.ance_last_refresh_epoch is None
-                or (epoch - self.ance_last_refresh_epoch) >= self.ance_refresh_epoch
-            ):
-                self._refresh_ance_gallery()
-                self.ance_last_refresh_epoch = epoch
-
-            # 评估 Recall（可选）
-            # if getattr(opt, "val", False) and ((epoch + 1) % getattr(opt, "val_freq", 1) == 0):
-            if self.ance_enabled:
-                eval_overlap = self.ance_overlap
-                eval_chunk = self.ance_gallery_chunk_size
-                eval_rot_res = self.ance_rot_rad_resolution
-                eval_rot_list = self.ance_rot_list
-                eval_ref_wo_rot = self.ance_ref_wo_rot_var
-                eval_ref_wo_scale = self.ance_ref_wo_scale_var
-                eval_q_rot = self.ance_query_rot2uniform
-                eval_q_scale = self.ance_query_scale2uniform
-            else:
-                eval_overlap = getattr(opt, "val_overlap", 0.5)
-                eval_chunk = getattr(opt, "val_chunk_size", 1024)
-                eval_rot_res = getattr(opt, "val_rot_rad_resolution", None)
-                eval_rot_list = getattr(opt, "val_rot_list", None)
-                eval_ref_wo_rot = getattr(opt, "val_ref_wo_rot_var", True)
-                eval_ref_wo_scale = getattr(opt, "val_ref_wo_scale_var", True)
-                eval_q_rot = getattr(opt, "val_query_rot2uniform", True)
-                eval_q_scale = getattr(opt, "val_query_scale2uniform", False)
             self.eval_recall(
                 use_train_uav=False,
                 init_datasets=False,
                 load_ckpt=False,
                 restore_train=True,
-                overlap=eval_overlap,
-                chunk_size_vis=eval_chunk,
-                rot_rad_resolution=eval_rot_res,
-                rot_list=eval_rot_list,
-                ref_wo_rot_var=eval_ref_wo_rot,
-                ref_wo_scale_var=eval_ref_wo_scale,
-                query_rot2uniform=eval_q_rot,
-                query_scale2uniform=eval_q_scale
+                **self._build_eval_configs(),
             )
 
             # 日志
@@ -750,346 +817,637 @@ class VisualEncoderTrainer(BaseTrainer):
         self.logger.info("✅ Stage 1 训练完成！")
 
 
-    def eval_recall(self, use_train_uav=False, overlap=0.5, chunk_size_vis=1024,
-                    rot_rad_resolution=None, rot_list=None,
-                    init_datasets=True, load_ckpt=True, restore_train=True,
-                    ref_wo_rot_var=True, ref_wo_scale_var=True,
-                    query_rot2uniform=False, query_scale2uniform=False):
-        """
-        Recall评估：
-        - 参考库只构建一次（不旋转参考库图像）
-        - 默认使用 sat_dataset.satimgsize2crop_mean 作为裁剪大小
-        - ref_wo_rot_var=True: 参考库仅2D网格采样，不考虑旋转
-        - ref_wo_rot_var=False: 参考库按 rot_list 或 rot_rad_resolution 采样多个旋转角度
-        - ref_wo_scale_var=True: 参考库固定为 mean scale
-        - ref_wo_scale_var=False: 暂未实现
-        - query_rot2uniform=True: UAV图像反向旋转到正北；rot置0
-        - query_scale2uniform=True: UAV尺度统一到 satimgsize_scale_to_ref_m_mean
-        """
-        if not (0 <= overlap < 1):
-            raise ValueError("overlap must be in [0, 1).")
-        if not ref_wo_rot_var and rot_rad_resolution is None and rot_list is None:
-            raise ValueError("ref_wo_rot_var=False requires rot_list or rot_rad_resolution.")
+    # ------------------------------------------------------------------
+    # Evaluation APIs
+    # 这组是“把外部参数整理成评测可执行对象”
+    # ------------------------------------------------------------------
+    def _build_eval_configs(self):
+        return {
+            "chunk_size_vis": getattr(self.opt, "val_chunk_size", 1024),
+            "n_bins_4d": getattr(self.opt, "val_n_bins_4d", None),
+            "overlap": getattr(self.opt, "val_overlap", 0.5),
+            "scale_mode": getattr(self.opt, "val_scale_mode", "linear"),
+            "ref_wo_rot_var": getattr(self.opt, "val_ref_wo_rot_var", True),
+            "rot_list": getattr(self.opt, "val_rot_list", None),
+            "rot_rad_resolution": getattr(self.opt, "val_rot_rad_resolution", None),
+            "ref_wo_scale_var": getattr(self.opt, "val_ref_wo_scale_var", True),
+            "query_rot2uniform": getattr(self.opt, "val_query_rot2uniform", True),
+            "query_scale2uniform": getattr(self.opt, "val_query_scale2uniform", False),
+        }
+
+    @staticmethod
+    def _cfg_get(cfg, key, default=None):
+        if cfg is None:
+            return default
+        if isinstance(cfg, dict):
+            return cfg.get(key, default)
+        return getattr(cfg, key, default)
+
+    def _get_eval_models(self):
+        return list(self.param2optimize.values()) + list(self.param2freeze.values())
+
+    def _eval_log(self, msg, eval_log_lines=None):
+        if self.logger is not None:
+            self.logger.info(msg)
+        else:
+            print(msg)
+        if eval_log_lines is not None:
+            eval_log_lines.append(msg)
+
+    @staticmethod
+    def _resolve_eval_log_path(ckpt_path):
+        if not ckpt_path:
+            return None
+        ckpt_dir = os.path.dirname(ckpt_path)
+        base = os.path.basename(ckpt_path)
+        match = re.search(r"epoch(\d+)", base)
+        ep_tag = match.group(1) if match else "latest"
+        return os.path.join(ckpt_dir, f"eval_res_{ep_tag}.txt")
+
+    def _save_eval_log(self, eval_log_lines, ckpt_path):
+        if not ckpt_path or not eval_log_lines:
+            return
+        try:
+            out_path = self._resolve_eval_log_path(ckpt_path)
+            if out_path is None:
+                return
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(str(line) for line in eval_log_lines))
+        except Exception as exc:
+            self._eval_log(f"[eval_recall] failed to save log: {exc}")
+
+    def _build_eval_layout_cfg(
+            self,
+            overlap=0.5,
+            rot_rad_resolution=None,
+            rot_list=None,
+            n_bins_4d=None,
+            scale_mode="linear",
+            ref_wo_rot_var=True,
+            ref_wo_scale_var=True,
+    ):
+        if n_bins_4d is not None:
+            return Stage1ReferenceGalleryLayoutConfig(
+                mode="n_bins_4d",
+                n_bins_4d=n_bins_4d,
+                scale_mode=scale_mode,
+            )
+
         if not ref_wo_scale_var:
-            raise NotImplementedError("ref_wo_scale_var=False is not implemented yet.")
+            raise NotImplementedError("ref_wo_scale_var=False is not supported in overlap-mode evaluation.")
+
+        rot_values = None
+        n_rot = 1
         if not ref_wo_rot_var:
             if rot_list is not None:
-                rot_arr = np.asarray(rot_list, dtype=np.float32).reshape(-1)
-                if rot_arr.size == 0:
+                rot_values = np.asarray(rot_list, dtype=np.float32).reshape(-1)
+                if rot_values.size == 0:
                     raise ValueError("rot_list must be non-empty.")
-                rot_list = rot_arr.tolist()
+                rot_values = rot_values.tolist()
             else:
+                if rot_rad_resolution is None:
+                    raise ValueError("ref_wo_rot_var=False requires rot_list or rot_rad_resolution.")
                 rot_rad_resolution = float(rot_rad_resolution)
                 if rot_rad_resolution <= 0 or rot_rad_resolution > 2 * np.pi:
                     raise ValueError("rot_rad_resolution must be in (0, 2*pi].")
+                rot_values = torch.arange(-np.pi, np.pi, rot_rad_resolution, dtype=torch.float32).tolist()
+            n_rot = len(rot_values)
 
-        # 初始化数据集（评估时也需要）
-        if init_datasets:
-            self._init_datasets(create_train_loader=False)
-
-        # 加载测试用 checkpoint（优先 load2test，其次 load2train）
-        ckpt2load_path = None
-        if load_ckpt:
-            ckpt2load = getattr(self.opt, "load2test", "")
-            if not ckpt2load:
-                ckpt2load = getattr(self.opt, "load2train", "")
-            if ckpt2load:
-                if isinstance(ckpt2load, dict):
-                    for _v in ckpt2load.values():
-                        if _v:
-                            ckpt2load_path = _v
-                            break
-                else:
-                    ckpt2load_path = ckpt2load
-                self._load_checkpoint(
-                    ckpt2load,
-                    {**self.param2optimize, **self.param2freeze},
-                    mode='test'
-                )
-
-        # 切换到 eval 模式（记录原状态以便恢复）
-        models_all = list(self.param2optimize.values()) + list(self.param2freeze.values())
-        orig_modes = [m.training for m in models_all]
-        for model in models_all:
-            model.eval()
-
-        eval_log_lines = []
-
-        def _log(msg):
-            if self.logger is not None:
-                self.logger.info(msg)
-            else:
-                print(msg)
-            eval_log_lines.append(msg)
-
-        _log("\n" + "=" * 80)
-        _log("开始 Stage 1 Recall 评估")
-        _log(
-            f"use_train_uav={use_train_uav}, overlap={overlap}, chunk_size_vis={chunk_size_vis}, "
-            f"ref_wo_rot_var={ref_wo_rot_var}, ref_wo_scale_var={ref_wo_scale_var}, "
-            f"query_rot2uniform={query_rot2uniform}, query_scale2uniform={query_scale2uniform}, "
-            f"rot_rad_resolution={rot_rad_resolution}, rot_list={rot_list}"
+        return Stage1ReferenceGalleryLayoutConfig(
+            mode="overlap",
+            overlap=float(overlap),
+            n_rot=int(n_rot),
+            n_scale=1,
+            scale_mode=scale_mode,
+            rot_values=rot_values,
         )
-        _log("=" * 80)
 
-        # 评估参数
-        k_values = [1, 5, 10, 20, 50, 256, 512, 1024]
-        results_all = {}
+    @staticmethod
+    def _build_eval_feature_cfg(chunk_size_vis):
+        return Stage1ReferenceGalleryFeatureConfig(
+            chunk_size_vis=int(chunk_size_vis),
+            normalize_feats=True,
+            build_faiss=True,
+            show_progress=False,
+        )
 
-        # 多场景逐个评估
-        scenes = self.opt.scenes_setting['scenes']
-        for scene in scenes:
-            scene_name = scene['name']
-            sat_dataset = self.sat_datasets[scene_name]
-            uav_dataset = self.uav_datasets_train[scene_name] if use_train_uav else self.uav_datasets_test[scene_name]
+    def _build_retrieval_eval_cfg(self, use_train_uav, query_rot2uniform, query_scale2uniform):
+        return Stage1RetrievalEvalConfig(
+            use_train_uav=bool(use_train_uav),
+            batch_size=int(self.opt.batchsize_uav),
+            num_workers=int(getattr(self.opt, "num_worker_eval", 0)),
+            query_rot2uniform=bool(query_rot2uniform),
+            query_scale2uniform=bool(query_scale2uniform),
+            k_values=(1, 5, 10, 20, 50, 256, 512, 1024),
+            dist_th=None,
+            rot_th_deg=None,
+            scale_ratio_th=None,
+            max_queries=None,
+            gallery_downsample_cfg=None,
+            print_results=False,
+            report_title="Stage1 Retrieval Eval",
+        )
 
-            eval_num_workers = getattr(self.opt, "num_worker_eval", 0)
-            eval_persistent_workers = getattr(self.opt, "persistent_workers_eval", False)
-            uav_dataloader = torch.utils.data.DataLoader(
-                uav_dataset,
-                batch_size=self.opt.batchsize_uav,
-                num_workers=eval_num_workers,
-                shuffle=False,
-                drop_last=False,
-                pin_memory=True,
-                persistent_workers=(eval_persistent_workers and eval_num_workers > 0)
+
+    # ------------------------------------------------------------------
+    # Gallery Bank Orchestration
+    # 这组是“库的路径、构建、载入、基于库做单场景 retrieval eval”
+    # ------------------------------------------------------------------
+    def resolve_gallery_bank_save_dir(self, scene_name, layout_cfg, root_dir=None, name_prefix=None, ckpt_path=None):
+        if not hasattr(self, "sat_datasets"):
+            self._init_datasets(create_train_loader=False)
+        if scene_name not in self.sat_datasets:
+            raise KeyError(f"Unknown scene_name: {scene_name}")
+
+        sat_dataset = self.sat_datasets[scene_name]
+        layout_name_info = Stage1ReferenceGalleryBank.resolve_layout_name_info(
+            sat_dataset=sat_dataset,
+            layout_cfg=layout_cfg,
+        )
+        overlap_percent = int(round(float(layout_name_info["overlap"]) * 100.0))
+        if overlap_percent == 0:
+            overlap_tag = "overlap0"
+        else:
+            overlap_tag = f"overlap{overlap_percent:03d}"
+        n_bins_4d_tag = "x".join(str(int(v)) for v in layout_name_info["n_bins_4d"])
+        root_dir = root_dir or os.path.join(project_root, "gen_fm_exps", "gallery_bank_stage1")
+        name_prefix = name_prefix or scene_name
+        if layout_name_info["mode"] == "overlap":
+            layout_tag = overlap_tag
+        else:
+            layout_tag = f"{layout_name_info['mode']}_{overlap_tag}"
+        base_dir = os.path.join(
+            root_dir,
+            f"{name_prefix}_"
+            f"{layout_tag}_"
+            f"bins{n_bins_4d_tag}_"
+            f"{layout_name_info['scale_mode']}",
+        )
+        ckpt_tag = self._resolve_gallery_ckpt_tag(
+            ckpt_path or getattr(self, "last_eval_ckpt_path", None)
+        )
+        if ckpt_tag:
+            return os.path.join(base_dir, ckpt_tag)
+        return base_dir
+
+    def build_or_load_gallery_bank(
+            self,
+            scene_name,
+            layout_cfg,
+            feature_cfg=None,
+            gallery_save_dir=None,
+            load_if_exists=True,
+            save_gallery=True,
+            init_datasets=True,
+            load_ckpt=False,
+            gallery_root_dir=None,
+            gallery_name_prefix=None,
+    ):
+        if init_datasets or (not hasattr(self, "sat_datasets")):
+            self._init_datasets(create_train_loader=False)
+        ckpt_path = self.load_eval_checkpoint(verbose=False) if load_ckpt else getattr(self, "last_eval_ckpt_path", None)
+
+        if scene_name not in self.sat_datasets:
+            raise KeyError(f"Unknown scene_name: {scene_name}")
+        sat_dataset = self.sat_datasets[scene_name]
+
+        if feature_cfg is None:
+            feature_cfg = Stage1ReferenceGalleryFeatureConfig()
+        elif not isinstance(feature_cfg, Stage1ReferenceGalleryFeatureConfig):
+            feature_cfg = Stage1ReferenceGalleryFeatureConfig(**feature_cfg)
+
+        if gallery_save_dir is None and save_gallery:
+            gallery_save_dir = self.resolve_gallery_bank_save_dir(
+                scene_name=scene_name,
+                layout_cfg=layout_cfg,
+                root_dir=gallery_root_dir,
+                name_prefix=gallery_name_prefix,
+                ckpt_path=ckpt_path,
             )
 
-            # ---------- 构建/复用参考库（每个scene一次） ----------
-            gallery_scale = float(sat_dataset.satimgsize_scale_to_ref_m_mean)
-            use_ance_gallery = False
-            miner = None
-            if (ref_wo_scale_var
-                and getattr(self, "ance_enabled", False)
-                and hasattr(self, "ance_miners")
-                and self.ance_miners is not None):
-                miner = self.ance_miners.miners.get(scene_name, None)
-                if miner is not None and miner.coords_gallery is not None and miner.index is not None:
-                    gallery_info = self.ance_gallery_info.get(scene_name, None)
-                    overlap_ok = True
-                    if gallery_info is not None:
-                        overlap_ok = abs(float(overlap) - float(gallery_info.get("overlap", overlap))) < 1e-6
-                    rot_flag_ok = True
-                    if gallery_info is not None:
-                        rot_flag_ok = bool(ref_wo_rot_var) == bool(gallery_info.get("ref_wo_rot_var", True))
-                    rot_res_ok = True
-                    if not ref_wo_rot_var:
-                        if rot_list is not None:
-                            if gallery_info is None or gallery_info.get("rot_list", None) is None:
-                                rot_res_ok = False
-                            else:
-                                g_list = np.asarray(gallery_info.get("rot_list"), dtype=np.float32).reshape(-1)
-                                q_list = np.asarray(rot_list, dtype=np.float32).reshape(-1)
-                                rot_res_ok = (
-                                    g_list.shape == q_list.shape
-                                    and np.allclose(g_list, q_list, rtol=0, atol=1e-6)
-                                )
-                        else:
-                            rot_res_ok = (
-                                gallery_info is not None
-                                and gallery_info.get("rot_rad_resolution", None) is not None
-                                and rot_rad_resolution is not None
-                                and abs(float(rot_rad_resolution) - float(gallery_info.get("rot_rad_resolution"))) < 1e-6
-                            )
-                    if overlap_ok and rot_flag_ok and rot_res_ok:
-                        use_ance_gallery = True
-                    else:
-                        _log(
-                            f"[Scene: {scene_name}] gallery mismatch (overlap/rot settings), "
-                            f"fallback to rebuild gallery."
-                        )
+        coords_path = None if gallery_save_dir is None else os.path.join(gallery_save_dir, "coords_gallery.pt")
+        can_load = bool(load_if_exists and coords_path and os.path.exists(coords_path))
 
-            if use_ance_gallery:
-                coords_gallery_cpu = miner.coords_gallery.cpu()
-                gallery_scale = float(
-                    self.ance_gallery_info.get(scene_name, {}).get("scale", gallery_scale)
-                )
-                satimgsize2crop = float(sat_dataset.satimgsize2crop_mean)
-                _log(
-                    f"[Scene: {scene_name}] reuse ANCE gallery "
-                    f"({coords_gallery_cpu.shape[0]} pts), crop={satimgsize2crop:.1f}px, scale={gallery_scale:.3f}"
-                )
-                feat_gallery_index = miner.index
-            else:
-                satimgsize2crop = float(sat_dataset.satimgsize2crop_mean)
-                nrcs_gallery = sat_dataset.crop_sat_unifrom(
-                    size2clip=satimgsize2crop,
-                    overlap=overlap,
-                    only_nrcs=True
-                )
-                nrcs_flat = torch.tensor(nrcs_gallery, dtype=torch.float32).flatten(start_dim=0, end_dim=1)
-                if ref_wo_rot_var:
-                    rot_gallery = torch.zeros((nrcs_flat.shape[0], 1), dtype=torch.float32)
-                    scale_gallery = torch.full((nrcs_flat.shape[0], 1), gallery_scale, dtype=torch.float32)
-                    coords_gallery = torch.cat([nrcs_flat, rot_gallery, scale_gallery], dim=-1)
-                    n_rot = 1
-                else:
-                    if rot_list is not None:
-                        rot_vals = torch.tensor(rot_list, dtype=torch.float32)
-                    else:
-                        rot_vals = torch.arange(
-                            -np.pi, np.pi, float(rot_rad_resolution), dtype=torch.float32
-                        )
-                    n_rot = rot_vals.numel()
-                    nrcs_rep = nrcs_flat[:, None, :].repeat(1, n_rot, 1).reshape(-1, 2)
-                    rot_rep = rot_vals[None, :, None].repeat(nrcs_flat.shape[0], 1, 1).reshape(-1, 1)
-                    scale_rep = torch.full((nrcs_rep.shape[0], 1), gallery_scale, dtype=torch.float32)
-                    coords_gallery = torch.cat([nrcs_rep, rot_rep, scale_rep], dim=-1)
+        if can_load:
+            gallery_bank = Stage1ReferenceGalleryBank.load(
+                gallery_save_dir,
+                sat_dataset=sat_dataset,
+                trainer=self,
+                build_faiss=bool(feature_cfg.build_faiss),
+            )
+            self._eval_log(f"[Gallery Bank] loaded from {gallery_save_dir}")
+            if gallery_bank.feats_gallery is None:
+                self._eval_log("[Gallery Bank] cached gallery has no features, rebuilding them.")
+                gallery_bank.build_features(feature_cfg)
+                if gallery_save_dir is not None and save_gallery:
+                    gallery_bank.save(gallery_save_dir, save_feats=True, save_meta=True)
+        else:
+            gallery_bank = Stage1ReferenceGalleryBank(sat_dataset=sat_dataset, trainer=self)
+            gallery_bank.build_coords(layout_cfg)
+            self._eval_log(
+                f"[Gallery Bank] scene={scene_name}, n_points={gallery_bank.coords_gallery.shape[0]}"
+            )
+            gallery_bank.build_features(feature_cfg)
+            if gallery_save_dir is not None and save_gallery:
+                gallery_bank.save(gallery_save_dir, save_feats=True, save_meta=True)
+                self._eval_log(f"[Gallery Bank] saved to {gallery_save_dir}")
 
-                _log(
-                    f"[Scene: {scene_name}] gallery grid={nrcs_gallery.shape[0]}x{nrcs_gallery.shape[1]} "
-                    f"({coords_gallery.shape[0]} pts, n_rot={n_rot}), "
-                    f"crop={satimgsize2crop:.1f}px, scale={gallery_scale:.3f}"
-                )
+        ckpt_tag = self._resolve_gallery_ckpt_tag(ckpt_path)
+        if ckpt_path is not None:
+            gallery_bank.meta["ckpt_path"] = ckpt_path
+        if ckpt_tag is not None:
+            gallery_bank.meta["ckpt_tag"] = ckpt_tag
 
-                feats_gallery_list = []
-                with torch.no_grad():
-                    for start in range(0, coords_gallery.shape[0], chunk_size_vis):
-                        end = min(start + chunk_size_vis, coords_gallery.shape[0])
-                        coords_chunk = coords_gallery[start:end]
-                        apply_rot_gallery = not ref_wo_rot_var
-                        satimgs_refs = sat_dataset.crop_satimg_by_4d_coords_fast(
-                            coords_chunk, apply_rotation=apply_rot_gallery, chunk_size=chunk_size_vis
-                        )
-                        satimgs_refs = satimgs_refs.to(self.device)
-                        feats_ref = TF.normalize(self._get_feats_fm_imgs(satimgs_refs), dim=-1)
-                        feats_gallery_list.append(feats_ref.detach().cpu())
+        return {
+            "scene_name": scene_name,
+            "gallery_bank": gallery_bank,
+            "gallery_save_dir": gallery_save_dir,
+            "ckpt_path": ckpt_path,
+        }
 
-                feats_gallery = torch.cat(feats_gallery_list, dim=0)
-                coords_gallery_cpu = coords_gallery.cpu()
+    def eval_gallery_bank(
+            self,
+            scene_name,
+            layout_cfg,
+            feature_cfg=None,
+            retrieval_eval_cfg=None,
+            gallery_save_dir=None,
+            load_if_exists=True,
+            save_gallery=True,
+            init_datasets=True,
+            load_ckpt=False,
+            gallery_root_dir=None,
+            gallery_name_prefix=None,
+    ):
+        if retrieval_eval_cfg is not None and not isinstance(retrieval_eval_cfg, Stage1RetrievalEvalConfig):
+            retrieval_eval_cfg = Stage1RetrievalEvalConfig(**retrieval_eval_cfg)
 
-                # 构建 Faiss 索引
-                import faiss
-                feat_gallery_index = faiss.IndexFlatL2(self.feat_q_dim)
-                feat_gallery_index.add(feats_gallery.numpy())
+        if feature_cfg is None:
+            feature_cfg = Stage1ReferenceGalleryFeatureConfig()
+        elif not isinstance(feature_cfg, Stage1ReferenceGalleryFeatureConfig):
+            feature_cfg = Stage1ReferenceGalleryFeatureConfig(**feature_cfg)
 
-            # 统计 Recall
-            success_counts_nrc = {k: 0 for k in k_values}
-            success_counts_rot = {k: 0 for k in k_values}
-            total_queries = 0
+        if retrieval_eval_cfg is not None:
+            feature_cfg.build_faiss = True
 
-            _log(f"\n[Scene: {scene_name}] 开始评估，共 {len(uav_dataset)} 个 queries")
+        gallery_state = self.build_or_load_gallery_bank(
+            scene_name=scene_name,
+            layout_cfg=layout_cfg,
+            feature_cfg=feature_cfg,
+            gallery_save_dir=gallery_save_dir,
+            load_if_exists=load_if_exists,
+            save_gallery=save_gallery,
+            init_datasets=init_datasets,
+            load_ckpt=load_ckpt,
+            gallery_root_dir=gallery_root_dir,
+            gallery_name_prefix=gallery_name_prefix,
+        )
+        gallery_bank = gallery_state["gallery_bank"]
 
-            for batch in uav_dataloader:
-                if isinstance(batch, (list, tuple)):
-                    uavimgs, coords_uav = batch[0], batch[1]
-                else:
-                    uavimgs, coords_uav = batch
+        eval_res = None
+        if retrieval_eval_cfg is not None:
+            eval_log_lines = []
+            retrieval_evaluator = Stage1RetrievalEvaluator(trainer=self, gallery_bank=gallery_bank, logger=self.logger)
+            eval_res = retrieval_evaluator.evaluate_scene(
+                scene_name=scene_name,
+                eval_cfg=retrieval_eval_cfg,
+                eval_log_lines=eval_log_lines,
+            )
+            self._eval_log(f"[Gallery Eval] n_queries={eval_res['n_queries']}")
+            ckpt_path = gallery_state.get("ckpt_path") or getattr(self, "last_eval_ckpt_path", None)
+            self._save_eval_log(eval_log_lines, ckpt_path)
 
-                uavimgs = uavimgs.to(self.device)
-                coords_uav = coords_uav.to(self.device)
+        gallery_state["eval_res"] = eval_res
+        return gallery_state
 
-                # UAV query 对齐
-                rot_align = -coords_uav[:, 2] if query_rot2uniform else None
-                scale_f = None
-                if query_scale2uniform:
-                    scale_f = gallery_scale / coords_uav[:, 3].clamp(min=1e-6)
 
-                if query_rot2uniform or query_scale2uniform:
-                    uavimgs = self._warp_uav_imgs(uavimgs, rot_rad=rot_align, scale_f=scale_f)
-                    coords_uav = coords_uav.clone()
-                    if query_rot2uniform:
-                        coords_uav[:, 2] = 0
-                    if query_scale2uniform:
-                        coords_uav[:, 3] = gallery_scale
+    # ------------------------------------------------------------------
+    # Recall Result Postprocess
+    # 这组职责很单一，就是“把 retrieval evaluator 的结果转成旧 recall 风格指标并打印
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _compute_scene_recall_metrics(eval_res, k_values, dist_th, rot_th_deg, gallery_has_rot):
+        coords_topk = eval_res["coords_topk"]
+        coords_gt = eval_res["coords_gt"]
+        metrics_nrc, _ = compute_topk_acc_from_coords(
+            coords_topk,
+            coords_gt,
+            dist_th=dist_th,
+            rot_th_deg=None,
+            scale_ratio_th=None,
+            k_values=k_values,
+        )
+        recall_dict = {
+            f"recall@{int(k)}": float(metrics_nrc[f"top{int(k)}_acc"]) / 100.0
+            for k in k_values
+        }
+        if gallery_has_rot:
+            metrics_rot, _ = compute_topk_acc_from_coords(
+                coords_topk,
+                coords_gt,
+                dist_th=dist_th,
+                rot_th_deg=rot_th_deg,
+                scale_ratio_th=None,
+                k_values=k_values,
+            )
+            recall_dict.update({
+                f"recall_rot@{int(k)}": float(metrics_rot[f"top{int(k)}_acc"]) / 100.0
+                for k in k_values
+            })
+        return recall_dict
 
-                with torch.no_grad():
-                    if use_ance_gallery:
-                        feats_q = self._get_feats_fm_imgs(uavimgs)
-                    else:
-                        feats_q = TF.normalize(self._get_feats_fm_imgs(uavimgs), dim=-1)
+    def _log_scene_recall_metrics(self, scene_name, recall_dict, n_queries, dist_th, gallery_has_rot, rot_th_deg, eval_log_lines):
+        info2log_nrc = " | ".join(
+            [f"nrc:R@{int(k)}={recall_dict[f'recall@{int(k)}'] * 100:.3f}%" for k in sorted(
+                int(key.split("@")[1]) for key in recall_dict if key.startswith("recall@")
+            )]
+        )
+        self._eval_log(
+            f"[Scene: {scene_name}] {info2log_nrc} "
+            f"(N={n_queries}, nrc_thr={float(dist_th):.3f})",
+            eval_log_lines,
+        )
+        if gallery_has_rot:
+            info2log_rot = " | ".join(
+                [f"nrc+rot:R@{int(k)}={recall_dict[f'recall_rot@{int(k)}'] * 100:.3f}%" for k in sorted(
+                    int(key.split('@')[1]) for key in recall_dict if key.startswith("recall_rot@")
+                )]
+            )
+            self._eval_log(
+                f"[Scene: {scene_name}] {info2log_rot} "
+                f"(N={n_queries}, nrc_thr={float(dist_th):.3f}, rot_thr={float(rot_th_deg):.1f}deg)",
+                eval_log_lines,
+            )
 
-                top_k = min(max(k_values), coords_gallery_cpu.shape[0])
-                if top_k <= 0:
-                    continue
-                _, indices = feat_gallery_index.search(
-                    feats_q.detach().cpu().numpy(),
-                    k=top_k
-                )
 
-                coords_topk = coords_gallery_cpu[torch.from_numpy(indices)]  # [B, K, 4]
-                dist_nrc = torch.norm(
-                    coords_uav[:, None, :2].cpu() - coords_topk[:, :, :2],
-                    p=2, dim=-1
-                )
-                hits_nrc = dist_nrc < sat_dataset.halfimg_radius_nrc*1.1
-                hits_rot = None
-                if not ref_wo_rot_var:
-                    rot_thr = float(torch.pi / 18.0)
-                    rot_diff = coords_topk[:, :, 2] - coords_uav[:, None, 2].cpu()
-                    rot_diff = (rot_diff + torch.pi) % (2 * torch.pi) - torch.pi
-                    hits_rot = hits_nrc & (rot_diff.abs() < rot_thr*1.1)
+    # ------------------------------------------------------------------
+    # High-level Recall APIs
+    # 这组是给 trainer 外部调用的高层入口
+    # ------------------------------------------------------------------
+    def eval_recall(self, use_train_uav=False, gallery_cfg=None, query_cfg=None,
+                    overlap=0.5, chunk_size_vis=1024,
+                    ref_wo_rot_var=True, ref_wo_scale_var=True,
+                    rot_rad_resolution=None, rot_list=None, n_bins_4d=None, scale_mode="linear",
+                    query_rot2uniform=False, query_scale2uniform=False,
+                    init_datasets=True, load_ckpt=True, restore_train=True):
+        """Stage 1 Recall 评估入口，内部采用 GalleryBank + RetrievalEvaluator。"""
+        chunk_size_vis = self._cfg_get(gallery_cfg, "chunk_size_vis", chunk_size_vis)
+        n_bins_4d = self._cfg_get(gallery_cfg, "n_bins_4d", n_bins_4d)
+        scale_mode = self._cfg_get(gallery_cfg, "scale_mode", scale_mode)
+        sampling_cfg = self._cfg_get(gallery_cfg, "sampling_cfg", None)
+        overlap = self._cfg_get(sampling_cfg, "overlap", overlap)
+        ref_wo_rot_var = self._cfg_get(sampling_cfg, "ref_wo_rot_var", ref_wo_rot_var)
+        rot_list = self._cfg_get(sampling_cfg, "rot_list", rot_list)
+        rot_rad_resolution = self._cfg_get(sampling_cfg, "rot_rad_resolution", rot_rad_resolution)
+        ref_wo_scale_var = self._cfg_get(sampling_cfg, "ref_wo_scale_var", ref_wo_scale_var)
+        query_rot2uniform = self._cfg_get(query_cfg, "query_rot2uniform", query_rot2uniform)
+        query_scale2uniform = self._cfg_get(query_cfg, "query_scale2uniform", query_scale2uniform)
 
-                for k in k_values:
-                    if k <= hits_nrc.shape[1]:
-                        success_counts_nrc[k] += (hits_nrc[:, :k].sum(dim=-1) > 0).sum().item()
-                        if hits_rot is not None:
-                            success_counts_rot[k] += (hits_rot[:, :k].sum(dim=-1) > 0).sum().item()
-                total_queries += coords_uav.shape[0]
+        if init_datasets or (not hasattr(self, "sat_datasets")):
+            self._init_datasets(create_train_loader=False)
 
-            # 汇总结果
-            if total_queries == 0:
-                _log(f"[Scene: {scene_name}] 无有效 query，跳过。")
-                continue
+        ckpt_path = self.load_eval_checkpoint(verbose=False) if load_ckpt else None
+        eval_log_lines = []
+        layout_cfg = self._build_eval_layout_cfg(
+            overlap=overlap,
+            rot_rad_resolution=rot_rad_resolution,
+            rot_list=rot_list,
+            n_bins_4d=n_bins_4d,
+            scale_mode=scale_mode,
+            ref_wo_rot_var=ref_wo_rot_var,
+            ref_wo_scale_var=ref_wo_scale_var,
+        )
+        feature_cfg = self._build_eval_feature_cfg(chunk_size_vis=chunk_size_vis)
+        retrieval_eval_cfg = self._build_retrieval_eval_cfg(
+            use_train_uav=use_train_uav,
+            query_rot2uniform=query_rot2uniform,
+            query_scale2uniform=query_scale2uniform,
+        )
 
-            recall_dict = {f"recall@{k}": success_counts_nrc[k] / total_queries for k in k_values}
-            if not ref_wo_rot_var:
-                recall_rot_dict = {f"recall_rot@{k}": success_counts_rot[k] / total_queries for k in k_values}
-                recall_dict.update(recall_rot_dict)
+        if not restore_train:
+            for model in self._get_eval_models():
+                model.eval()
+
+        self._eval_log("\n" + "=" * 80, eval_log_lines)
+        self._eval_log("开始 Stage 1 Recall 评估", eval_log_lines)
+        self._eval_log(
+            f"use_train_uav={bool(use_train_uav)}, chunk_size_vis={int(chunk_size_vis)}, "
+            f"layout_mode={layout_cfg.mode}, n_bins_4d={layout_cfg.n_bins_4d}",
+            eval_log_lines,
+        )
+        self._eval_log(
+            f"gallery_sampling: overlap={float(overlap):.4f}, ref_wo_rot_var={bool(ref_wo_rot_var)}, "
+            f"ref_wo_scale_var={bool(ref_wo_scale_var)}, rot_rad_resolution={rot_rad_resolution}, "
+            f"rot_list={rot_list}",
+            eval_log_lines,
+        )
+        self._eval_log(
+            f"query_transform: query_rot2uniform={bool(query_rot2uniform)}, "
+            f"query_scale2uniform={bool(query_scale2uniform)}",
+            eval_log_lines,
+        )
+        self._eval_log("=" * 80, eval_log_lines)
+
+        results_all = {}
+        rot_th_deg = float(torch.rad2deg(torch.tensor(torch.pi / 18.0 * 1.1)).item())
+        for scene in self.opt.scenes_setting["scenes"]:
+            scene_name = scene["name"]
+            sat_dataset = self.sat_datasets[scene_name]
+            layout_summary = Stage1ReferenceGalleryBank.estimate_layout_summary(
+                sat_dataset=sat_dataset,
+                layout_cfg=layout_cfg,
+            )
+            self._eval_log(
+                f"[Scene: {scene_name}] gallery grid={layout_summary['n_bins_4d']} "
+                f"({layout_summary['total_points_4d']} pts, n_rot={layout_summary['n_rot']}, "
+                f"n_scale={layout_summary['n_scale']}), crop={layout_summary['crop_size_px']}px, "
+                f"overlap={layout_summary['overlap']:.4f}, scale={layout_summary['gallery_scale']:.3f}, "
+                f"scale_mode={layout_summary['scale_mode']}",
+                eval_log_lines,
+            )
+
+            gallery_bank = Stage1ReferenceGalleryBank(sat_dataset=sat_dataset, trainer=self)
+            gallery_bank.build_coords(layout_cfg)
+            gallery_bank.build_features(feature_cfg)
+            retrieval_evaluator = Stage1RetrievalEvaluator(
+                trainer=self,
+                gallery_bank=gallery_bank,
+                logger=self.logger,
+            )
+            eval_res = retrieval_evaluator.evaluate_scene(
+                scene_name=scene_name,
+                eval_cfg=retrieval_eval_cfg,
+            )
+
+            dist_th = float(eval_res["thresholds"]["norm_dist"])
+            gallery_has_rot = bool(gallery_bank.meta.get("gallery_has_rot", False))
+            recall_dict = self._compute_scene_recall_metrics(
+                eval_res=eval_res,
+                k_values=retrieval_eval_cfg.k_values,
+                dist_th=dist_th,
+                rot_th_deg=rot_th_deg,
+                gallery_has_rot=gallery_has_rot,
+            )
             results_all[scene_name] = recall_dict
+            self._log_scene_recall_metrics(
+                scene_name=scene_name,
+                recall_dict=recall_dict,
+                n_queries=eval_res["n_queries"],
+                dist_th=dist_th,
+                gallery_has_rot=gallery_has_rot,
+                rot_th_deg=rot_th_deg,
+                eval_log_lines=eval_log_lines,
+            )
 
-            nrc_thr = float(sat_dataset.halfimg_radius_nrc)
-            info2log_nrc = " | ".join([f"nrc:R@{k}={recall_dict[f'recall@{k}']*100:.3f}%" for k in k_values])
-            if not ref_wo_rot_var:
-                rot_thr_deg = float(rot_thr * 180.0 / np.pi)
-                info2log_rot = "| ".join([f"nrc+rot:R@{k}={recall_dict[f'recall_rot@{k}']*100:.3f}%" for k in k_values])
-                _log(
-                    f"[Scene: {scene_name}] {info2log_nrc} "
-                    f"(N={total_queries}, nrc_thr={nrc_thr:.3f})"
-                )
-                _log(
-                    f"[Scene: {scene_name}] {info2log_rot} "
-                    f"(N={total_queries}, nrc_thr={nrc_thr:.3f}, rot_thr={rot_thr_deg:.1f}deg)"
-                )
-            else:
-                _log(
-                    f"[Scene: {scene_name}] {info2log_nrc} "
-                    f"(N={total_queries}, nrc_thr={nrc_thr:.3f})"
-                )
-
-        _log("=" * 80)
-        _log("Recall 评估完成")
-        _log("=" * 80)
-
-        if restore_train:
-            for model, was_train in zip(models_all, orig_modes):
-                model.train(was_train)
-
-        # 保存评估结果到 ckpt 同目录
-        if ckpt2load_path:
-            try:
-                import re
-                ckpt_dir = os.path.dirname(ckpt2load_path)
-                eval_dir = os.path.join(ckpt_dir, "eval_recall")
-                os.makedirs(eval_dir, exist_ok=True)
-                base = os.path.basename(ckpt2load_path)
-                m = re.search(r"epoch(\d+)", base)
-                ep_tag = m.group(1) if m else "latest"
-                out_path = os.path.join(eval_dir, f"ep{ep_tag}.log")
-                with open(out_path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(eval_log_lines))
-            except Exception as e:
-                _log(f"[eval_recall] failed to save log: {e}")
-
+        self._eval_log("=" * 80, eval_log_lines)
+        self._eval_log("Recall 评估完成", eval_log_lines)
+        self._eval_log("=" * 80, eval_log_lines)
+        self._save_eval_log(eval_log_lines, ckpt_path)
         return results_all
+
+    def get_eval_gallery_sampling_point_config(
+            self,
+            scene_name=None,
+            overlap=0.5,
+            ref_wo_rot_var=True,
+            rot_list=None,
+            rot_rad_resolution=None,
+            ref_wo_scale_var=True,
+            init_datasets=True,
+            as_dict=False,
+    ):
+        """估算当前评测 layout 的参考库密度，不执行完整检索评估。"""
+        if init_datasets or (not hasattr(self, "sat_datasets")):
+            self._init_datasets(create_train_loader=False)
+
+        layout_cfg = self._build_eval_layout_cfg(
+            overlap=overlap,
+            rot_rad_resolution=rot_rad_resolution,
+            rot_list=rot_list,
+            n_bins_4d=None,
+            scale_mode="linear",
+            ref_wo_rot_var=ref_wo_rot_var,
+            ref_wo_scale_var=ref_wo_scale_var,
+        )
+
+        def _estimate_for_scene(name):
+            sat_dataset = self.sat_datasets[name]
+            return Stage1ReferenceGalleryBank.estimate_layout_summary(
+                sat_dataset=sat_dataset,
+                layout_cfg=layout_cfg,
+            )
+
+        if scene_name is None:
+            results = {
+                scene["name"]: _estimate_for_scene(scene["name"])
+                for scene in self.opt.scenes_setting["scenes"]
+            }
+            return results if as_dict else results
+
+        result = _estimate_for_scene(scene_name)
+        return result if as_dict else result
 
 
 if __name__ == "__main__":
     # 如果没有指定配置文件，使用 stage1 的默认配置
-    import sys
     if '--p_yaml' not in ' '.join(sys.argv):
-        sys.argv.extend(['--p_yaml', 'trainer_depends/configs/stage1_visual_encoder_wingtra.yaml'])
+        sys.argv.extend(['--p_yaml', 'trainer_depends/configs/stage1_visual_encoder_visloc4exp.yaml'])
+        # sys.argv.extend(['--p_yaml', 'trainer_depends/configs/stage1_visual_encoder_wingtra.yaml'])
+        # sys.argv.extend(['--p_yaml', 'trainer_depends/configs/stage1_visual_encoder.yaml'])
 
-    trainer = VisualEncoderTrainer()
-    # trainer.eval_recall(query_rot2uniform=True,ref_wo_rot_var=True, overlap=0.5, rot_rad_resolution=np.pi / 18.*1.)
-    trainer.train()
+    # 添加 --test_only 参数
+    parser = argparse.ArgumentParser(add_help=False)  # add_help=False to avoid conflict with get_parse
+    parser.add_argument('--test_only', action='store_true', help='是否只运行测试模式')
+    parser.add_argument(
+        '--test_mode',
+        type=str,
+        default='gallery_bank',
+        choices=('gallery_bank', 'eval_recall'),
+        help='测试模式：gallery_bank 为显式建库评测，eval_recall 为复用 trainer.eval_recall 的高层入口',
+    )
+    args, remaining_argv = parser.parse_known_args()
+
+    #todo:modify manually
+    args.test_only = False
+    args.test_mode = 'gallery_bank'
+    exp_name_override = None
+
+    # 是否直接指定实验名称
+    from trainer_depends.config.parser import get_parse
+    opt = get_parse()
+    if exp_name_override:
+        opt.exp_name = exp_name_override
+
+    trainer = VisualEncoderTrainer(opt=opt)
+    if not args.test_only:
+        trainer.train()
+    else:
+        if args.test_mode == 'eval_recall':
+            trainer.eval_recall(
+                use_train_uav=True,
+                init_datasets=True,
+                load_ckpt=True,
+                restore_train=True,
+                **trainer._build_eval_configs(),
+            )
+        elif args.test_mode == 'gallery_bank':
+            if not hasattr(trainer, "sat_datasets"):
+                trainer._init_datasets(create_train_loader=False)
+
+            # scene_name = 'zurich'
+            scene_name = 'visloc_03'
+            sat_dataset = trainer.sat_datasets[scene_name]
+
+            trainer.load_eval_checkpoint()
+            gallery_layout_cfg = Stage1ReferenceGalleryLayoutConfig(
+                # 0重叠率Stage1ReferenceGalleryLayoutConfig
+                mode="overlap",
+                overlap = 0.25,
+                n_rot=36,
+                n_scale=4,
+                scale_mode="log",
+
+                # 0.75重叠率
+                # mode="overlap",
+                # overlap = 0.75,
+                # n_rot=36,
+                # n_scale=4,
+                # scale_mode="log",
+
+                # 0.875重叠率
+                # mode ='n_bins_4d',
+                # n_bins_4d = (252,182,36,4),
+                # scale_mode="log",
+            )
+
+            gallery_feature_cfg = trainer._build_eval_feature_cfg(chunk_size_vis=1024 + 256)
+            gallery_feature_cfg.build_faiss = True
+            gallery_feature_cfg.show_progress = True
+
+            retrieval_eval_cfg = trainer._build_retrieval_eval_cfg(
+                use_train_uav=False,
+                query_rot2uniform=False,
+                query_scale2uniform=False,
+            )
+            retrieval_eval_cfg.k_values = (1, 5, 10, 20, 50, 128, 256, 512, 1024)
+            retrieval_eval_cfg.dist_th = float(sat_dataset.halfimg_radius_nrc) * 1.1 * 0.5
+            retrieval_eval_cfg.rot_th_deg = 11 * 0.5
+            retrieval_eval_cfg.scale_ratio_th = 1.15
+            retrieval_eval_cfg.print_results = True
+            retrieval_eval_cfg.report_title = "Stage1 Retrieval Eval"
+
+            gallery_state = trainer.eval_gallery_bank(
+                scene_name=scene_name,
+                layout_cfg=gallery_layout_cfg,
+                feature_cfg=gallery_feature_cfg,
+                retrieval_eval_cfg=retrieval_eval_cfg,
+                gallery_save_dir=None,
+                load_if_exists=True,
+                save_gallery=True,
+                init_datasets=False,
+                load_ckpt=False,
+                gallery_name_prefix=f"{scene_name}",
+            )
+            print(f"[Gallery Demo] save_dir={gallery_state['gallery_save_dir']}")
+        else:
+            raise ValueError(f"Unknown test_mode: {args.test_mode}")

@@ -21,7 +21,10 @@ import tqdm
 import time
 import sys
 import os
+import json
+import shutil
 import yaml
+import numpy as np
 from collections.abc import Sequence
 
 # 添加项目根目录到路径
@@ -58,17 +61,44 @@ STAGE1_INHERIT_DATA_KEYS = (
     'split_train_ratio',
     'split_mode',
 )
-STAGE1_INHERIT_NETWORK_KEYS = (
-    'backbone',
-    'freeze_backbone',
-    'backbone_config',
-    'aggregator_type',
-    'aggregator_config',
-)
 STAGE1_INHERIT_KEY_WHITELIST = {
     'data_setting': STAGE1_INHERIT_DATA_KEYS,
-    'network_setting': STAGE1_INHERIT_NETWORK_KEYS,
 }
+
+
+def _extract_epoch_index(filename):
+    if not filename.startswith('epoch'):
+        return -1
+    suffix = filename[len('epoch'):]
+    digits = []
+    for ch in suffix:
+        if ch.isdigit():
+            digits.append(ch)
+        else:
+            break
+    if not digits:
+        return -1
+    return int(''.join(digits))
+
+
+def _find_latest_epoch_ckpt(directory):
+    if not directory or not os.path.isdir(directory):
+        return ""
+
+    candidates = []
+    for name in os.listdir(directory):
+        if not name.endswith('.pth'):
+            continue
+        epoch_idx = _extract_epoch_index(name)
+        if epoch_idx < 0:
+            continue
+        candidates.append((epoch_idx, name))
+
+    if not candidates:
+        return ""
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return os.path.join(directory, candidates[-1][1])
 
 
 class GridHashFitTrainer(BaseTrainer):
@@ -80,11 +110,7 @@ class GridHashFitTrainer(BaseTrainer):
 
     def __init__(self, opt=None):
         """初始化Stage 2 Trainer"""
-        should_print_final_config = (
-            (opt is None)
-            or bool(getattr(opt, 'inherit_stage1_yaml', ''))
-            or not bool(getattr(opt, '_config_summary_printed', False))
-        )
+        should_print_final_config = (opt is None) or not bool(getattr(opt, '_config_summary_printed', False))
         if opt is None:
             opt = get_parse(print_summary=False)
         opt = self._apply_inherit_stage1_yaml(opt)
@@ -136,7 +162,8 @@ class GridHashFitTrainer(BaseTrainer):
     def _apply_inherit_stage1_yaml(opt):
         """
         在Stage 2初始化网络前，从指定的Stage 1 YAML/opts中按scope继承参数。
-        对 data/network 采用白名单，只补充 Stage 2 当前 YAML 未显式声明的 Stage 1 相关配置；
+        对 data 采用白名单；对 network 继承 Stage 1 的 network_setting 全量键，
+        但不会覆盖 Stage 2 当前 YAML 中显式声明的键；
         scenes/hardware 若显式请求，则整段继承。
         """
         inherit_yaml = getattr(opt, 'inherit_stage1_yaml', '')
@@ -327,6 +354,24 @@ class GridHashFitTrainer(BaseTrainer):
         print("✅ Stage 1模型加载完成\n")
 
 
+    @staticmethod
+    def _count_module_params(module):
+        total_params = sum(param.numel() for param in module.parameters())
+        trainable_params = sum(param.numel() for param in module.parameters() if param.requires_grad)
+        return total_params, trainable_params
+
+    @staticmethod
+    def _count_named_params(module, predicate):
+        total_params = 0
+        trainable_params = 0
+        for name, param in module.named_parameters():
+            if not predicate(name):
+                continue
+            total_params += param.numel()
+            if param.requires_grad:
+                trainable_params += param.numel()
+        return total_params, trainable_params
+
     def _setup_trainable_params(self):
         """设置可训练参数"""
         # 冻结Stage 1组件
@@ -348,10 +393,44 @@ class GridHashFitTrainer(BaseTrainer):
         # 动态生成参数配置信息
         trainable_names = ', '.join(self.param2optimize.keys())
         frozen_names = ', '.join(self.param2freeze.keys())
+        adapter_config = dict(getattr(self.opt, 'adapter_config', {}) or {})
 
         print("参数配置:")
         print(f"  可训练: {trainable_names}")
         print(f"  冻结:   {frozen_names}\n")
+
+        component_status = [
+            ('vis_encoder', self.vis_encoder),
+            ('vis_aggregator', self.vis_aggregator),
+            ('grid', self.grid),
+            ('grid_mlp', self.grid_mlp),
+        ]
+        for module_name, module in component_status:
+            total_params, trainable_params = self._count_module_params(module)
+            status = 'trainable' if trainable_params > 0 else 'frozen'
+            print(
+                f"  {module_name}: {status}, "
+                f"trainable_params={trainable_params:,}, total_params={total_params:,}"
+            )
+
+        if adapter_config.get('enabled', False):
+            adapter_total_params, adapter_trainable_params = self._count_named_params(
+                self.vis_encoder,
+                lambda name: 'adapter' in name,
+            )
+            vis_encoder_total_params, vis_encoder_trainable_params = self._count_module_params(self.vis_encoder)
+            raw_total_params = vis_encoder_total_params - adapter_total_params
+            raw_trainable_params = vis_encoder_trainable_params - adapter_trainable_params
+            print(f"\n  vis_encoder adapter_config: {adapter_config}")
+            print(
+                f"  vis_encoder.adapter: "
+                f"trainable_params={adapter_trainable_params:,}, total_params={adapter_total_params:,}"
+            )
+            print(
+                f"  vis_encoder.raw_backbone: "
+                f"trainable_params={raw_trainable_params:,}, total_params={raw_total_params:,}"
+            )
+        print("")
 
 
     def _make_train_checkpoint_modules(self):
@@ -512,17 +591,26 @@ class GridHashFitTrainer(BaseTrainer):
         root_dir = root_dir or os.path.join(project_root, "gen_fm_exps", "gallery_bank_stage2")
         name_prefix = name_prefix or scene_name
 
-        overlap_tag = f"overlap{int(round(float(cfg.overlap) * 100.0)):03d}"
-        layout_tags = [name_prefix, cfg.mode, overlap_tag]
-        if cfg.fixed_scale is not None:
-            layout_tags.append(f"fixs{float(cfg.fixed_scale):.3f}".replace('.', 'p'))
-        if abs(float(cfg.fixed_rot)) > 1e-6 and cfg.mode in ('rc', 'rc_scale'):
-            layout_tags.append(f"fixr{float(cfg.fixed_rot):.3f}".replace('.', 'p'))
-        if cfg.mode in ('rc_rot', 'rc_rot_scale'):
-            layout_tags.append(f"drot{float(cfg.delta_rot_deg):g}".replace('.', 'p'))
-        if cfg.mode in ('rc_scale', 'rc_rot_scale'):
-            layout_tags.append(f"nscale{int(cfg.n_scales)}")
-        layout_tags.append(str(cfg.scale_mode))
+        if cfg.mode == "n_bins_4d":
+            n_bins = np.asarray(cfg.n_bins_4d, dtype=np.int32).reshape(-1)
+            if n_bins.size != 4 or (n_bins <= 0).any():
+                raise ValueError("n_bins_4d must be length-4 with positive entries for Stage2 gallery caching.")
+            n_bins_tag = "bins" + "x".join(str(int(v)) for v in n_bins.tolist())
+            layout_tags = [name_prefix, cfg.mode, n_bins_tag, f"scale{str(cfg.scale_mode).lower()}"]
+        else:
+            overlap_tag = f"overlap{int(round(float(cfg.overlap) * 100.0)):03d}"
+            layout_tags = [name_prefix, cfg.mode, overlap_tag]
+            if cfg.fixed_scale is not None:
+                layout_tags.append(f"fixs{float(cfg.fixed_scale):.3f}".replace('.', 'p'))
+            if abs(float(cfg.fixed_rot)) > 1e-6 and cfg.mode in ('rc', 'rc_scale'):
+                layout_tags.append(f"fixr{float(cfg.fixed_rot):.3f}".replace('.', 'p'))
+            if cfg.mode in ('rc_rot', 'rc_rot_scale'):
+                layout_tags.append(f"drot{float(cfg.delta_rot_deg):g}".replace('.', 'p'))
+            if cfg.mode in ('rc_scale', 'rc_rot_scale'):
+                layout_tags.append(f"scale{str(cfg.scale_mode).lower()}{int(cfg.n_scales)}")
+                layout_tags.append("cubev2")
+            else:
+                layout_tags.append(str(cfg.scale_mode))
 
         base_dir = os.path.join(root_dir, "_".join(layout_tags))
         ckpt_tag = self._resolve_stage2_gallery_ckpt_tag(
@@ -665,6 +753,12 @@ class GridHashFitTrainer(BaseTrainer):
             gallery_name_prefix=gallery_name_prefix,
         )
         gallery_bank = gallery_state["gallery_bank"]
+        if gallery_state["gallery_save_dir"] is not None:
+            self._save_gallery_stage2_provenance(
+                save_dir=gallery_state["gallery_save_dir"],
+                ckpt_path=gallery_state["ckpt_path"],
+                load2test=getattr(self.opt, "load2test", ""),
+            )
 
         eval_res = None
         if retrieval_eval_cfg is not None:
@@ -673,10 +767,212 @@ class GridHashFitTrainer(BaseTrainer):
                 gallery_bank=gallery_bank,
                 logger=self.logger,
             )
-            eval_res = retrieval_evaluator.evaluate(eval_cfg=retrieval_eval_cfg)
+            eval_log_lines = []
+            eval_res = retrieval_evaluator.evaluate(eval_cfg=retrieval_eval_cfg, eval_log_lines=eval_log_lines)
+            if gallery_state["gallery_save_dir"] is not None:
+                self._save_gallery_eval_report(
+                    save_dir=gallery_state["gallery_save_dir"],
+                    eval_res=eval_res,
+                    layout_cfg=layout_cfg,
+                    eval_cfg=retrieval_eval_cfg,
+                    ckpt_path=gallery_state["ckpt_path"],
+                    eval_log_lines=eval_log_lines,
+                    load2test=getattr(self.opt, "load2test", ""),
+                )
 
         gallery_state["eval_res"] = eval_res
         return gallery_state
+
+
+    @staticmethod
+    def _to_jsonable(value):
+        if isinstance(value, dict):
+            return {str(k): GridHashFitTrainer._to_jsonable(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [GridHashFitTrainer._to_jsonable(v) for v in value]
+        if torch.is_tensor(value):
+            return value.detach().cpu().tolist()
+        if hasattr(value, "item") and callable(getattr(value, "item")):
+            try:
+                return value.item()
+            except Exception:
+                return value
+        return value
+
+
+    @staticmethod
+    def _normalize_layout_cfg_for_report(layout_cfg):
+        cfg = layout_cfg if isinstance(layout_cfg, Stage2ReferenceGalleryLayoutConfig) else (
+            Stage2ReferenceGalleryLayoutConfig(**layout_cfg)
+        )
+        n_bins_4d = None
+        if cfg.n_bins_4d is not None:
+            n_bins_4d = [int(v) for v in np.asarray(cfg.n_bins_4d, dtype=np.int32).reshape(-1).tolist()]
+        return {
+            "mode": str(cfg.mode),
+            "n_bins_4d": n_bins_4d,
+            "overlap": None if str(cfg.mode).strip().lower() == "n_bins_4d" else float(cfg.overlap),
+            "fixed_rot": float(cfg.fixed_rot),
+            "fixed_scale": None if cfg.fixed_scale is None else float(cfg.fixed_scale),
+            "delta_rot_deg": float(cfg.delta_rot_deg),
+            "n_scales": int(cfg.n_scales),
+            "scale_mode": str(cfg.scale_mode),
+        }
+
+
+    @staticmethod
+    def _normalize_eval_cfg_for_report(eval_cfg):
+        if isinstance(eval_cfg, Stage2RetrievalEvalConfig):
+            cfg = eval_cfg
+        else:
+            cfg = Stage2RetrievalEvalConfig(**eval_cfg)
+        return {
+            "use_train_uav": bool(cfg.use_train_uav),
+            "batch_size": int(cfg.batch_size),
+            "num_workers": int(cfg.num_workers),
+            "show_progress": bool(cfg.show_progress),
+            "query_rot2uniform": bool(cfg.query_rot2uniform),
+            "query_scale2uniform": bool(cfg.query_scale2uniform),
+            "k_values": [int(k) for k in cfg.k_values],
+            "dist_th": None if cfg.dist_th is None else float(cfg.dist_th),
+            "dist_lambda": None if cfg.dist_lambda is None else float(cfg.dist_lambda),
+            "rot_th_deg": None if cfg.rot_th_deg is None else float(cfg.rot_th_deg),
+            "scale_ratio_th": None if cfg.scale_ratio_th is None else float(cfg.scale_ratio_th),
+            "max_queries": None if cfg.max_queries is None else int(cfg.max_queries),
+            "print_results": bool(cfg.print_results),
+            "report_title": str(cfg.report_title),
+            "report_rc_meter": bool(cfg.report_rc_meter),
+            "report_rot_error": bool(cfg.report_rot_error),
+            "report_scale_error": bool(cfg.report_scale_error),
+        }
+
+
+    @classmethod
+    def _build_gallery_eval_summary(cls, eval_res, layout_cfg, eval_cfg, ckpt_path, load2test=""):
+        return {
+            "scene_name": eval_res["scene_name"],
+            "stage2_ckpt": ckpt_path,
+            "load2test": load2test,
+            "n_queries": int(eval_res["n_queries"]),
+            "layout_cfg": cls._normalize_layout_cfg_for_report(layout_cfg),
+            "eval_cfg": cls._normalize_eval_cfg_for_report(eval_cfg),
+            "thresholds": cls._to_jsonable(eval_res.get("thresholds", {})),
+            "metrics": cls._to_jsonable(eval_res.get("metrics", {})),
+            "shared_errors": cls._to_jsonable(eval_res.get("shared_errors", {})),
+            "recall@k": {str(int(k)): float(v) for k, v in eval_res["recall@k"].items()},
+            "error_rc_norm": float(eval_res["error_rc_norm"]),
+            "error_rc_norm_median": float(eval_res["error_rc_norm_median"]),
+            "error_rc_meter": float(eval_res["error_rc_meter"]),
+            "error_rc_meter_median": float(eval_res["error_rc_meter_median"]),
+            "error_rot_deg": float(eval_res["error_rot_deg"]),
+            "error_rot_deg_median": float(eval_res["error_rot_deg_median"]),
+            "error_scale_ratio": float(eval_res["error_scale_ratio"]),
+            "error_scale_ratio_median": float(eval_res["error_scale_ratio_median"]),
+            "error_scale_normed": float(eval_res["error_scale_normed"]),
+            "error_scale_normed_median": float(eval_res["error_scale_normed_median"]),
+            "runtime_gallery_summary": cls._to_jsonable(eval_res["runtime_gallery_summary"]),
+        }
+
+
+    @staticmethod
+    def _format_gallery_eval_report(summary, eval_log_lines=None):
+        if eval_log_lines:
+            lines = [str(line) for line in eval_log_lines]
+            if lines and lines[-1] != "":
+                lines.append("")
+        else:
+            lines = []
+
+        recall_parts = []
+        for k in summary["eval_cfg"]["k_values"]:
+            value = summary["recall@k"].get(str(int(k)))
+            if value is None:
+                continue
+            recall_parts.append(f"R@{int(k)}={float(value) * 100.0:.3f}%")
+
+        lines.extend([
+            "[Stage2 Gallery Eval Summary]",
+            f"scene_name: {summary['scene_name']}",
+            f"stage2_ckpt: {summary['stage2_ckpt']}",
+            f"load2test: {summary.get('load2test', '')}",
+            f"n_queries: {summary['n_queries']}",
+            f"layout_mode: {summary['layout_cfg']['mode']}",
+            f"layout_n_bins_4d: {summary['layout_cfg'].get('n_bins_4d', None)}",
+            f"layout_overlap: {summary['layout_cfg']['overlap']}",
+            f"layout_scale_mode: {summary['layout_cfg']['scale_mode']}",
+            f"layout_n_scales: {summary['layout_cfg']['n_scales']}",
+            f"recall: {' | '.join(recall_parts)}" if recall_parts else "recall:",
+            f"error_rc_norm: {summary['error_rc_norm']:.6f}",
+            f"error_rc_norm_median: {summary['error_rc_norm_median']:.6f}",
+            f"error_rc_meter: {summary['error_rc_meter']:.3f}m",
+            f"error_rc_meter_median: {summary['error_rc_meter_median']:.3f}m",
+            f"error_rot_deg: {summary['error_rot_deg']:.3f}",
+            f"error_rot_deg_median: {summary['error_rot_deg_median']:.3f}",
+            f"error_scale_ratio: {summary['error_scale_ratio']:.6f}x",
+            f"error_scale_ratio_median: {summary['error_scale_ratio_median']:.6f}x",
+            f"error_scale_normed: {summary['error_scale_normed']:.6f}",
+            f"error_scale_normed_median: {summary['error_scale_normed_median']:.6f}",
+            "",
+        ])
+        return "\n".join(lines)
+
+
+    @classmethod
+    def _save_gallery_eval_report(cls, save_dir, eval_res, layout_cfg, eval_cfg, ckpt_path, eval_log_lines=None, load2test=""):
+        os.makedirs(save_dir, exist_ok=True)
+
+        summary = cls._build_gallery_eval_summary(
+            eval_res=eval_res,
+            layout_cfg=layout_cfg,
+            eval_cfg=eval_cfg,
+            ckpt_path=ckpt_path,
+            load2test=load2test,
+        )
+
+        summary_path = os.path.join(save_dir, "eval_summary.json")
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+        report_path = os.path.join(save_dir, "eval_report.txt")
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(cls._format_gallery_eval_report(summary, eval_log_lines=eval_log_lines))
+
+        print(f"[Stage2 Gallery Eval] saved summary: {summary_path}")
+        print(f"[Stage2 Gallery Eval] saved report: {report_path}")
+
+
+    @staticmethod
+    def _resolve_stage2_opts_yaml_from_ckpt(ckpt_path):
+        if not ckpt_path:
+            return ""
+        ckpt_dir = os.path.dirname(os.path.abspath(str(ckpt_path)))
+        candidate = os.path.join(ckpt_dir, "opts.yaml")
+        if os.path.isfile(candidate):
+            return candidate
+        return ""
+
+
+    @classmethod
+    def _save_gallery_stage2_provenance(cls, save_dir, ckpt_path, load2test=""):
+        os.makedirs(save_dir, exist_ok=True)
+
+        provenance = {
+            "stage2_ckpt": ckpt_path,
+            "load2test": load2test,
+        }
+
+        provenance_path = os.path.join(save_dir, "stage2_provenance.json")
+        opts_src_path = cls._resolve_stage2_opts_yaml_from_ckpt(ckpt_path)
+        if opts_src_path:
+            opts_dst_path = os.path.join(save_dir, "stage2_train_opts.yaml")
+            shutil.copyfile(opts_src_path, opts_dst_path)
+            provenance["stage2_train_opts_source"] = opts_src_path
+            provenance["stage2_train_opts_snapshot"] = opts_dst_path
+
+        with open(provenance_path, "w", encoding="utf-8") as f:
+            json.dump(provenance, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+        print(f"[Stage2 Gallery Eval] saved provenance: {provenance_path}")
 
 
     def train(self):
@@ -695,7 +991,7 @@ class GridHashFitTrainer(BaseTrainer):
 
         # 1. 优化器
         from tool.util_mk_optimizer import create_optimizer_w_temple
-        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam')
+        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam', opt=self.opt)
 
         # 2. 加载checkpoint（如果继续训练）
         train_ckpt_modules = self._make_train_checkpoint_modules()
@@ -761,6 +1057,7 @@ class GridHashFitTrainer(BaseTrainer):
 
         for epoch in range(begin_epoch, num_epochs):
             self.logger.info(f'Epoch {epoch}/{num_epochs - 1}')
+            uav_iter = iter(self.uav_dataloader_train)
 
             for it, batch in tqdm.tqdm(enumerate(self.sat_dataloader)):
                 # 获取sat数据
@@ -768,7 +1065,11 @@ class GridHashFitTrainer(BaseTrainer):
                 coords_sat = batch[1].to(self.device)  # [B, 4]
 
                 # 获取uav数据
-                batch_uav = next(iter(self.uav_dataloader_train))
+                try:
+                    batch_uav = next(uav_iter)
+                except StopIteration:
+                    uav_iter = iter(self.uav_dataloader_train)
+                    batch_uav = next(uav_iter)
                 uavimgs = batch_uav[0].to(self.device)
                 coords_uav = batch_uav[1].to(self.device)  # [B, 4]
 
@@ -800,7 +1101,17 @@ class GridHashFitTrainer(BaseTrainer):
                 feats_grid = TF.normalize(feats_grid, dim=-1)
 
                 # 计算loss（Grid特征拟合视觉特征）
-                loss = loss_mse(feats_grid.squeeze(), feats_vis.squeeze()) * 1000
+                # mseloss_abs
+                # loss = loss_mse(feats_grid.squeeze(), feats_vis.squeeze()) * 1000
+                # mseloss_rel
+                vis_mean = feats_vis.mean(dim=0, keepdim=True)
+                grid_mean = feats_grid.mean(dim=0, keepdim=True)
+                vis_res = feats_vis - vis_mean
+                grid_res = feats_grid - grid_mean
+                loss_abs = TF.mse_loss(feats_grid, feats_vis)
+                loss_res = TF.mse_loss(grid_res, vis_res)
+                loss = 0.5 * loss_abs + 0.5 * loss_res
+                loss = loss * 10000
 
                 # 反向传播
                 self.optimizer.zero_grad()
@@ -819,6 +1130,9 @@ class GridHashFitTrainer(BaseTrainer):
                 step += 1
 
             # 每个epoch结束后
+            is_last_epoch = (epoch == num_epochs - 1)
+            should_save_ckpt = ((epoch % save_freq == 0) and (epoch > 0)) or is_last_epoch
+
             if (epoch % 1 == 0) and (epoch > 0):
                 # 统计信息
                 grid_feats_grad = self.grid.codebook.feats.grad
@@ -849,16 +1163,17 @@ class GridHashFitTrainer(BaseTrainer):
                     )
                     self.logger.info(
                         f"[Train Eval][RC] error_rc_norm={rc_eval_res['error_rc_norm']:.6f}, "
-                        f"error_rc_meter={rc_eval_res['error_rc_meter']:.3f}m"
+                        f"error_rc_norm_median={rc_eval_res['error_rc_norm_median']:.6f}, "
+                        f"error_rc_meter={rc_eval_res['error_rc_meter']:.3f}m, "
+                        f"error_rc_meter_median={rc_eval_res['error_rc_meter_median']:.3f}m"
                     )
 
-                # 保存
-                if (epoch % save_freq == 0):
-                    self._save_checkpoint(
-                        epoch,
-                        train_ckpt_modules,
-                        self.optimizer
-                    )
+            if should_save_ckpt:
+                self._save_checkpoint(
+                    epoch,
+                    train_ckpt_modules,
+                    self.optimizer
+                )
 
             # 日志
             self.logger.info(f'loss={loss.item():.6f}')
@@ -984,10 +1299,8 @@ class GridHashFitTrainer(BaseTrainer):
 
         # 否则从实验目录中找最新的checkpoint
         if self.exp_dir2save and os.path.exists(self.exp_dir2save):
-            ckpts = [f for f in os.listdir(self.exp_dir2save) if f.startswith('epoch')]
-            if ckpts:
-                ckpts.sort(key=lambda x: int(x.replace('epoch','').split('.')[0]))
-                ckpt_path = os.path.join(self.exp_dir2save, ckpts[-1])
+            ckpt_path = _find_latest_epoch_ckpt(self.exp_dir2save)
+            if ckpt_path:
                 print(f"从实验目录读取: {ckpt_path}")
                 return ckpt_path
 
@@ -1209,14 +1522,19 @@ class GridHashFitTrainer(BaseTrainer):
 
 
     def _make_stage2_retrieval_eval_cfg(self, **overrides):
+        eval_thresh_cfg = overrides.pop("eval_thresh_cfg", None)
         cfg = {
             'use_train_uav': False,
             'batch_size': int(getattr(self.opt, 'batchsize_uav', 32)),
             'num_workers': int(getattr(self.opt, 'num_worker_eval', 0)),
+            'show_progress': True,
             'query_rot2uniform': False,
             'query_scale2uniform': False,
             'k_values': (1, 5, 10, 20, 50, 256, 512, 1024),
             'dist_th': None,
+            'dist_lambda': None,
+            'rot_th_deg': None,
+            'scale_ratio_th': None,
             'max_queries': None,
             'print_results': False,
             'report_title': 'Stage2 Retrieval Eval',
@@ -1224,6 +1542,19 @@ class GridHashFitTrainer(BaseTrainer):
             'report_rot_error': False,
             'report_scale_error': False,
         }
+        if eval_thresh_cfg is not None:
+            thresh_cfg = dict(eval_thresh_cfg)
+            if "scale_ratio_th" not in thresh_cfg and "scale_th" in thresh_cfg:
+                old_scale_th = thresh_cfg["scale_th"]
+                thresh_cfg["scale_ratio_th"] = None if old_scale_th is None else (1.0 + float(old_scale_th))
+            if "dist_lambda" in thresh_cfg and "dist_th" not in overrides:
+                cfg["dist_lambda"] = thresh_cfg["dist_lambda"]
+            if "rot_th" in thresh_cfg and "rot_th_deg" not in overrides:
+                cfg["rot_th_deg"] = thresh_cfg["rot_th"]
+            if "rot_th_deg" in thresh_cfg and "rot_th_deg" not in overrides:
+                cfg["rot_th_deg"] = thresh_cfg["rot_th_deg"]
+            if "scale_ratio_th" in thresh_cfg and "scale_ratio_th" not in overrides:
+                cfg["scale_ratio_th"] = thresh_cfg["scale_ratio_th"]
         cfg.update(overrides)
         return Stage2RetrievalEvalConfig(**cfg)
 
@@ -1254,7 +1585,9 @@ class GridHashFitTrainer(BaseTrainer):
         return {
             'recall@k': eval_res['recall@k'],
             'error_rc_norm': eval_res['error_rc_norm'],
+            'error_rc_norm_median': eval_res['error_rc_norm_median'],
             'error_rc_meter': eval_res['error_rc_meter'],
+            'error_rc_meter_median': eval_res['error_rc_meter_median'],
             'n_queries': eval_res['n_queries'],
         }
 
@@ -1286,7 +1619,9 @@ class GridHashFitTrainer(BaseTrainer):
         return {
             'recall@k': eval_res['recall@k'],
             'error_rc_norm': eval_res['error_rc_norm'],
+            'error_rc_norm_median': eval_res['error_rc_norm_median'],
             'error_rc_meter': eval_res['error_rc_meter'],
+            'error_rc_meter_median': eval_res['error_rc_meter_median'],
             'error_rot_deg': eval_res['error_rot_deg'],
         }
 
@@ -1349,6 +1684,9 @@ class GridHashFitTrainer(BaseTrainer):
         return {
             'recall@k_rc': eval_res['recall@k'],
             'error_rc_norm': eval_res['error_rc_norm'],
+            'error_rc_norm_median': eval_res['error_rc_norm_median'],
+            'error_rc_meter': eval_res['error_rc_meter'],
+            'error_rc_meter_median': eval_res['error_rc_meter_median'],
             'error_rot_deg': eval_res['error_rot_deg'],
             'error_scale_normed': eval_res['error_scale_normed'],
         }
@@ -1372,30 +1710,23 @@ if __name__ == "__main__":
     # 如果没有显式指定配置文件，默认使用 stage2 配置，而不是 parser 的 stage1 默认值。
     if '--p_yaml' not in remaining_argv:
         # remaining_argv.extend(['--p_yaml', '/home/data/zwk/pyproj_neuloc_v0/trainer_depends/configs/trainer_depends/configs/stage2_INGP.yaml'])
-        remaining_argv.extend(['--p_yaml', '/home/data/zwk/pyproj_neuloc_v0/trainer_depends/configs/stage2_INGP_visloc.yaml'])
+        remaining_argv.extend(['--p_yaml', '/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B1_PN1cubie_5/opts.yaml'])
 
     # 将剩余参数交给通用配置解析器，避免 GridHashFitTrainer 再次读取错误默认值。
     sys.argv = [sys.argv[0]] + remaining_argv
 
-    #todo:modify manually
-    args.test_only = False
-    args.test_mode = 'gallery_bank'
-    exp_name_override = None
-
     opt = get_parse(print_summary=False)
-    if exp_name_override:
-        opt.exp_name = exp_name_override
-
     trainer = GridHashFitTrainer(opt=opt)
     if not args.test_only:
         trainer.train()
     elif args.test_mode == 'legacy_test':
         trainer.test()
     elif args.test_mode == 'gallery_bank':
+        eval_thresh_cfg = {"dist_lambda": 1.1 * 0.5, "rot_th": 11.0 * 0.5, "scale_ratio_th": 1.15}
         gallery_layout_cfg = Stage2ReferenceGalleryLayoutConfig(
             mode='rc_rot_scale',
-            overlap=0.5,
-            delta_rot_deg=5,
+            overlap=0.75,
+            delta_rot_deg=10,
             n_scales=4,
         )
         gallery_feature_cfg = trainer._make_stage2_gallery_feature_cfg()
@@ -1409,6 +1740,8 @@ if __name__ == "__main__":
             report_title='Stage2 Gallery Eval',
             report_rot_error=True,
             report_scale_error=True,
+            print_results=True,
+            eval_thresh_cfg=eval_thresh_cfg,
         )
 
         gallery_state = trainer.eval_gallery_bank(

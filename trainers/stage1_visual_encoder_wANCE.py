@@ -20,6 +20,37 @@ import re
 import sys
 import time
 import argparse
+import json
+from contextlib import nullcontext
+from dataclasses import asdict
+from datetime import datetime
+from functools import partial
+
+
+def _bootstrap_runtime_env():
+    abs_python = os.path.abspath(sys.executable)
+    if not abs_python.endswith("/bin/python"):
+        return
+
+    env_root = os.path.dirname(os.path.dirname(abs_python))
+    env_lib = os.path.join(env_root, "lib")
+    if not os.path.isdir(env_lib):
+        return
+
+    old_ld = os.environ.get("LD_LIBRARY_PATH", "")
+    ld_parts = [part for part in old_ld.split(":") if part]
+    if ld_parts[:1] == [env_lib]:
+        return
+
+    os.environ["LD_LIBRARY_PATH"] = f"{env_lib}:{old_ld}" if old_ld else env_lib
+    if os.environ.get("_STAGE1_W_ANCE_REEXECED") == "1":
+        return
+
+    os.environ["_STAGE1_W_ANCE_REEXECED"] = "1"
+    os.execvpe(sys.executable, [sys.executable] + sys.argv, os.environ)
+
+
+_bootstrap_runtime_env()
 
 import numpy as np
 import torch
@@ -89,34 +120,56 @@ class VisualEncoderTrainer(BaseTrainer):
     def _setup_trainable_params(self):
         """设置可训练参数"""
         freeze_backbone = bool(getattr(self.opt, 'freeze_backbone', True))
-        if freeze_backbone:
+        adapter_enabled = bool(getattr(self.opt, 'adapter_config', {}).get('enabled', False))
+        if freeze_backbone and not adapter_enabled:
             for param in self.vis_encoder.parameters():
                 param.requires_grad = False
 
         self.param2optimize = {'vis_aggregator': self.vis_aggregator}
         self.param2freeze = {}
-        if freeze_backbone:
-            self.param2freeze['vis_encoder'] = self.vis_encoder
-        else:
-            self.param2optimize['vis_encoder'] = self.vis_encoder
-
-        trainable_names = ', '.join(self.param2optimize.keys())
-        frozen_names = ', '.join(self.param2freeze.keys()) if self.param2freeze else '(none)'
         n_trainable_backbone_params = sum(
             param.numel() for param in self.vis_encoder.parameters() if param.requires_grad
         )
+        n_trainable_adapter_params = sum(
+            param.numel()
+            for name, param in self.vis_encoder.named_parameters()
+            if param.requires_grad and 'adapter' in name
+        )
+        n_trainable_raw_backbone_params = n_trainable_backbone_params - n_trainable_adapter_params
+        if n_trainable_backbone_params > 0:
+            self.param2optimize['vis_encoder'] = self.vis_encoder
+        else:
+            self.param2freeze['vis_encoder'] = self.vis_encoder
+
+        trainable_names = ', '.join(self.param2optimize.keys())
+        frozen_names = ', '.join(self.param2freeze.keys()) if self.param2freeze else '(none)'
 
         print(f"参数配置 (freeze_backbone={freeze_backbone}):")
         print(f"  可训练: {trainable_names}")
         print(f"  冻结:   {frozen_names}\n")
-        if not freeze_backbone:
-            print(f"  vis_encoder 可训练参数量: {n_trainable_backbone_params}\n")
+        print(f"  vis_encoder 可训练参数量: {n_trainable_backbone_params}\n")
+        if adapter_enabled:
+            print(f"  vis_encoder 其中 adapter 可训练参数量: {n_trainable_adapter_params}")
+            print(f"  vis_encoder 其中原始 backbone 可训练参数量: {n_trainable_raw_backbone_params}\n")
 
     def _forward_train_vis_encoder(self, imgs_input):
-        if getattr(self.opt, 'freeze_backbone', True):
+        has_trainable_params = any(param.requires_grad for param in self.vis_encoder.parameters())
+        if not has_trainable_params:
             with torch.no_grad():
                 return self.vis_encoder(imgs_input)
         return self.vis_encoder(imgs_input)
+
+    def _log_or_print(self, message):
+        if getattr(self, "logger", None) is not None:
+            self.logger.info(message)
+        else:
+            print(message)
+
+    def _autocast_context(self):
+        use_amp = bool(getattr(self.opt, "autocast", False)) and getattr(self.device, "type", "") == "cuda"
+        if not use_amp:
+            return nullcontext()
+        return torch.autocast(device_type="cuda", dtype=torch.float16)
 
     # ------------------------------------------------------------------
     # Checkpoint Helpers
@@ -186,6 +239,9 @@ class VisualEncoderTrainer(BaseTrainer):
         opt = self.opt
         scenes = opt.scenes_setting['scenes']
         add_random_satimg_negs = bool(getattr(opt, "add_random_satimg_negs", True))
+        reject_sampling = bool(getattr(opt, "reject_sampling", False))
+        reject_batch_aware = bool(getattr(opt, "reject_batch_aware", False))
+        pair_alignment_mode = str(getattr(opt, "pair_alignment_mode", "full_4d")).strip().lower()
 
         if getattr(opt, "ance_enabled", False) and add_random_satimg_negs:
             raise ValueError(
@@ -217,6 +273,8 @@ class VisualEncoderTrainer(BaseTrainer):
                 device= self.device,
                 n_neg_per_query=n_neg_per_query, #控制负样本数=正样本数的倍率
                 sat_as_query=opt.sat_as_query,
+                nrc_reject_sampling=reject_sampling,
+                pair_alignment_mode=pair_alignment_mode,
             )
             pair_dataset.weight = len(uav_dataset_train)
 
@@ -228,12 +286,21 @@ class VisualEncoderTrainer(BaseTrainer):
                 shuffle=True,
                 drop_last=True,
                 pin_memory=False,
-                collate_fn=collate_uav_sat_pair,
+                collate_fn=partial(
+                    collate_uav_sat_pair,
+                    sat_dataset=sat_dataset,
+                    reject_batch_aware=reject_batch_aware,
+                ),
                 persistent_workers=(opt.num_worker > 0)
             )
 
             pair_dataloaders[scene_name] = pair_dataloader
-            self.logger.info(f"  {scene_name}: {len(pair_dataset)} pairs, {len(pair_dataloader)} batches")
+            neg_sampling_mode = "reject" if reject_sampling else "random"
+            self.logger.info(
+                f"  {scene_name}: {len(pair_dataset)} pairs, {len(pair_dataloader)} batches, "
+                f"neg_sampling={neg_sampling_mode}, reject_batch_aware={reject_batch_aware}, "
+                f"pair_alignment_mode={pair_alignment_mode}, pos_scale_mean={pair_dataset.pos_scale_mean:.4f}"
+            )
 
             # CoordsNormProcessor for this scene (per pair dataset)
             self.coord_normers[scene_name] = CoordsNormProcessor(sat_dataset)
@@ -275,6 +342,40 @@ class VisualEncoderTrainer(BaseTrainer):
     # Loss & Training Strategy
     # ------------------------------------------------------------------
     def _init_loss_modules(self):
+        loss_type = str(getattr(self.opt, "loss_type", "tripleLoss_singleEdge_hardest_fm_weight")).lower()
+        if loss_type == "infonce":
+            from losses.stage1_infonce_loss import Stage1InfoNCELoss
+
+            self.active_loss_type = loss_type
+            self.active_loss_input_mode = "query_positive_infonce"
+            self.active_loss_output_mode = "scalar"
+            self.loss_w_weight = False
+            self.active_loss_module_name = "loss_fn"
+            self.active_loss_module = Stage1InfoNCELoss(
+                temperature=float(getattr(self.opt, "infonce_temperature", 0.1)),
+                negative_mode=str(getattr(self.opt, "infonce_negative_mode", "batch_and_explicit")),
+            ).to(self.device)
+            self.active_loss_miner = None
+            self._register_active_loss_module()
+            return
+
+        if loss_type == "msloss_torch":
+            from losses.MSLoss_fm_torch import MultiSimilarityLossTorch, MultiSimilarityMinerTorch
+
+            self.active_loss_type = loss_type
+            self.active_loss_input_mode = "descriptors_labels"
+            self.active_loss_output_mode = "scalar"
+            self.loss_w_weight = False
+            self.active_loss_module_name = "loss_fn"
+            self.active_loss_module = MultiSimilarityLossTorch(
+                alpha=1.0,
+                beta=50.0,
+                base=0.0,
+            ).to(self.device)
+            self.active_loss_miner = MultiSimilarityMinerTorch(epsilon=0.1)
+            self._register_active_loss_module()
+            return
+
         from losses.CL_losses_w_weight import (
             pairLoss_multiEdge_logSum,
             pairLoss_singleEdge_hardest,
@@ -351,6 +452,7 @@ class VisualEncoderTrainer(BaseTrainer):
     def _register_active_loss_module(self):
         self.param2optimize.pop("loss_fm_weight", None)
         self.param2optimize.pop("loss_fm_mask", None)
+        self.param2optimize.pop("loss_fn", None)
         self.param2optimize[self.active_loss_module_name] = self.active_loss_module
         print(
             f"Loss配置: loss_type={self.active_loss_type}, "
@@ -647,12 +749,14 @@ class VisualEncoderTrainer(BaseTrainer):
             p=2,
             dim=-1
         )
-        return {
+        forward_state = {
             "batch_size": batch_size,
             "feats_q": feats_q,
             "feats_ref": feats_ref,
             "feat_dist_mat": feat_dist_mat,
         }
+        self._last_forward_state = forward_state
+        return forward_state
 
     def _log_feature_variance_stats(self, feats_q, feats_ref):
         q_var_mean = torch.var(feats_q, dim=0).mean().item()
@@ -669,7 +773,244 @@ class VisualEncoderTrainer(BaseTrainer):
                     return True
         return False
 
+    def _after_train_dataloader_init(self):
+        """Hook for subclasses that need data-dependent setup before training starts."""
+        self._maybe_initialize_netvlad_from_training_data()
+        return None
+
+    def _get_netvlad_cluster_init_config(self):
+        aggregator_config = dict(getattr(self.opt, "aggregator_config", {}) or {})
+        cluster_init_cfg = dict(aggregator_config.get("cluster_init", {}) or {})
+        cfg = {
+            "enabled": True,
+            "sample_uav": True,
+            "sample_sat": True,
+            "descriptors_per_image": 8,
+            "max_batches": 64,
+            "max_descriptors": 50000,
+            "kmeans_iters": 25,
+            "seed": 123,
+            "save_artifact": True,
+        }
+        cfg.update(cluster_init_cfg)
+        cfg["enabled"] = bool(cfg["enabled"])
+        cfg["sample_uav"] = bool(cfg["sample_uav"])
+        cfg["sample_sat"] = bool(cfg["sample_sat"])
+        cfg["descriptors_per_image"] = max(1, int(cfg["descriptors_per_image"]))
+        cfg["max_batches"] = max(1, int(cfg["max_batches"]))
+        cfg["max_descriptors"] = max(1, int(cfg["max_descriptors"]))
+        cfg["kmeans_iters"] = max(1, int(cfg["kmeans_iters"]))
+        cfg["seed"] = int(cfg["seed"])
+        cfg["save_artifact"] = bool(cfg["save_artifact"])
+        return cfg
+
+    def _collect_netvlad_patch_descriptors(self, cfg):
+        descriptors = []
+        total_descriptors = 0
+        rng = torch.Generator(device="cpu")
+        rng.manual_seed(int(cfg["seed"]))
+        sample_sources = []
+        if cfg["sample_uav"]:
+            sample_sources.append("uavimgs")
+        if cfg["sample_sat"]:
+            sample_sources.append("satimgs_pos")
+        if not sample_sources:
+            raise ValueError("NetVLAD cluster_init requires at least one of sample_uav/sample_sat to be enabled.")
+
+        self._log_or_print(
+            "[NetVLAD Init] collecting patch descriptors: "
+            f"sources={sample_sources}, descriptors_per_image={cfg['descriptors_per_image']}, "
+            f"max_batches={cfg['max_batches']}, max_descriptors={cfg['max_descriptors']}"
+        )
+
+        self.vis_encoder.eval()
+        self.vis_aggregator.eval()
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(iter(self.dataloader_train)):
+                if batch_idx >= cfg["max_batches"] or total_descriptors >= cfg["max_descriptors"]:
+                    break
+
+                imgs_to_encode = []
+                for source_name in sample_sources:
+                    imgs = batch.get(source_name, None)
+                    if imgs is not None:
+                        imgs_to_encode.append(imgs.to(self.device, non_blocking=True))
+                if not imgs_to_encode:
+                    continue
+
+                imgs_input = torch.cat(imgs_to_encode, dim=0)
+                feats_patch = self._forward_train_vis_encoder(imgs_input)
+                if not hasattr(self.vis_aggregator, "backbone") or not hasattr(self.vis_aggregator.backbone, "_tokens_to_feature_map"):
+                    raise AttributeError("NetVLAD cluster_init requires aggregator.backbone._tokens_to_feature_map.")
+                fmap = self.vis_aggregator.backbone._tokens_to_feature_map(feats_patch)
+                if getattr(self.vis_aggregator, "normalize_input", False):
+                    fmap = torch.nn.functional.normalize(fmap, p=2, dim=1)
+
+                patch_desc = fmap.flatten(2).transpose(1, 2).detach().cpu().to(dtype=torch.float32)
+                n_imgs, n_tokens, dim = patch_desc.shape
+                per_image = min(int(cfg["descriptors_per_image"]), n_tokens)
+                rand_order = torch.rand((n_imgs, n_tokens), generator=rng)
+                token_indices = torch.topk(rand_order, k=per_image, dim=1).indices
+                img_indices = torch.arange(n_imgs, dtype=torch.long).unsqueeze(1)
+                sampled = patch_desc[img_indices, token_indices].reshape(-1, dim)
+
+                descriptors.append(sampled)
+                total_descriptors += int(sampled.shape[0])
+
+        if not descriptors:
+            raise RuntimeError("Failed to collect any patch descriptors for NetVLAD cluster initialization.")
+
+        descriptors = torch.cat(descriptors, dim=0)
+        if descriptors.shape[0] > cfg["max_descriptors"]:
+            keep_idx = torch.randperm(descriptors.shape[0], generator=rng)[: cfg["max_descriptors"]]
+            descriptors = descriptors[keep_idx]
+        return descriptors.contiguous()
+
+    def _run_faiss_kmeans(self, descriptors, num_clusters, cfg):
+        try:
+            import faiss
+        except ImportError as exc:
+            raise ImportError("NetVLAD cluster_init requires faiss to be installed.") from exc
+
+        desc_np = np.ascontiguousarray(descriptors.cpu().numpy(), dtype=np.float32)
+        if desc_np.shape[0] < num_clusters:
+            raise ValueError(
+                f"NetVLAD cluster_init needs at least {num_clusters} descriptors, got {desc_np.shape[0]}"
+            )
+
+        kmeans = faiss.Kmeans(
+            desc_np.shape[1],
+            num_clusters,
+            niter=int(cfg["kmeans_iters"]),
+            verbose=False,
+            gpu=False,
+            seed=int(cfg["seed"]),
+        )
+        kmeans.train(desc_np)
+        centroids = torch.from_numpy(np.ascontiguousarray(kmeans.centroids)).to(dtype=torch.float32)
+        centroids = torch.nn.functional.normalize(centroids, p=2, dim=1)
+        return centroids
+
+    def _maybe_save_netvlad_init_artifact(self, cfg, descriptors, centroids):
+        if not cfg["save_artifact"] or not getattr(self, "log_dir2save", None):
+            return
+        save_path = os.path.join(self.log_dir2save, "netvlad_cluster_init.pt")
+        payload = {
+            "centroids": centroids.cpu(),
+            "num_descriptors": int(descriptors.shape[0]),
+            "descriptor_dim": int(descriptors.shape[1]),
+            "config": cfg,
+            "alpha": float(getattr(self.vis_aggregator, "alpha", 0.0)),
+        }
+        try:
+            torch.save(payload, save_path)
+            self._log_or_print(f"[NetVLAD Init] saved centroids to {save_path}")
+        except Exception as exc:
+            self._log_or_print(f"[NetVLAD Init] warning: failed to save init artifact to {save_path}: {exc}")
+
+    def _maybe_initialize_netvlad_from_training_data(self):
+        agg_type = str(getattr(self.opt, "aggregator_type", "")).lower()
+        if agg_type != "netvlad" or not hasattr(self.vis_aggregator, "initialize_centroids"):
+            return
+        if getattr(self.opt, "load2train", ""):
+            self._log_or_print("[NetVLAD Init] skip cluster initialization because load2train is configured.")
+            return
+
+        cfg = self._get_netvlad_cluster_init_config()
+        if not cfg["enabled"]:
+            self._log_or_print("[NetVLAD Init] cluster initialization disabled by config.")
+            return
+
+        prev_encoder_mode = self.vis_encoder.training
+        prev_agg_mode = self.vis_aggregator.training
+        try:
+            descriptors = self._collect_netvlad_patch_descriptors(cfg)
+            num_clusters = int(getattr(self.vis_aggregator, "num_clusters"))
+            centroids = self._run_faiss_kmeans(descriptors, num_clusters=num_clusters, cfg=cfg)
+            self.vis_aggregator.initialize_centroids(centroids.to(self.device))
+            self._log_or_print(
+                "[NetVLAD Init] initialized centroids from training descriptors: "
+                f"num_descriptors={descriptors.shape[0]}, descriptor_dim={descriptors.shape[1]}, "
+                f"num_clusters={num_clusters}, alpha={float(getattr(self.vis_aggregator, 'alpha', 0.0)):.2f}"
+            )
+            self._maybe_save_netvlad_init_artifact(cfg, descriptors, centroids)
+        finally:
+            self.vis_encoder.train(prev_encoder_mode)
+            self.vis_aggregator.train(prev_agg_mode)
+
     def _compute_train_loss(self, batch_state, feat_dist_mat, coords_uav_neg_flat):
+        if self.active_loss_input_mode == "query_positive_infonce":
+            forward_state = getattr(self, "_last_forward_state", None)
+            if forward_state is None:
+                raise RuntimeError(f"Missing forward state for {self.active_loss_type}.")
+
+            batch_size = int(forward_state["batch_size"])
+            feats_q = forward_state["feats_q"]
+            feats_ref = forward_state["feats_ref"]
+            feats_pos = feats_ref[:batch_size]
+            feats_neg = feats_ref[batch_size:]
+
+            if feats_pos.shape[0] != batch_size:
+                raise ValueError(
+                    f"{self.active_loss_type} expects {batch_size} positive references, got {feats_pos.shape[0]}."
+                )
+            return self.active_loss_module(
+                feats_q,
+                feats_pos,
+                explicit_negative_keys=feats_neg,
+            )
+
+        if self.active_loss_input_mode == "descriptors_labels":
+            forward_state = getattr(self, "_last_forward_state", None)
+            if forward_state is None:
+                raise RuntimeError(f"Missing forward state for {self.active_loss_type}.")
+
+            batch_size = int(forward_state["batch_size"])
+            feats_q = forward_state["feats_q"]
+            feats_ref = forward_state["feats_ref"]
+            feats_pos = feats_ref[:batch_size]
+
+            if feats_pos.shape[0] != batch_size:
+                raise ValueError(
+                    f"{self.active_loss_type} expects {batch_size} positive references, got {feats_pos.shape[0]}."
+                )
+
+            query_labels = torch.arange(batch_size, device=feats_q.device, dtype=torch.long)
+            ref_labels = query_labels.clone()
+            num_explicit_neg_refs = max(0, int(feats_ref.shape[0] - batch_size))
+            if num_explicit_neg_refs > 0:
+                neg_labels = torch.arange(
+                    batch_size,
+                    batch_size + num_explicit_neg_refs,
+                    device=feats_ref.device,
+                    dtype=torch.long,
+                )
+                ref_labels = torch.cat([ref_labels, neg_labels], dim=0)
+                if not getattr(self, "_logged_msloss_explicit_negs", False):
+                    msg = (
+                        f"{self.active_loss_type} uses {num_explicit_neg_refs} explicit satimgs_neg references "
+                        "as labeled negatives in the ref set."
+                    )
+                    if getattr(self, "logger", None) is not None:
+                        self.logger.info(msg)
+                    else:
+                        print(msg)
+                    self._logged_msloss_explicit_negs = True
+
+            miner_outputs = self.active_loss_miner(
+                feats_q,
+                query_labels,
+                ref_emb=feats_ref,
+                ref_labels=ref_labels,
+            )
+            return self.active_loss_module(
+                feats_q,
+                query_labels,
+                miner_outputs,
+                ref_emb=feats_ref,
+                ref_labels=ref_labels,
+            )
+
         if self.active_loss_input_mode == "mask":
             pos_mask_mat = self._build_pos_mask(
                 batch_size=feat_dist_mat.shape[0],
@@ -694,22 +1035,28 @@ class VisualEncoderTrainer(BaseTrainer):
     def train(self):
         """Stage 1训练主循环"""
         opt = self.opt
+        use_amp = bool(opt.autocast) and getattr(self.device, "type", "") == "cuda"
 
         print("\n" + "🚀"*40)
         print("开始 Stage 1 训练: Visual Encoder (vis_aggregator)")
         print("🚀"*40 + "\n")
 
         # 0. 初始化GradScaler（如果使用autocast）
-        if opt.autocast:
+        if use_amp:
             from torch.cuda.amp import GradScaler
-            self.scaler = GradScaler()
+            self.scaler = GradScaler(enabled=True)
             print("✅ 启用混合精度训练 (AMP)")
+        elif opt.autocast:
+            self.scaler = None
+            print("⚠️ autocast=True 但当前设备不是 CUDA，AMP 已禁用。")
+        else:
+            self.scaler = None
 
         self._init_loss_modules()
 
         # 1. 优化器
         from tool.util_mk_optimizer import create_optimizer_w_temple
-        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam')
+        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam', opt=self.opt)
 
         # 2. 加载checkpoint（如果继续训练）
         begin_epoch = self._load_train_checkpoint(opt.load2train)
@@ -722,6 +1069,7 @@ class VisualEncoderTrainer(BaseTrainer):
 
         # 5. 创建多场景DataLoader
         self._init_multi_scene_dataloader()
+        self._after_train_dataloader_init()
 
         # 6. 初始化 ANCE helper（可选）
         self._init_ance_helper()
@@ -732,6 +1080,11 @@ class VisualEncoderTrainer(BaseTrainer):
         step = 0
 
         self.logger.info(f"开始训练，共{num_epochs}个epoch")
+        if getattr(opt, "val", False):
+            val_freq = max(1, int(getattr(opt, "val_freq", 1) or 1))
+            self.logger.info(f"Stage 1 Recall评估已启用: val_freq={val_freq}")
+        else:
+            self.logger.info("Stage 1 Recall评估已禁用: val=False")
 
         for epoch in range(begin_epoch, num_epochs):
             self.logger.info(f'Epoch {epoch}/{num_epochs - 1}')
@@ -741,21 +1094,22 @@ class VisualEncoderTrainer(BaseTrainer):
             for it, batch in tqdm.tqdm(enumerate(self.dataloader_train)):
                 batch_state = self._extract_train_batch(batch)
                 satimgs_neg_flat, coords_uav_neg_flat = self._prepare_batch_negatives(batch_state, batch)
-                forward_state = self._forward_train_batch(
-                    uavimgs=batch_state["uavimgs"],
-                    satimgs_pos=batch_state["satimgs_pos"],
-                    satimgs_neg_flat=satimgs_neg_flat,
-                )
-                feat_dist_mat = forward_state["feat_dist_mat"]
-                loss = self._compute_train_loss(
-                    batch_state=batch_state,
-                    feat_dist_mat=feat_dist_mat,
-                    coords_uav_neg_flat=coords_uav_neg_flat,
-                )
+                with self._autocast_context():
+                    forward_state = self._forward_train_batch(
+                        uavimgs=batch_state["uavimgs"],
+                        satimgs_pos=batch_state["satimgs_pos"],
+                        satimgs_neg_flat=satimgs_neg_flat,
+                    )
+                    feat_dist_mat = forward_state["feat_dist_mat"]
+                    loss = self._compute_train_loss(
+                        batch_state=batch_state,
+                        feat_dist_mat=feat_dist_mat,
+                        coords_uav_neg_flat=coords_uav_neg_flat,
+                    )
 
                 # 反向传播
                 self.optimizer.zero_grad()
-                if opt.autocast:
+                if use_amp:
                     self.scaler.scale(loss).backward()
                     if not self._optimizer_has_any_grad(self.optimizer):
                         self.logger.warning(
@@ -800,13 +1154,14 @@ class VisualEncoderTrainer(BaseTrainer):
                     self.optimizer
                 )
 
-            self.eval_recall(
-                use_train_uav=False,
-                init_datasets=False,
-                load_ckpt=False,
-                restore_train=True,
-                **self._build_eval_configs(),
-            )
+            if self._should_run_epoch_eval(epoch):
+                self.eval_recall(
+                    use_train_uav=False,
+                    init_datasets=False,
+                    load_ckpt=False,
+                    restore_train=True,
+                    **self._build_eval_configs(),
+                )
 
             # 日志
             self.logger.info(f'loss={loss.item():.6f}')
@@ -843,6 +1198,12 @@ class VisualEncoderTrainer(BaseTrainer):
             "query_rot2uniform": getattr(self.opt, "val_query_rot2uniform", True),
             "query_scale2uniform": getattr(self.opt, "val_query_scale2uniform", False),
         }
+
+    def _should_run_epoch_eval(self, epoch):
+        if not getattr(self.opt, "val", False):
+            return False
+        val_freq = max(1, int(getattr(self.opt, "val_freq", 1) or 1))
+        return ((epoch + 1) % val_freq == 0) or (epoch == getattr(self.opt, "num_epochs", 0) - 1)
 
     @staticmethod
     def _cfg_get(cfg, key, default=None):
@@ -884,6 +1245,193 @@ class VisualEncoderTrainer(BaseTrainer):
                 f.write("\n".join(str(line) for line in eval_log_lines))
         except Exception as exc:
             self._eval_log(f"[eval_recall] failed to save log: {exc}")
+
+    @staticmethod
+    def _to_jsonable(value):
+        if hasattr(value, "__dataclass_fields__"):
+            return VisualEncoderTrainer._to_jsonable(asdict(value))
+        if isinstance(value, dict):
+            return {str(k): VisualEncoderTrainer._to_jsonable(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [VisualEncoderTrainer._to_jsonable(v) for v in value]
+        if torch.is_tensor(value):
+            return value.detach().cpu().tolist()
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if hasattr(value, "item") and callable(getattr(value, "item")):
+            try:
+                return value.item()
+            except Exception:
+                return value
+        return value
+
+    @staticmethod
+    def _to_pt_bundleable(value):
+        if hasattr(value, "__dataclass_fields__"):
+            return VisualEncoderTrainer._to_pt_bundleable(asdict(value))
+        if isinstance(value, dict):
+            return {str(k): VisualEncoderTrainer._to_pt_bundleable(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [VisualEncoderTrainer._to_pt_bundleable(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(VisualEncoderTrainer._to_pt_bundleable(v) for v in value)
+        if torch.is_tensor(value):
+            return value.detach().cpu()
+        if isinstance(value, np.ndarray):
+            return torch.from_numpy(value.copy())
+        if hasattr(value, "item") and callable(getattr(value, "item")):
+            try:
+                return value.item()
+            except Exception:
+                return value
+        return value
+
+    @staticmethod
+    def _normalize_stage1_layout_cfg_for_report(layout_cfg):
+        if layout_cfg is None:
+            return None
+        cfg = layout_cfg if isinstance(layout_cfg, Stage1ReferenceGalleryLayoutConfig) else (
+            Stage1ReferenceGalleryLayoutConfig(**layout_cfg)
+        )
+        return VisualEncoderTrainer._to_jsonable(asdict(cfg))
+
+    @staticmethod
+    def _normalize_stage1_feature_cfg_for_report(feature_cfg):
+        if feature_cfg is None:
+            return None
+        cfg = feature_cfg if isinstance(feature_cfg, Stage1ReferenceGalleryFeatureConfig) else (
+            Stage1ReferenceGalleryFeatureConfig(**feature_cfg)
+        )
+        return VisualEncoderTrainer._to_jsonable(asdict(cfg))
+
+    @staticmethod
+    def _normalize_stage1_eval_cfg_for_report(eval_cfg):
+        if eval_cfg is None:
+            return None
+        cfg = eval_cfg if isinstance(eval_cfg, Stage1RetrievalEvalConfig) else (
+            Stage1RetrievalEvalConfig(**eval_cfg)
+        )
+        return VisualEncoderTrainer._to_jsonable(asdict(cfg))
+
+    @staticmethod
+    def _resolve_stage1_dist_th_meter(sat_dataset, dist_th_nrc):
+        if sat_dataset is None or dist_th_nrc is None:
+            return None
+        if hasattr(sat_dataset, "halfimg_radius_meter") and hasattr(sat_dataset, "halfimg_radius_nrc"):
+            nrc2meter = float(sat_dataset.halfimg_radius_meter) / max(float(sat_dataset.halfimg_radius_nrc), 1e-8)
+            return float(dist_th_nrc) * nrc2meter
+        return None
+
+    @staticmethod
+    def _resolve_stage1_gallery_eval_paths(save_dir):
+        return {
+            "manifest": os.path.join(save_dir, "stage1_retrieval_eval_manifest.json"),
+            "config_json": os.path.join(save_dir, "stage1_retrieval_eval_config.json"),
+            "report_json": os.path.join(save_dir, "stage1_retrieval_eval_report.json"),
+            "bundle_pt": os.path.join(save_dir, "stage1_retrieval_eval_bundle.pt"),
+            "feats_query_pt": os.path.join(save_dir, "feats_query.pt"),
+        }
+
+    @classmethod
+    def _build_stage1_gallery_eval_config_payload(
+            cls,
+            scene_name,
+            gallery_bank,
+            gallery_save_dir,
+            retrieval_eval_cfg,
+            ckpt_path,
+    ):
+        retrieval_eval_cfg_payload = cls._normalize_stage1_eval_cfg_for_report(retrieval_eval_cfg)
+        sat_dataset = getattr(gallery_bank, "sat_dataset", None)
+        if retrieval_eval_cfg_payload is not None:
+            dist_th_nrc = retrieval_eval_cfg_payload.get("dist_th", None)
+            if dist_th_nrc is None and sat_dataset is not None and hasattr(sat_dataset, "halfimg_radius_nrc"):
+                dist_th_nrc = float(sat_dataset.halfimg_radius_nrc) * 1.1
+            retrieval_eval_cfg_payload["dist_th_m"] = cls._resolve_stage1_dist_th_meter(sat_dataset, dist_th_nrc)
+
+        return {
+            "schema_version": 1,
+            "scene_name": str(scene_name),
+            "stage1_ckpt": ckpt_path,
+            "load2test": getattr(getattr(gallery_bank, "trainer", None), "opt", None).load2test
+            if getattr(getattr(gallery_bank, "trainer", None), "opt", None) is not None and hasattr(gallery_bank.trainer.opt, "load2test")
+            else "",
+            "gallery_save_dir": gallery_save_dir,
+            "layout_cfg": cls._normalize_stage1_layout_cfg_for_report(getattr(gallery_bank, "layout_cfg", None)),
+            "feature_cfg": cls._normalize_stage1_feature_cfg_for_report(gallery_bank.meta.get("feature_cfg", None)),
+            "retrieval_eval_cfg": retrieval_eval_cfg_payload,
+            "gallery_summary": cls._to_jsonable(gallery_bank.summary()),
+            "gallery_meta": cls._to_jsonable(gallery_bank.meta),
+        }
+
+    @classmethod
+    def _build_stage1_gallery_eval_report_payload(cls, eval_res):
+        return {
+            "schema_version": 1,
+            "scene_name": str(eval_res.get("scene_name", "")),
+            "report_title": str(eval_res.get("report_title", "")),
+            "n_queries": int(eval_res.get("n_queries", 0)),
+            "n_eval": int(eval_res.get("n_eval", eval_res.get("n_queries", 0))),
+            "k_values": cls._to_jsonable(eval_res.get("k_values", [])),
+            "thresholds": cls._to_jsonable(eval_res.get("thresholds", {})),
+            "report_meta": cls._to_jsonable(eval_res.get("report_meta", {})),
+            "acc_metrics": cls._to_jsonable(eval_res.get("acc_metrics", eval_res.get("metrics", {}))),
+            "progressive_acc_metrics": cls._to_jsonable(eval_res.get("progressive_acc_metrics", {})),
+            "err_stats": cls._to_jsonable(eval_res.get("err_stats", eval_res.get("errors", {}))),
+            "runtime_gallery_summary": cls._to_jsonable(eval_res.get("runtime_gallery_summary", {})),
+        }
+
+    @classmethod
+    def _save_stage1_gallery_eval_artifacts(
+            cls,
+            save_dir,
+            scene_name,
+            gallery_bank,
+            eval_res,
+            retrieval_eval_cfg,
+            ckpt_path,
+    ):
+        os.makedirs(save_dir, exist_ok=True)
+        paths = cls._resolve_stage1_gallery_eval_paths(save_dir)
+        config_payload = cls._build_stage1_gallery_eval_config_payload(
+            scene_name=scene_name,
+            gallery_bank=gallery_bank,
+            gallery_save_dir=save_dir,
+            retrieval_eval_cfg=retrieval_eval_cfg,
+            ckpt_path=ckpt_path,
+        )
+        report_payload = cls._build_stage1_gallery_eval_report_payload(eval_res)
+        manifest_payload = {
+            "schema_version": 1,
+            "saved_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "scene_name": str(scene_name),
+            "gallery_save_dir": save_dir,
+            "files": {
+                "config_json": os.path.basename(paths["config_json"]),
+                "report_json": os.path.basename(paths["report_json"]),
+                "bundle_pt": os.path.basename(paths["bundle_pt"]),
+                "feats_query_pt": os.path.basename(paths["feats_query_pt"]),
+            },
+        }
+        bundle_payload = {
+            "schema_version": 1,
+            "config": config_payload,
+            "report": report_payload,
+            "coords_topk": eval_res.get("coords_topk", None),
+            "coords_gt": eval_res.get("coords_gt", None),
+        }
+
+        with open(paths["manifest"], "w", encoding="utf-8") as f:
+            json.dump(cls._to_jsonable(manifest_payload), f, ensure_ascii=False, indent=2, sort_keys=True)
+        with open(paths["config_json"], "w", encoding="utf-8") as f:
+            json.dump(cls._to_jsonable(config_payload), f, ensure_ascii=False, indent=2, sort_keys=True)
+        with open(paths["report_json"], "w", encoding="utf-8") as f:
+            json.dump(cls._to_jsonable(report_payload), f, ensure_ascii=False, indent=2, sort_keys=True)
+        torch.save(cls._to_pt_bundleable(bundle_payload), paths["bundle_pt"])
+        feats_query = eval_res.get("feats_query", None)
+        if feats_query is not None:
+            torch.save(feats_query.cpu(), paths["feats_query_pt"])
+        return paths
 
     def _build_eval_layout_cfg(
             self,
@@ -940,7 +1488,14 @@ class VisualEncoderTrainer(BaseTrainer):
             show_progress=False,
         )
 
-    def _build_retrieval_eval_cfg(self, use_train_uav, query_rot2uniform, query_scale2uniform):
+    def _build_retrieval_eval_cfg(
+            self,
+            use_train_uav,
+            query_rot2uniform,
+            query_scale2uniform,
+            rot_th_deg=None,
+            scale_ratio_th=None,
+    ):
         return Stage1RetrievalEvalConfig(
             use_train_uav=bool(use_train_uav),
             batch_size=int(self.opt.batchsize_uav),
@@ -949,8 +1504,8 @@ class VisualEncoderTrainer(BaseTrainer):
             query_scale2uniform=bool(query_scale2uniform),
             k_values=(1, 5, 10, 20, 50, 256, 512, 1024),
             dist_th=None,
-            rot_th_deg=None,
-            scale_ratio_th=None,
+            rot_th_deg=None if rot_th_deg is None else float(rot_th_deg),
+            scale_ratio_th=None if scale_ratio_th is None else float(scale_ratio_th),
             max_queries=None,
             gallery_downsample_cfg=None,
             print_results=False,
@@ -1114,6 +1669,7 @@ class VisualEncoderTrainer(BaseTrainer):
         gallery_bank = gallery_state["gallery_bank"]
 
         eval_res = None
+        eval_artifact_paths = None
         if retrieval_eval_cfg is not None:
             eval_log_lines = []
             retrieval_evaluator = Stage1RetrievalEvaluator(trainer=self, gallery_bank=gallery_bank, logger=self.logger)
@@ -1125,8 +1681,24 @@ class VisualEncoderTrainer(BaseTrainer):
             self._eval_log(f"[Gallery Eval] n_queries={eval_res['n_queries']}")
             ckpt_path = gallery_state.get("ckpt_path") or getattr(self, "last_eval_ckpt_path", None)
             self._save_eval_log(eval_log_lines, ckpt_path)
+            if gallery_state.get("gallery_save_dir", None):
+                try:
+                    eval_artifact_paths = self._save_stage1_gallery_eval_artifacts(
+                        save_dir=gallery_state["gallery_save_dir"],
+                        scene_name=scene_name,
+                        gallery_bank=gallery_bank,
+                        eval_res=eval_res,
+                        retrieval_eval_cfg=retrieval_eval_cfg,
+                        ckpt_path=ckpt_path,
+                    )
+                    self._eval_log(
+                        f"[Gallery Eval] saved structured report to {gallery_state['gallery_save_dir']}"
+                    )
+                except Exception as exc:
+                    self._eval_log(f"[Gallery Eval] failed to save structured report: {exc}")
 
         gallery_state["eval_res"] = eval_res
+        gallery_state["eval_artifact_paths"] = eval_artifact_paths
         return gallery_state
 
 
@@ -1135,37 +1707,91 @@ class VisualEncoderTrainer(BaseTrainer):
     # 这组职责很单一，就是“把 retrieval evaluator 的结果转成旧 recall 风格指标并打印
     # ------------------------------------------------------------------
     @staticmethod
-    def _compute_scene_recall_metrics(eval_res, k_values, dist_th, rot_th_deg, gallery_has_rot):
-        coords_topk = eval_res["coords_topk"]
-        coords_gt = eval_res["coords_gt"]
-        metrics_nrc, _ = compute_topk_acc_from_coords(
-            coords_topk,
-            coords_gt,
-            dist_th=dist_th,
-            rot_th_deg=None,
-            scale_ratio_th=None,
-            k_values=k_values,
-        )
+    def _compute_scene_recall_metrics(eval_res, k_values, dist_th, rot_th_deg, gallery_has_rot, sat_dataset=None):
+        thresholds = dict(eval_res.get("thresholds", {}))
+        report_meta = dict(eval_res.get("report_meta", {}))
+        progressive_acc_metrics = eval_res.get("progressive_acc_metrics", None)
+        errors = eval_res.get("err_stats", eval_res.get("errors", {}))
         recall_dict = {
-            f"recall@{int(k)}": float(metrics_nrc[f"top{int(k)}_acc"]) / 100.0
-            for k in k_values
+            "thresholds": thresholds,
+            "report_meta": report_meta,
+            "acc_metrics": dict(eval_res.get("acc_metrics", eval_res.get("metrics", {}))),
+            "progressive_acc_metrics": (
+                dict(progressive_acc_metrics) if isinstance(progressive_acc_metrics, dict) else {}
+            ),
         }
-        if gallery_has_rot:
-            metrics_rot, _ = compute_topk_acc_from_coords(
+
+        def _append_group(group_metrics, prefix):
+            for k in k_values:
+                top_key = f"top{int(k)}_acc"
+                if top_key in group_metrics:
+                    recall_dict[f"{prefix}@{int(k)}"] = float(group_metrics[top_key]) / 100.0
+
+        if isinstance(progressive_acc_metrics, dict) and len(progressive_acc_metrics) > 0:
+            _append_group(progressive_acc_metrics.get("dist_recall", {}), "recall")
+            if gallery_has_rot or thresholds.get("rot") is not None:
+                _append_group(progressive_acc_metrics.get("dist_rot_recall", {}), "recall_rot")
+            _append_group(progressive_acc_metrics.get("dist_rot_scale_recall", {}), "recall_rot_scale")
+            if "legacy_acc_metrics_source" in report_meta:
+                recall_dict["legacy_acc_metrics_source"] = str(report_meta["legacy_acc_metrics_source"])
+            if "progressive_acc_metric_sources" in report_meta:
+                recall_dict["progressive_acc_metric_sources"] = dict(report_meta["progressive_acc_metric_sources"])
+            if "progressive_recall_policy" in report_meta:
+                recall_dict["progressive_recall_policy"] = dict(report_meta["progressive_recall_policy"])
+        else:
+            coords_topk = eval_res["coords_topk"]
+            coords_gt = eval_res["coords_gt"]
+            metrics_nrc, _ = compute_topk_acc_from_coords(
                 coords_topk,
                 coords_gt,
                 dist_th=dist_th,
-                rot_th_deg=rot_th_deg,
+                rot_th_deg=None,
                 scale_ratio_th=None,
                 k_values=k_values,
             )
             recall_dict.update({
-                f"recall_rot@{int(k)}": float(metrics_rot[f"top{int(k)}_acc"]) / 100.0
+                f"recall@{int(k)}": float(metrics_nrc[f"top{int(k)}_acc"]) / 100.0
                 for k in k_values
             })
+            if gallery_has_rot:
+                metrics_rot, _ = compute_topk_acc_from_coords(
+                    coords_topk,
+                    coords_gt,
+                    dist_th=dist_th,
+                    rot_th_deg=rot_th_deg,
+                    scale_ratio_th=None,
+                    k_values=k_values,
+                )
+                recall_dict.update({
+                    f"recall_rot@{int(k)}": float(metrics_rot[f"top{int(k)}_acc"]) / 100.0
+                    for k in k_values
+                })
+
+        if "mean_dist_err_top1" in errors:
+            recall_dict["top1_dist_nrc_mean"] = float(errors["mean_dist_err_top1"])
+        if "median_dist_err_top1" in errors:
+            recall_dict["top1_dist_nrc_median"] = float(errors["median_dist_err_top1"])
+        if "mean_rot_err_top1" in errors:
+            recall_dict["top1_rot_deg_mean"] = float(errors["mean_rot_err_top1"])
+        if "median_rot_err_top1" in errors:
+            recall_dict["top1_rot_deg_median"] = float(errors["median_rot_err_top1"])
+        if "mean_scale_ratio_top1" in errors:
+            recall_dict["top1_scale_ratio_mean"] = float(errors["mean_scale_ratio_top1"])
+        if "median_scale_ratio_top1" in errors:
+            recall_dict["top1_scale_ratio_median"] = float(errors["median_scale_ratio_top1"])
+        if sat_dataset is not None and hasattr(sat_dataset, "halfimg_radius_meter") and hasattr(sat_dataset, "halfimg_radius_nrc"):
+            nrc2meter = float(sat_dataset.halfimg_radius_meter) / max(float(sat_dataset.halfimg_radius_nrc), 1e-8)
+            if "top1_dist_nrc_mean" in recall_dict:
+                recall_dict["top1_dist_meter_mean"] = float(recall_dict["top1_dist_nrc_mean"] * nrc2meter)
+            if "top1_dist_nrc_median" in recall_dict:
+                recall_dict["top1_dist_meter_median"] = float(recall_dict["top1_dist_nrc_median"] * nrc2meter)
         return recall_dict
 
-    def _log_scene_recall_metrics(self, scene_name, recall_dict, n_queries, dist_th, gallery_has_rot, rot_th_deg, eval_log_lines):
+    def _log_scene_recall_metrics(self, scene_name, recall_dict, n_queries, thresholds, eval_log_lines):
+        dist_th = float(thresholds["norm_dist"])
+        rot_th_deg = thresholds.get("rot", None)
+        scale_ratio_th = thresholds.get("scale_ratio", None)
+
         info2log_nrc = " | ".join(
             [f"nrc:R@{int(k)}={recall_dict[f'recall@{int(k)}'] * 100:.3f}%" for k in sorted(
                 int(key.split("@")[1]) for key in recall_dict if key.startswith("recall@")
@@ -1176,7 +1802,7 @@ class VisualEncoderTrainer(BaseTrainer):
             f"(N={n_queries}, nrc_thr={float(dist_th):.3f})",
             eval_log_lines,
         )
-        if gallery_has_rot:
+        if any(key.startswith("recall_rot@") for key in recall_dict):
             info2log_rot = " | ".join(
                 [f"nrc+rot:R@{int(k)}={recall_dict[f'recall_rot@{int(k)}'] * 100:.3f}%" for k in sorted(
                     int(key.split('@')[1]) for key in recall_dict if key.startswith("recall_rot@")
@@ -1184,7 +1810,47 @@ class VisualEncoderTrainer(BaseTrainer):
             )
             self._eval_log(
                 f"[Scene: {scene_name}] {info2log_rot} "
-                f"(N={n_queries}, nrc_thr={float(dist_th):.3f}, rot_thr={float(rot_th_deg):.1f}deg)",
+                f"(N={n_queries}, nrc_thr={float(dist_th):.3f}, "
+                f"rot_thr={'None' if rot_th_deg is None else f'{float(rot_th_deg):.1f}deg'})",
+                eval_log_lines,
+            )
+        if any(key.startswith("recall_rot_scale@") for key in recall_dict):
+            info2log_scale = " | ".join(
+                [f"nrc+rot+scale:R@{int(k)}={recall_dict[f'recall_rot_scale@{int(k)}'] * 100:.3f}%" for k in sorted(
+                    int(key.split('@')[1]) for key in recall_dict if key.startswith("recall_rot_scale@")
+                )]
+            )
+            scale_msg = "None(alias_of_nrc+rot)" if scale_ratio_th is None else f"{float(scale_ratio_th):.3f}x"
+            self._eval_log(
+                f"[Scene: {scene_name}] {info2log_scale} "
+                f"(N={n_queries}, nrc_thr={float(dist_th):.3f}, "
+                f"rot_thr={'None' if rot_th_deg is None else f'{float(rot_th_deg):.1f}deg'}, "
+                f"scale_thr={scale_msg})",
+                eval_log_lines,
+            )
+        if "top1_dist_nrc_mean" in recall_dict:
+            meter_msg = ""
+            if "top1_dist_meter_mean" in recall_dict and "top1_dist_meter_median" in recall_dict:
+                meter_msg = (
+                    f" | meter_mean={recall_dict['top1_dist_meter_mean']:.3f}m"
+                    f" | meter_median={recall_dict['top1_dist_meter_median']:.3f}m"
+                )
+            self._eval_log(
+                f"[Scene: {scene_name}] top1_dist_mean={recall_dict['top1_dist_nrc_mean']:.6f} nrc"
+                f" | top1_dist_median={recall_dict['top1_dist_nrc_median']:.6f} nrc"
+                f"{meter_msg}",
+                eval_log_lines,
+            )
+        if "top1_rot_deg_mean" in recall_dict:
+            self._eval_log(
+                f"[Scene: {scene_name}] top1_rot_mean={recall_dict['top1_rot_deg_mean']:.6f} deg"
+                f" | top1_rot_median={recall_dict['top1_rot_deg_median']:.6f} deg",
+                eval_log_lines,
+            )
+        if "top1_scale_ratio_mean" in recall_dict:
+            self._eval_log(
+                f"[Scene: {scene_name}] top1_scale_ratio_mean={recall_dict['top1_scale_ratio_mean']:.6f}x"
+                f" | top1_scale_ratio_median={recall_dict['top1_scale_ratio_median']:.6f}x",
                 eval_log_lines,
             )
 
@@ -1227,10 +1893,12 @@ class VisualEncoderTrainer(BaseTrainer):
             ref_wo_scale_var=ref_wo_scale_var,
         )
         feature_cfg = self._build_eval_feature_cfg(chunk_size_vis=chunk_size_vis)
+        rot_th_deg = float(torch.rad2deg(torch.tensor(torch.pi / 18.0 * 1.1)).item())
         retrieval_eval_cfg = self._build_retrieval_eval_cfg(
             use_train_uav=use_train_uav,
             query_rot2uniform=query_rot2uniform,
             query_scale2uniform=query_scale2uniform,
+            rot_th_deg=rot_th_deg,
         )
 
         if not restore_train:
@@ -1258,7 +1926,6 @@ class VisualEncoderTrainer(BaseTrainer):
         self._eval_log("=" * 80, eval_log_lines)
 
         results_all = {}
-        rot_th_deg = float(torch.rad2deg(torch.tensor(torch.pi / 18.0 * 1.1)).item())
         for scene in self.opt.scenes_setting["scenes"]:
             scene_name = scene["name"]
             sat_dataset = self.sat_datasets[scene_name]
@@ -1296,15 +1963,14 @@ class VisualEncoderTrainer(BaseTrainer):
                 dist_th=dist_th,
                 rot_th_deg=rot_th_deg,
                 gallery_has_rot=gallery_has_rot,
+                sat_dataset=sat_dataset,
             )
             results_all[scene_name] = recall_dict
             self._log_scene_recall_metrics(
                 scene_name=scene_name,
                 recall_dict=recall_dict,
                 n_queries=eval_res["n_queries"],
-                dist_th=dist_th,
-                gallery_has_rot=gallery_has_rot,
-                rot_th_deg=rot_th_deg,
+                thresholds=eval_res["thresholds"],
                 eval_log_lines=eval_log_lines,
             )
 
@@ -1358,34 +2024,122 @@ class VisualEncoderTrainer(BaseTrainer):
 
 
 if __name__ == "__main__":
+    def _parse_bool_arg(value):
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"0", "false", "no", "n"}
+
     # 如果没有指定配置文件，使用 stage1 的默认配置
     if '--p_yaml' not in ' '.join(sys.argv):
         sys.argv.extend(['--p_yaml', 'trainer_depends/configs/stage1_visual_encoder_visloc4exp.yaml'])
         # sys.argv.extend(['--p_yaml', 'trainer_depends/configs/stage1_visual_encoder_wingtra.yaml'])
         # sys.argv.extend(['--p_yaml', 'trainer_depends/configs/stage1_visual_encoder.yaml'])
 
-    # 添加 --test_only 参数
+    default_test_only = False
+    default_test_mode = "gallery_bank"
+    default_scene_name = ""
+    default_exp_name_override = ""
+
+    # 调试入口参数：可直接修改默认值，便于在 PyCharm Debug 中切换 train / test 行为。
     parser = argparse.ArgumentParser(add_help=False)  # add_help=False to avoid conflict with get_parse
-    parser.add_argument('--test_only', action='store_true', help='是否只运行测试模式')
+    parser.add_argument(
+        '--test_only',
+        nargs='?',
+        const=True,
+        default=default_test_only,
+        type=_parse_bool_arg,
+        help='是否只运行测试模式；可写 --test_only 或 --test_only true/false',
+    )
     parser.add_argument(
         '--test_mode',
         type=str,
-        default='gallery_bank',
+        default=default_test_mode,
         choices=('gallery_bank', 'eval_recall'),
         help='测试模式：gallery_bank 为显式建库评测，eval_recall 为复用 trainer.eval_recall 的高层入口',
     )
+    parser.add_argument(
+        '--scene_name',
+        type=str,
+        default=default_scene_name,
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；为空则默认取第一个场景。',
+    )
+    parser.add_argument(
+        '--exp_name_override',
+        type=str,
+        default=default_exp_name_override,
+        help='可选：覆盖最终 opt.exp_name，便于本地调试时快速区分实验目录。',
+    )
+    parser.add_argument(
+        '--gallery_root_dir',
+        type=str,
+        default="",
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；若指定则覆盖 gallery 输出根目录。',
+    )
+    parser.add_argument(
+        '--gallery_overlap',
+        type=float,
+        default=0.5,
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；gallery overlap 配置。',
+    )
+    parser.add_argument(
+        '--gallery_n_rot',
+        type=int,
+        default=36,
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；gallery rotation bin 数。',
+    )
+    parser.add_argument(
+        '--gallery_n_scale',
+        type=int,
+        default=4,
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；gallery scale bin 数。',
+    )
+    parser.add_argument(
+        '--gallery_scale_mode',
+        type=str,
+        default="linear",
+        choices=("linear", "log"),
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；gallery scale 采样模式。',
+    )
+    parser.add_argument(
+        '--dist_th_meter',
+        type=float,
+        default=None,
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；若指定则按米制阈值换算为归一化 dist_th。',
+    )
+    parser.add_argument(
+        '--eval_query_subset_mode',
+        type=str,
+        default="",
+        choices=("", "segment", "interval", "random"),
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；对当前 query split 再做一次子切分。',
+    )
+    parser.add_argument(
+        '--eval_query_subset_ratio',
+        type=float,
+        default=None,
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；对子切分的 train_ratio，例如 0.5。',
+    )
+    parser.add_argument(
+        '--eval_query_subset_take',
+        type=str,
+        default="test",
+        choices=("train", "test"),
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；对子切分后保留哪一半。',
+    )
+    parser.add_argument(
+        '--eval_query_subset_seed',
+        type=int,
+        default=2026,
+        help='仅在 --test_only --test_mode=gallery_bank 时使用；random 子切分时的随机种子。',
+    )
     args, remaining_argv = parser.parse_known_args()
 
-    #todo:modify manually
-    args.test_only = False
-    args.test_mode = 'gallery_bank'
-    exp_name_override = None
-
     # 是否直接指定实验名称
+    sys.argv = [sys.argv[0]] + remaining_argv
     from trainer_depends.config.parser import get_parse
     opt = get_parse()
-    if exp_name_override:
-        opt.exp_name = exp_name_override
+    if args.exp_name_override:
+        opt.exp_name = args.exp_name_override
 
     trainer = VisualEncoderTrainer(opt=opt)
     if not args.test_only:
@@ -1403,30 +2157,21 @@ if __name__ == "__main__":
             if not hasattr(trainer, "sat_datasets"):
                 trainer._init_datasets(create_train_loader=False)
 
-            # scene_name = 'zurich'
-            scene_name = 'visloc_03'
+            scene_name = str(args.scene_name).strip()
+            if not scene_name:
+                scene_name = next(iter(trainer.sat_datasets.keys()))
+            if scene_name not in trainer.sat_datasets:
+                available = ", ".join(sorted(trainer.sat_datasets.keys()))
+                raise KeyError(f"Unknown scene_name: {scene_name}. Available scenes: {available}")
             sat_dataset = trainer.sat_datasets[scene_name]
 
             trainer.load_eval_checkpoint()
             gallery_layout_cfg = Stage1ReferenceGalleryLayoutConfig(
-                # 0重叠率Stage1ReferenceGalleryLayoutConfig
                 mode="overlap",
-                overlap = 0.25,
-                n_rot=36,
-                n_scale=4,
-                scale_mode="log",
-
-                # 0.75重叠率
-                # mode="overlap",
-                # overlap = 0.75,
-                # n_rot=36,
-                # n_scale=4,
-                # scale_mode="log",
-
-                # 0.875重叠率
-                # mode ='n_bins_4d',
-                # n_bins_4d = (252,182,36,4),
-                # scale_mode="log",
+                overlap=float(args.gallery_overlap),
+                n_rot=int(args.gallery_n_rot),
+                n_scale=int(args.gallery_n_scale),
+                scale_mode=str(args.gallery_scale_mode),
             )
 
             gallery_feature_cfg = trainer._build_eval_feature_cfg(chunk_size_vis=1024 + 256)
@@ -1439,9 +2184,25 @@ if __name__ == "__main__":
                 query_scale2uniform=False,
             )
             retrieval_eval_cfg.k_values = (1, 5, 10, 20, 50, 128, 256, 512, 1024)
-            retrieval_eval_cfg.dist_th = float(sat_dataset.halfimg_radius_nrc) * 1.1 * 0.5
+            dist_th_meter = args.dist_th_meter
+            if dist_th_meter is not None:
+                dist_th = (
+                    float(dist_th_meter)
+                    / max(float(sat_dataset.halfimg_radius_meter), 1e-8)
+                    * float(sat_dataset.halfimg_radius_nrc)
+                )
+            else:
+                dist_th = float(sat_dataset.halfimg_radius_nrc) * 1.1 * 0.5
+            retrieval_eval_cfg.dist_th = dist_th
             retrieval_eval_cfg.rot_th_deg = 11 * 0.5
             retrieval_eval_cfg.scale_ratio_th = 1.15
+            if args.eval_query_subset_mode:
+                if args.eval_query_subset_ratio is None:
+                    raise ValueError("--eval_query_subset_mode requires --eval_query_subset_ratio")
+                retrieval_eval_cfg.query_subset_mode = str(args.eval_query_subset_mode)
+                retrieval_eval_cfg.query_subset_train_ratio = float(args.eval_query_subset_ratio)
+                retrieval_eval_cfg.query_subset_take = str(args.eval_query_subset_take)
+                retrieval_eval_cfg.query_subset_random_seed = int(args.eval_query_subset_seed)
             retrieval_eval_cfg.print_results = True
             retrieval_eval_cfg.report_title = "Stage1 Retrieval Eval"
 
@@ -1455,8 +2216,12 @@ if __name__ == "__main__":
                 save_gallery=True,
                 init_datasets=False,
                 load_ckpt=False,
+                gallery_root_dir=(str(args.gallery_root_dir).strip() or None),
                 gallery_name_prefix=f"{scene_name}",
             )
             print(f"[Gallery Demo] save_dir={gallery_state['gallery_save_dir']}")
+            if gallery_state.get("eval_artifact_paths", None):
+                print(f"[Gallery Demo] eval_report_json={gallery_state['eval_artifact_paths']['report_json']}")
+                print(f"[Gallery Demo] eval_bundle_pt={gallery_state['eval_artifact_paths']['bundle_pt']}")
         else:
             raise ValueError(f"Unknown test_mode: {args.test_mode}")

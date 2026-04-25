@@ -40,10 +40,10 @@ import yaml
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_BASE_YAML = os.path.join(PROJECT_ROOT, "trainer_depends", "configs", "stage1_visual_encoder_wingtra4exp.yaml")
-DEFAULT_TRAIN_SCRIPT = os.path.join(PROJECT_ROOT, "trainers", "stage1_visual_encoder_w_ANCE.py")
+DEFAULT_BASE_YAML = os.path.join(PROJECT_ROOT, "trainer_depends", "configs", "stage1_visual_encoder_visloc.yaml")
+DEFAULT_TRAIN_SCRIPT = os.path.join(PROJECT_ROOT, "trainers", "stage1_visual_encoder_wANCE.py")
 DEFAULT_TMP_DIR = os.path.join(PROJECT_ROOT, "gen_fm_exps", "run_yamls")
-DEFAULT_CFG_VAR_FILE = os.path.join(PROJECT_ROOT, "gen_fm_exps", "run_yamls", "stage1_cfg_var.txt")
+DEFAULT_CFG_VAR_FILE = os.path.join(PROJECT_ROOT, "scripts", "stage1_cfg_visloc.txt")
 
 
 def _load_yaml(path):
@@ -110,13 +110,49 @@ def _parse_cfg_var_line(line, key_index):
 def _load_cfg_var_experiments(path, base_config):
     key_index = _build_key_index(base_config)
     experiments = []
+    buffered_parts = []
+    experiment_start_lineno = None
+
+    def flush_buffer(end_lineno):
+        nonlocal buffered_parts, experiment_start_lineno
+        if not buffered_parts:
+            experiment_start_lineno = None
+            return
+        merged_line = ",".join(buffered_parts).strip().rstrip(",").strip()
+        if not merged_line:
+            buffered_parts = []
+            experiment_start_lineno = None
+            return
+        overrides = _parse_cfg_var_line(merged_line, key_index)
+        experiments.append((experiment_start_lineno or end_lineno, overrides))
+        buffered_parts = []
+        experiment_start_lineno = None
+
     with open(path, "r", encoding="utf-8") as f:
         for lineno, raw_line in enumerate(f, start=1):
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
-            overrides = _parse_cfg_var_line(line, key_index)
-            experiments.append((lineno, overrides))
+            if experiment_start_lineno is None:
+                experiment_start_lineno = lineno
+
+            if ";" in line:
+                segments = line.split(";")
+                for idx, segment in enumerate(segments):
+                    segment = segment.strip()
+                    if segment:
+                        buffered_parts.append(segment)
+                    if idx < len(segments) - 1:
+                        flush_buffer(lineno)
+                        if idx < len(segments) - 2 or segments[-1].strip():
+                            experiment_start_lineno = lineno
+                continue
+
+            buffered_parts.append(line)
+            if experiment_start_lineno == lineno and not line.endswith(","):
+                flush_buffer(lineno)
+
+    flush_buffer(lineno if 'lineno' in locals() else 0)
     return experiments
 
 
@@ -304,12 +340,12 @@ def run_stage1_with_overrides(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Apply YAML overrides for Stage-1 and run trainers/stage1_visual_encoder_w_ANCE.py"
+        description="Apply YAML overrides for Stage-1 and run the selected Stage-1 training entry script"
     )
     parser.add_argument(
         "--base-yaml",
         default=DEFAULT_BASE_YAML,
-        help="Base YAML config path. Default: trainer_depends/configs/stage1_visual_encoder_visloc4exp.yaml",
+        help="Base YAML config path. Default: trainer_depends/configs/stage1_visual_encoder_visloc.yaml",
     )
     parser.add_argument(
         "--output-dir",
@@ -367,7 +403,13 @@ if __name__ == "__main__":
 #
 # CLI batch example:
 #   python scripts/run_stage1_with_overrides.py  --cfg-var-file gen_fm_exps/run_yamls/stage1_cfg_var.txt
-#
+# CLI batch excample for ctrl exp:
+#     python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage1_with_overrides.py  \
+#     --train-script /home/data/zwk/pyproj_neuloc_v0/trainers/stage1_visual_encoder_controlexps.py \
+#     --base-yaml /home/data/zwk/pyproj_neuloc_v0/trainer_depends/configs/stage1_visual_encoder_visloc_control_exps.yaml\
+#     --cfg-var-file /home/data/zwk/pyproj_neuloc_v0/scripts/stage1_cfg_visloc_control_exps.txt \
+
+
 # Python-call example:
 #   from scripts.run_stage1_with_overrides import run_stage1_with_overrides
 #   run_stage1_with_overrides(

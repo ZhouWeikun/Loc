@@ -243,6 +243,7 @@ class SatDataset(object):
         # config the satimgsize2crop
         self.satimgsize_correspond2uav_list = uav_h_cover_m[scale_mask] / self.geo_res_m
         self.satimgsize2crop_mean = self.satimgsize_correspond2uav_list.mean()
+        self.satimgsize2crop_mean_int = int(np.ceil(self.satimgsize2crop_mean))
         self.satimgsize2crop_boundary = np.array(
             [self.satimgsize_correspond2uav_list.min(), self.satimgsize_correspond2uav_list.max()])
         self.satimgsize_scale_to_ref_m_boundary = self.satimgsize2crop_boundary*self.geo_res_m/self.scale_ref_m
@@ -908,6 +909,10 @@ class UAVDataset(object):
             self.scale_ref_m = scale_info["scale_ref_m"]
             scale_mask = scale_info["scale_mask"]
 
+        scale_mask = np.asarray(scale_mask, dtype=bool)
+        self.uav_row_indices = np.flatnonzero(scale_mask).astype(np.int64)
+        self.uav_df_filtered = self.uav_df.iloc[self.uav_row_indices].copy().reset_index(drop=True)
+
         uav_names = self.uav_df['filename'][scale_mask]
         uavimgs_dir = self.uavinfo_dict['uavimgs_dir']
         if 'visloc' in dataset_name.lower():
@@ -979,9 +984,13 @@ class UAVDataset(object):
 
         self.uavimg_paths_train = [self.uavimg_paths[int(i)] for i in train_indices]
         self.uav_lonlats_train = self.uav_latlons[train_indices]
+        self.uav_row_indices_train = self.uav_row_indices[train_indices]
+        self.uav_df_train = self.uav_df.iloc[self.uav_row_indices_train].copy().reset_index(drop=True)
 
         self.uavimg_paths_test = [self.uavimg_paths[int(i)] for i in test_indices]
         self.uav_lonlats_test = self.uav_latlons[test_indices]
+        self.uav_row_indices_test = self.uav_row_indices[test_indices]
+        self.uav_df_test = self.uav_df.iloc[self.uav_row_indices_test].copy().reset_index(drop=True)
 
         self.uav_coords_4d_torch_train = self.uav_coords_4d_torch[train_indices]
         self.uav_coords_4d_torch_test = self.uav_coords_4d_torch[test_indices]
@@ -1081,6 +1090,8 @@ class UAVDataset(object):
 
         # 应用筛选
         self.uavimg_paths = _mask_list(self.uavimg_paths)
+        self.uav_row_indices = self.uav_row_indices[mask]
+        self.uav_df_filtered = self.uav_df.iloc[self.uav_row_indices].copy().reset_index(drop=True)
         self.uav_latlons = self.uav_latlons[mask]
         if hasattr(self, 'uav_georcs'):
             self.uav_georcs = self.uav_georcs[mask]
@@ -1122,6 +1133,11 @@ def export_scene_attributes(
         name=name,
         **kwargs,
     )
+    uav_csv_dir = os.path.dirname(p_uav_geocsv)
+    if os.path.basename(uav_csv_dir) == 'uavimgs_info':
+        paired_satimgs_root = os.path.dirname(uav_csv_dir)
+    else:
+        paired_satimgs_root = uav_csv_dir
     scene_attrs = {
         'name': sat_dataset.name,
         'p_satinfo_json': p_satinfo_json,
@@ -1129,6 +1145,12 @@ def export_scene_attributes(
         'imgsize2net': int(imgsize2net),
         'geo_res_m': float(sat_dataset.geo_res_m),
         'scale_ref_m': float(sat_dataset.scale_ref_m),
+        'satimgsize2crop_mean': float(sat_dataset.satimgsize2crop_mean),
+        'satimgsize2crop_mean_int': int(sat_dataset.satimgsize2crop_mean_int),
+        'paired_satimgs_dir': os.path.join(
+            paired_satimgs_root,
+            f"satimgs_h{int(sat_dataset.satimgsize2crop_mean_int)}",
+        ),
         'halfimg_radius_nrc': float(sat_dataset.halfimg_radius_nrc),
         'halfimg_radius_meter': float(sat_dataset.halfimg_radius_meter),
         'nrc2meter_factor': float(sat_dataset.halfimg_radius_meter / sat_dataset.halfimg_radius_nrc),

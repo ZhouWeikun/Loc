@@ -1,22 +1,21 @@
 exp_setting:
   dir2save_log: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/logs  # 绝对路径
   dir2save_ckpt: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts  # 绝对路径
-  exp_name: stage2_visloc04_tripleLoss_singleEdge_hardest_fm_mask_dinov2B2_codebookW19_mlpB2
+  exp_name: stage2_visloc04_interval82_tripleLoss_singleEdge_hardest_fm_mask_dinov2B2_codebookW19_mlpB2
   save_freq: 10
   tensorboard: True
   val: False
   val_freq: 1
 
   # load_stage1_ckpt: Stage 1训练好的checkpoint路径（用于初始化训练）
-  load_stage1_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_splitInterval82_tripleLoss_singleEdge_hardest_fm_mask_dinov2B2/epoch022_03R1=89_04R1=92.pth"
-  inherit_stage1_yaml: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_splitInterval82_tripleLoss_singleEdge_hardest_fm_mask_dinov2B2/opts.yaml"
+  load_stage1_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_6/opts.yaml"
+  inherit_stage1_yaml: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_6/opts.yaml"
   inherit_stage1_scope: "network,data"
 
   # load2train: 继续训练当前Stage时加载的checkpoint（字符串路径）
   load2train: ""
-
   # load2test: 测试当前Stage时加载的checkpoint（字符串路径）
-  load2test:  ""
+  load2test:  "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc03_segment82_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie_5/epoch990_R1=86_MeanErr189m_MidErr73m.pth"
 
 # ==================== 数据加载配置 ====================
 #data_setting:
@@ -37,20 +36,15 @@ exp_setting:
 scenes_setting:
   sampling_strategy: "weighted"
   dataset_name: visloc #visloc or neuloc/wingtra
-  scenes:
-#    - name: "zurich"
-#      p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/zurich_blocks12_proj2056_res03m.json
-#      p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info/uavimgs_metainfo.json
-#      p_uav_geocsv: /home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info/uavimgs_geo_corrected_v1.csv
-#    - name: "zuchwil"
-#      p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/zuchwil_blocks12_proj2056_res03m.json
-#      p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info/uavimgs_metainfo.json
-#      p_uav_geocsv: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info/uavimgs_geo_corrected_v1.csv
-#    - name: "visloc_03"
-#      p_satinfo_json: /home/data/zwk/dataset_UAV-VisLoc/03/satellite03_epsg32650_res03m_multTifs.json
-#      p_uavinfo_json: /home/data/zwk/dataset_UAV-VisLoc/03/uavimgs_metainfo.json
-#      p_uav_geocsv:  /home/data/zwk/dataset_UAV-VisLoc/03/uavimgs_geo_corrected.csv
-    - name: "visloc_04"
+  selected_scene_name: visloc_03
+  scene_registry:
+    visloc_03:
+      name: visloc_03
+      p_satinfo_json: /home/data/zwk/dataset_UAV-VisLoc/03/satellite03_epsg32650_res03m_multTifs.json
+      p_uavinfo_json: /home/data/zwk/dataset_UAV-VisLoc/03/uavimgs_metainfo.json
+      p_uav_geocsv: /home/data/zwk/dataset_UAV-VisLoc/03/uavimgs_geo_corrected.csv
+    visloc_04:
+      name: visloc_04
       p_satinfo_json: /home/data/zwk/dataset_UAV-VisLoc/04/satellite04_epsg32650_res03m_multTifs.json
       p_uavinfo_json: /home/data/zwk/dataset_UAV-VisLoc/04/uavimgs_metainfo.json
       p_uav_geocsv: /home/data/zwk/dataset_UAV-VisLoc/04/uavimgs_geo_corrected.csv
@@ -74,5 +68,15 @@ network_setting:
   posenc_multires_rc: 8
   posenc_multires_rot: 6
   posenc_multires_scale: 4
-  grid_mlp_hidden_dim: 512
+  grid_mlp_hidden_dim: 1024 #org=512
   grid_mlp_num_blocks: 2
+
+#  p_grid_config_yaml: trainer_depends/configs/nerf_hash_visloc_lodagg1024.yaml
+  hash_lod_aggregator:
+    enabled: false
+    mode: scale_softmax
+    coord_source: scale
+    scale_source: norm_log_scale
+    num_lods: 4
+    per_lod_dim: 1024
+    output_dim: 1024

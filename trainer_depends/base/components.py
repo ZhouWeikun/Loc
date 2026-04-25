@@ -45,16 +45,20 @@ class NetworkComponents:
 
         backbone_name = self.opt.backbone
         backbone_config = getattr(self.opt, 'backbone_config', {})
+        adapter_config = getattr(self.opt, 'adapter_config', {})
         vis_encoder = make_backbone(
             backbone_name,
             imgsize2net=getattr(self.opt, 'imgsize2net', 224),
             backbone_config=backbone_config,
+            adapter_config=adapter_config,
         ).to(self.device)
 
         print(f"✅ 创建视觉编码器: {backbone_name}")
         print(f"   输出维度: {vis_encoder.output_channel}")
         if backbone_config:
             print(f"   backbone_config: {backbone_config}")
+        if adapter_config:
+            print(f"   adapter_config: {adapter_config}")
 
         return vis_encoder
 
@@ -75,15 +79,18 @@ class NetworkComponents:
         backbone_name = str(getattr(self.opt, 'backbone', '')).lower()
         patchsize = 14 if 'dinov2' in backbone_name else 16
 
+        def _resolve_aggregator_output_dim(default=None):
+            value = aggregator_config.get('output_dim', aggregator_config.get('out_channels', default))
+            return int(value) if value is not None else None
+
         if agg_type == 'salad':
             from models.Head.salad_residual import SALAD_Residual
 
             use_residual = bool(aggregator_config.get('use_residual', True))
             cluster_dim = int(aggregator_config.get('cluster_dim', 64))
             num_clusters = aggregator_config.get('num_clusters')
-            output_dim = aggregator_config.get('output_dim')
+            output_dim = _resolve_aggregator_output_dim()
             if output_dim is not None:
-                output_dim = int(output_dim)
                 residual_out_dim = output_dim if use_residual else (output_dim - feat_dim)
                 if residual_out_dim <= 0:
                     raise ValueError(
@@ -127,21 +134,141 @@ class NetworkComponents:
                 f"use_residual={use_residual}, with_dustbin={bool(aggregator_config.get('with_dustbin', True))}"
             )
 
-        elif agg_type == 'g2m':
-            from models.Head.G2M import G2M
-            out_channels = int(aggregator_config.get('output_dim', aggregator_config.get('out_channels', feat_dim)))
+        elif agg_type == 'gem':
+            from models.Head.token_vpr_aggregators import TokenGeM
+
+            output_dim = _resolve_aggregator_output_dim(feat_dim)
+            p = float(aggregator_config.get('p', 3.0))
+            eps = float(aggregator_config.get('eps', 1e-6))
+            aggregator = TokenGeM(
+                input_feat_dim=feat_dim,
+                img_hw=(imgsize2net, imgsize2net),
+                patchsize=patchsize,
+                p=p,
+                eps=eps,
+                output_dim=output_dim,
+            ).to(self.device)
+            print("✅ 创建GeM聚合器")
+            print(f"   token_grid: {imgsize2net // patchsize}x{imgsize2net // patchsize} (patchsize={patchsize})")
+            print(f"   GeM配置: output_dim={aggregator.output_dim}, p={p}, eps={eps}")
+
+        elif agg_type == 'fsra':
+            from models.Head.token_vpr_aggregators import TokenFSRA
+
+            output_dim = _resolve_aggregator_output_dim()
+            block = int(aggregator_config.get('block', 3))
+            num_bottleneck = int(aggregator_config.get('num_bottleneck', 256))
+            droprate = float(aggregator_config.get('droprate', 0.0))
+            fuse_mode = str(aggregator_config.get('fuse_mode', 'concat'))
+            use_cls_token = bool(aggregator_config.get('use_cls_token', True))
+            aggregator = TokenFSRA(
+                input_feat_dim=feat_dim,
+                img_hw=(imgsize2net, imgsize2net),
+                patchsize=patchsize,
+                block=block,
+                num_bottleneck=num_bottleneck,
+                droprate=droprate,
+                fuse_mode=fuse_mode,
+                use_cls_token=use_cls_token,
+                output_dim=output_dim,
+            ).to(self.device)
+            print("✅ 创建FSRA聚合器")
+            print(f"   token_grid: {imgsize2net // patchsize}x{imgsize2net // patchsize} (patchsize={patchsize})")
+            print(
+                f"   FSRA配置: output_dim={aggregator.output_dim}, block={block}, "
+                f"num_bottleneck={num_bottleneck}, droprate={droprate}, "
+                f"fuse_mode={fuse_mode}, use_cls_token={use_cls_token}"
+            )
+
+        elif agg_type == 'lpn':
+            from models.Head.token_vpr_aggregators import TokenLPN
+
+            output_dim = _resolve_aggregator_output_dim()
+            block = int(aggregator_config.get('block', 3))
+            num_bottleneck = int(aggregator_config.get('num_bottleneck', 256))
+            droprate = float(aggregator_config.get('droprate', 0.0))
+            fuse_mode = str(aggregator_config.get('fuse_mode', 'concat'))
+            use_cls_token = bool(aggregator_config.get('use_cls_token', True))
+            aggregator = TokenLPN(
+                input_feat_dim=feat_dim,
+                img_hw=(imgsize2net, imgsize2net),
+                patchsize=patchsize,
+                block=block,
+                num_bottleneck=num_bottleneck,
+                droprate=droprate,
+                fuse_mode=fuse_mode,
+                use_cls_token=use_cls_token,
+                output_dim=output_dim,
+            ).to(self.device)
+            print("✅ 创建LPN聚合器")
+            print(f"   token_grid: {imgsize2net // patchsize}x{imgsize2net // patchsize} (patchsize={patchsize})")
+            print(
+                f"   LPN配置: output_dim={aggregator.output_dim}, block={block}, "
+                f"num_bottleneck={num_bottleneck}, droprate={droprate}, "
+                f"fuse_mode={fuse_mode}, use_cls_token={use_cls_token}"
+            )
+
+        elif agg_type in {'g2m', 'g2m_scalar_p'}:
+            from models.Head.token_vpr_aggregators import TokenG2MScalarP
+
+            out_channels = _resolve_aggregator_output_dim(feat_dim)
             rank = int(aggregator_config.get('rank', 1024))
             p = float(aggregator_config.get('p', 3.0))
             eps = float(aggregator_config.get('eps', 1e-6))
-            aggregator = G2M(
-                in_channels=feat_dim,
-                out_channels=out_channels,
+            aggregator = TokenG2MScalarP(
+                input_feat_dim=feat_dim,
+                img_hw=(imgsize2net, imgsize2net),
+                patchsize=patchsize,
+                output_dim=out_channels,
                 rank=rank,
                 p=p,
                 eps=eps,
             ).to(self.device)
             print(f"✅ 创建G2M聚合器")
-            print(f"   G2M配置: out_channels={out_channels}, rank={rank}, p={p}, eps={eps}")
+            print(f"   token_grid: {imgsize2net // patchsize}x{imgsize2net // patchsize} (patchsize={patchsize})")
+            print(f"   G2M配置: output_dim={out_channels}, rank={rank}, p={p}, eps={eps}")
+
+        elif agg_type == 'g2m_channelwise_p':
+            from models.Head.token_vpr_aggregators import TokenG2MChannelwiseP
+            out_channels = _resolve_aggregator_output_dim(feat_dim)
+            rank = int(aggregator_config.get('rank', 1024))
+            p = float(aggregator_config.get('p', 3.0))
+            eps = float(aggregator_config.get('eps', 1e-6))
+            aggregator = TokenG2MChannelwiseP(
+                input_feat_dim=feat_dim,
+                img_hw=(imgsize2net, imgsize2net),
+                patchsize=patchsize,
+                output_dim=out_channels,
+                rank=rank,
+                p=p,
+                eps=eps,
+            ).to(self.device)
+            print(f"✅ 创建G2M聚合器 (channelwise p)")
+            print(f"   token_grid: {imgsize2net // patchsize}x{imgsize2net // patchsize} (patchsize={patchsize})")
+            print(f"   G2M配置: output_dim={out_channels}, rank={rank}, p={p}, eps={eps}")
+
+        elif agg_type == 'netvlad':
+            from models.Head.token_vpr_aggregators import TokenNetVLAD
+
+            output_dim = _resolve_aggregator_output_dim()
+            num_clusters = int(aggregator_config.get('num_clusters', 16))
+            alpha = float(aggregator_config.get('alpha', 100.0))
+            normalize_input = bool(aggregator_config.get('normalize_input', True))
+            aggregator = TokenNetVLAD(
+                input_feat_dim=feat_dim,
+                img_hw=(imgsize2net, imgsize2net),
+                patchsize=patchsize,
+                num_clusters=num_clusters,
+                alpha=alpha,
+                normalize_input=normalize_input,
+                output_dim=output_dim,
+            ).to(self.device)
+            print("✅ 创建NetVLAD聚合器")
+            print(f"   token_grid: {imgsize2net // patchsize}x{imgsize2net // patchsize} (patchsize={patchsize})")
+            print(
+                f"   NetVLAD配置: num_clusters={num_clusters}, alpha={alpha}, "
+                f"normalize_input={normalize_input}"
+            )
 
         else:
             raise ValueError(f"未知的聚合器类型: {agg_type}")
@@ -288,6 +415,44 @@ class NetworkComponents:
         self.grid_args = grid_args
 
         return grid
+
+
+    def create_hash_lod_aggregator(self, config=None):
+        """
+        创建 HashGrid LOD 聚合器。
+
+        YAML 只需要暴露核心参数；实现细节使用模块默认值。
+        """
+        if config is None:
+            config = getattr(self.opt, 'hash_lod_aggregator', None)
+        config = dict(config or {})
+        if not bool(config.get('enabled', False)):
+            return None
+
+        mode = str(config.get('mode', 'scale_softmax'))
+        if mode != 'scale_softmax':
+            raise ValueError(f"Unsupported hash_lod_aggregator.mode: {mode}")
+
+        from models.hash_lod_aggregator import ScaleLodAggregator
+
+        aggregator = ScaleLodAggregator(
+            num_lods=int(config.get('num_lods', 4)),
+            per_lod_dim=int(config.get('per_lod_dim', 1024)),
+            output_dim=int(config.get('output_dim', config.get('per_lod_dim', 1024))),
+            coord_source=str(config.get('coord_source', 'scale')),
+            scale_source=str(config.get('scale_source', 'norm_log_scale')),
+        ).to(self.device)
+
+        print("✅ 创建HashGrid LOD聚合器")
+        print(f"   模式: {mode}")
+        print(f"   条件源: {aggregator.coord_source}")
+        print(f"   scale源: {aggregator.scale_source}")
+        print(f"   LOD数量: {aggregator.num_lods}")
+        print(f"   单LOD维度: {aggregator.per_lod_dim}D")
+        print(f"   输入维度: {aggregator.input_dim}D")
+        print(f"   输出维度: {aggregator.output_dim}D")
+
+        return aggregator
 
 
     def create_grid_mlp(self, input_dim, condition_dim, hidden_dim=512, num_blocks=1, output_dim=None):

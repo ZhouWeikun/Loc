@@ -24,7 +24,7 @@ grid: # Feature grid, the backbone of the neural field
   feature_dim: 256 #org=2
   num_lods: 4 #org=16
   #wingtra with low_res config:
-  codebook_bitwidth: 17 #org=19, hash table size=2^codebook_bitwidth #
+  codebook_bitwidth: 18 #org=19, hash table size=2^codebook_bitwidth #
   min_grid_res: 32 #org=16
   max_grid_res: 256 #org=512 #256 for wingtra
   #visloc with high_res config:

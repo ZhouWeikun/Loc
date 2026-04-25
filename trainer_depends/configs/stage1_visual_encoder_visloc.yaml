@@ -4,12 +4,11 @@ exp_setting:
   exp_name: stage1_visloc_splitInterval82_tripleLoss_singleEdge_hardest_fm_mask_dinov2B2 #tripleLoss_singleEdge_hardest_fm_mask
   save_freq: 1
   tensorboard: True
-  val: False
+  val: True
   val_freq: 1
 
   # load2test: 继续训练或测试时加载的checkpoint（字符串路径）
   load2test: ""
-
   # load2train: 继续训练时加载的checkpoint（字符串路径）
   load2train: ""
 
@@ -19,6 +18,9 @@ data_setting:
   imgsize2net: 224
   satimgsize2crop: 244   #satimgsize2crop：res02m:zuchwil=540,zurich=614; res03m:zuchwil=400; res05m:zurich=224
   add_random_satimg_negs: True
+  reject_sampling: False
+  reject_batch_aware: False
+  pair_alignment_mode: full_4d
   n_rand2sample_per_pos: 256 #16
   sat_as_query: False #sat_as_query数量=batchsize_uav
   split_train_ratio: 0.8
@@ -63,7 +65,7 @@ hardware_setting:
 #  batchsize_sat: 768 #batchsize_uav的整数倍
 #  batchsize_uav: 64
   batchsize_sat: 384 #384 #batchsize_uav的整数倍,backbone冻结时=1024
-  batchsize_uav: 32 #64
+  batchsize_uav: 32 #32 backbone冻结时=64
   autocast: True
   gpu_ids: '0'
   num_worker: 8
@@ -72,6 +74,7 @@ hardware_setting:
 
 learning_setting:
   loss_type: tripleLoss_singleEdge_hardest_fm_mask
+#   loss_type: infonce
   num_epochs: 100
   #when evaluating
   val_overlap: 0.5
@@ -81,14 +84,26 @@ learning_setting:
   val_query_scale2uniform: False
 
 network_setting:
+  backbone: dinov2
+  freeze_backbone: True
+  backbone_config:
+    num_trainable_blocks: 2
+
   aggregator_type: salad
   aggregator_config:
     output_dim: 1024
     cluster_dim: 64
     hidden_layer_dim: 512
-    use_residual: true
-    with_dustbin: true
-  backbone: dinov2_vitb14
-  freeze_backbone: false
-  backbone_config:
-    num_trainable_blocks: 2
+    use_residual: True
+    with_dustbin: True
+
+  adapter_config:
+    enabled: True
+    normalize_before_aggregator: False
+    n_last_blocks_with_adapter: 4 #dinov2_vitb14 一共 12 个 blocks
+    bottleneck_dim: 64
+    attn_adapter: False
+    ffn_parallel_adapter: True
+    scale: 0.2
+    dropout: 0.0
+    init: zero_up

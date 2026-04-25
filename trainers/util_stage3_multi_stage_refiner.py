@@ -519,6 +519,31 @@ def _compute_weighted_center_raw(coords_raw: torch.Tensor, weights: torch.Tensor
     return torch.cat([center_xy, center_theta, center_scale], dim=0)
 
 
+def _normalize_weights_batched(weights: torch.Tensor) -> torch.Tensor:
+    w = weights.clamp(min=0.0)
+    denom = w.sum(dim=-1, keepdim=True)
+    fallback = torch.ones_like(w) / max(1, int(w.shape[-1]))
+    return torch.where(denom > 0, w / denom.clamp(min=1e-12), fallback)
+
+
+def _compute_weighted_center_raw_batched(coords_raw: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    coords = _as_float_tensor(coords_raw)
+    if coords.ndim != 3 or coords.shape[-1] != 4:
+        raise ValueError("coords_raw must be [B, K, 4].")
+    w = _normalize_weights_batched(_as_float_tensor(weights, device=coords.device)).reshape(coords.shape[0], -1, 1)
+    if int(w.shape[1]) != int(coords.shape[1]):
+        raise ValueError("weights must have shape [B, K] matching coords_raw.")
+
+    center_xy = torch.sum(w * coords[:, :, 0:2], dim=1)
+    theta = coords[:, :, 2]
+    theta_cos = torch.sum(w[:, :, 0] * torch.cos(theta), dim=1)
+    theta_sin = torch.sum(w[:, :, 0] * torch.sin(theta), dim=1)
+    center_theta = torch.atan2(theta_sin, theta_cos).reshape(-1, 1)
+    scale = coords[:, :, 3].clamp(min=1e-6)
+    center_scale = torch.exp(torch.sum(w[:, :, 0] * torch.log(scale), dim=1)).reshape(-1, 1)
+    return torch.cat([center_xy, center_theta, center_scale], dim=-1)
+
+
 def _compute_sigma_diag_raw(
     coords_raw: torch.Tensor,
     center_raw: torch.Tensor,
@@ -874,7 +899,7 @@ class IterativeSeedCloudRefiner(BaseSeedCloudRelocator):
         self,
         seed_clouds: List[SeedCloud],
         config: SeedModeSearchConfig,
-        query_context: Optional[Dict[str, Any]] = None,
+        query_contSeedModeSearchConfigext: Optional[Dict[str, Any]] = None,
     ) -> List[ModeState]:
         if len(seed_clouds) == 0:
             return []
@@ -1025,6 +1050,216 @@ class IterativeSeedCloudRefiner(BaseSeedCloudRelocator):
             )
             modes.append(mode_state)
         return modes
+
+
+class BatchedMultiStartEvolutionSeedCloudRefiner(BaseSeedCloudRelocator):
+    """
+    Batched multi-start evolution strategy for Stage 1.5.
+
+    It treats each L0 seed as one local population, scores all active
+    populations in one flattened tensor per round, and keeps each mode's
+    historical best coord/score. It does not estimate or update covariance.
+    """
+
+    @staticmethod
+    def _resolve_standard(config: SeedModeSearchConfig, key: str, default: str) -> str:
+        value = str(config.metadata.get(key, default)).strip().lower()
+        if value not in ("best", "elite_sum"):
+            raise ValueError(f"{key} must be 'best' or 'elite_sum', got {value}")
+        return value
+
+    @staticmethod
+    def _select_mode_list(values: List[Any], indices: torch.Tensor) -> List[Any]:
+        return [values[int(idx)] for idx in indices.detach().cpu().tolist()]
+
+    def relocate_seed_clouds(
+        self,
+        seed_clouds: List[SeedCloud],
+        config: SeedModeSearchConfig,
+        query_context: Optional[Dict[str, Any]] = None,
+    ) -> List[ModeState]:
+        if len(seed_clouds) == 0:
+            return []
+
+        reverse = config.metric_goal == "maximize"
+        survive_stand = self._resolve_standard(config, "stage1_survive_stand", "best")
+        move_stand = self._resolve_standard(config, "stage1_move_stand", "elite_sum")
+        n_rounds = _resolve_stage1_round_count(config)
+
+        device = seed_clouds[0].center_raw.device
+        source_seed_ids = [cloud.seed_id for cloud in seed_clouds]
+        seed_scores = [cloud.metadata.get("seed_score", None) for cloud in seed_clouds]
+        centers = torch.stack([cloud.center_raw.to(device=device, dtype=torch.float32) for cloud in seed_clouds], dim=0)
+        coords_round = torch.stack([cloud.sample_coords_raw.to(device=device, dtype=torch.float32) for cloud in seed_clouds], dim=0)
+        scores_round = torch.stack([cloud.sample_scores.to(device=device, dtype=torch.float32).reshape(-1) for cloud in seed_clouds], dim=0)
+        radius_round = torch.stack([cloud.radius_raw.to(device=device, dtype=torch.float32) for cloud in seed_clouds], dim=0)
+
+        n_modes = int(coords_round.shape[0])
+        if reverse:
+            history_best_scores = torch.full((n_modes,), -1e9, device=device, dtype=torch.float32)
+        else:
+            history_best_scores = torch.full((n_modes,), 1e9, device=device, dtype=torch.float32)
+        history_best_coords = centers.clone()
+        history_best_round = torch.full((n_modes,), -1, device=device, dtype=torch.long)
+        latest_selection_metric = history_best_scores.clone()
+        latest_elite_metric = history_best_scores.clone()
+        latest_elite_count = 0
+        final_round_index = 0
+
+        for round_index in range(n_rounds):
+            final_round_index = int(round_index)
+            if int(coords_round.shape[0]) == 0:
+                return []
+            if int(coords_round.shape[1]) == 0:
+                return []
+
+            n_active = int(coords_round.shape[0])
+            n_samples = int(coords_round.shape[1])
+            if n_samples <= 0:
+                return []
+
+            elite_count = max(1, int(math.ceil(n_samples * float(config.seed_region.elite_ratio))))
+            elite_count = min(elite_count, n_samples)
+            latest_elite_count = int(elite_count)
+
+            if reverse:
+                round_best_scores, round_best_idx = torch.max(scores_round, dim=1)
+            else:
+                round_best_scores, round_best_idx = torch.min(scores_round, dim=1)
+            gather_idx = round_best_idx.reshape(n_active, 1, 1).expand(n_active, 1, 4)
+            round_best_coords = torch.gather(coords_round, dim=1, index=gather_idx).squeeze(1)
+
+            if reverse:
+                improve_mask = round_best_scores > history_best_scores
+            else:
+                improve_mask = round_best_scores < history_best_scores
+            history_best_scores = torch.where(improve_mask, round_best_scores, history_best_scores)
+            history_best_coords = torch.where(improve_mask.reshape(-1, 1), round_best_coords, history_best_coords)
+            history_best_round = torch.where(
+                improve_mask,
+                torch.full_like(history_best_round, int(round_index)),
+                history_best_round,
+            )
+
+            elite_scores, elite_idx = torch.topk(scores_round, k=elite_count, dim=1, largest=reverse)
+            elite_coords = torch.gather(
+                coords_round,
+                dim=1,
+                index=elite_idx.unsqueeze(-1).expand(-1, -1, 4),
+            )
+            elite_weights = torch.ones(
+                (n_active, elite_count),
+                device=device,
+                dtype=torch.float32,
+            ) / max(1, elite_count)
+            elite_centers = _compute_weighted_center_raw_batched(elite_coords, elite_weights)
+            elite_centers = _project_raw_coords(elite_centers, query_context=query_context)
+            if not bool(config.seed_region.enable_scale_sampling):
+                elite_centers = elite_centers.clone()
+                elite_centers[:, 3] = centers[:, 3]
+
+            latest_elite_metric = elite_scores.sum(dim=1)
+            if survive_stand == "best":
+                latest_selection_metric = history_best_scores
+            else:
+                latest_selection_metric = latest_elite_metric
+
+            if move_stand == "best":
+                next_centers = history_best_coords
+            else:
+                next_centers = elite_centers
+
+            if round_index + 1 >= n_rounds:
+                centers = next_centers
+                break
+
+            keep_count = max(
+                int(config.seed_region.min_surviving_clouds),
+                int(math.ceil(n_active * _resolve_stage1_survival_ratio(config, round_index))),
+            )
+            keep_count = min(keep_count, n_active)
+            _, keep_idx = torch.topk(latest_selection_metric, k=keep_count, largest=reverse)
+
+            centers = next_centers.index_select(0, keep_idx)
+            history_best_scores = history_best_scores.index_select(0, keep_idx)
+            history_best_coords = history_best_coords.index_select(0, keep_idx)
+            history_best_round = history_best_round.index_select(0, keep_idx)
+            latest_selection_metric = latest_selection_metric.index_select(0, keep_idx)
+            latest_elite_metric = latest_elite_metric.index_select(0, keep_idx)
+            source_seed_ids = self._select_mode_list(source_seed_ids, keep_idx)
+            seed_scores = self._select_mode_list(seed_scores, keep_idx)
+
+            next_round_index = round_index + 1
+            radius_next = _resolve_stage1_radius_raw(
+                config=config,
+                query_context=query_context,
+                device=device,
+                round_index=next_round_index,
+            )
+            n_samples_next = _resolve_stage1_sample_count(config, round_index=next_round_index)
+            coords_round = BatchedBoxSampler.sample_around_centers(
+                centers_raw=centers,
+                radius_raw=radius_next,
+                n_samples=n_samples_next,
+                method=config.seed_region.local_sample_method,
+                query_context=query_context,
+                enable_scale_sampling=bool(config.seed_region.enable_scale_sampling),
+            )
+            scores_round = _score_raw_coords_chunked(
+                coords_round.reshape(-1, 4),
+                query_context=query_context,
+                score_key=_score_key_stage1(query_context),
+                chunk_key="stage1_score_chunk_size",
+            ).reshape(int(coords_round.shape[0]), n_samples_next)
+            radius_round = radius_next.reshape(1, 4).expand(int(coords_round.shape[0]), 4).clone()
+
+        modes: List[ModeState] = []
+        for idx in range(int(centers.shape[0])):
+            sigma_diag = radius_round[idx].clone()
+            if not bool(config.seed_region.enable_scale_sampling):
+                sigma_diag[3] = 0.0
+            best_score = float(history_best_scores[idx].item())
+            selection_metric = float(latest_selection_metric[idx].item())
+            mode_state = ModeState(
+                query_id=seed_clouds[0].query_id,
+                mode_id=f"q{seed_clouds[0].query_id}_mode{idx}",
+                center_raw=centers[idx].clone(),
+                sigma_diag_raw=sigma_diag,
+                score_mode=config.score_mode_stage3,
+                stage="stage1.5",
+                best_coord_raw=history_best_coords[idx].clone(),
+                best_score=best_score,
+                latest_metric=selection_metric,
+                metadata={
+                    "source_seed_id": source_seed_ids[idx],
+                    "selection_metric": selection_metric,
+                    "seed_score": seed_scores[idx],
+                    "radius_raw": radius_round[idx].clone(),
+                    "stage1_round_index": int(final_round_index),
+                    "stage1_5_refiner_mode": "multi_start_es",
+                    "stage1_survive_stand": survive_stand,
+                    "stage1_move_stand": move_stand,
+                    "history_best_round": int(history_best_round[idx].item()),
+                    "history_best_score": best_score,
+                    "elite_score_sum": float(latest_elite_metric[idx].item()),
+                    "elite_count": int(latest_elite_count),
+                    "n_rounds": int(n_rounds),
+                },
+            )
+            mode_state.record_event(
+                "multi_start_es_refined",
+                elite_count=int(latest_elite_count),
+                selection_metric=selection_metric,
+                best_score=best_score,
+                survive_stand=survive_stand,
+                move_stand=move_stand,
+            )
+            modes.append(mode_state)
+        return modes
+
+
+BatchedFixedStepEvolutionSeedCloudRefiner = BatchedMultiStartEvolutionSeedCloudRefiner
+
 
 class PassthroughModeDeduper(BaseModeDeduper):
     """

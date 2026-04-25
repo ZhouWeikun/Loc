@@ -1,10 +1,15 @@
 from dataclasses import dataclass
+from fractions import Fraction
 
 import numpy as np
 import torch
 import torch.nn.functional as TF
+from torch.utils.data import Subset
 
-from trainers.util_core_eval import compute_topk_acc_from_coords, print_topk_eval_results
+from trainers.util_core_eval import (
+    compute_progressive_topk_acc_from_coords,
+    print_progressive_topk_eval_results,
+)
 from trainers.util_stage1_gallery_manager import Stage1ReferenceGalleryDownsampleConfig
 from trainers.util_stage1_others import warp_uav_imgs
 
@@ -33,6 +38,14 @@ class Stage1RetrievalEvalConfig:
     max_queries: int = None
     # Optional runtime gallery downsample config; the original gallery bank remains unchanged.
     gallery_downsample_cfg: object = None
+    # Optional second-stage subset on the already selected query split.
+    # Example for wingtra interval82 correction:
+    #   first use the existing 8:2 split as test set, then split that test set by
+    #   interval 50:50 and keep the second half as the final evaluation queries.
+    query_subset_mode: str = None
+    query_subset_train_ratio: float = None
+    query_subset_take: str = "test"
+    query_subset_random_seed: int = 2026
     # Whether to print a formatted report after evaluation.
     print_results: bool = True
     # Title shown in the printed evaluation report.
@@ -104,6 +117,88 @@ class Stage1RetrievalEvaluator:
             persistent_workers=(num_workers > 0),
         )
 
+    @staticmethod
+    def _compute_split_indices(n_samples, train_ratio=0.9, split_mode='segment', random_seed=2026):
+        n_samples = int(n_samples)
+        train_ratio = float(train_ratio)
+        split_mode = str(split_mode).strip().lower()
+
+        if n_samples <= 0:
+            return np.array([], dtype=np.int64), np.array([], dtype=np.int64)
+        if not (0.0 < train_ratio < 1.0):
+            raise ValueError(f"train_ratio must be in (0, 1), got {train_ratio}")
+        if split_mode not in ('segment', 'interval', 'random'):
+            raise ValueError(f"split_mode must be 'segment', 'interval', or 'random', got {split_mode!r}")
+
+        indices = np.arange(n_samples, dtype=np.int64)
+        if split_mode == 'segment':
+            n_train = int(n_samples * train_ratio)
+            n_train = min(max(n_train, 1), max(n_samples - 1, 1))
+            return indices[:n_train], indices[n_train:]
+
+        if split_mode == 'random':
+            n_train = int(n_samples * train_ratio)
+            n_train = min(max(n_train, 1), max(n_samples - 1, 1))
+            rng = np.random.RandomState(int(random_seed))
+            perm = rng.permutation(indices)
+            train_indices = np.sort(perm[:n_train])
+            test_indices = np.sort(perm[n_train:])
+            return train_indices, test_indices
+
+        ratio_frac = Fraction(str(train_ratio)).limit_denominator(1000)
+        period = int(ratio_frac.denominator)
+        train_per_period = int(ratio_frac.numerator)
+        offset_in_period = indices % period
+        train_mask = offset_in_period < train_per_period
+        train_indices = indices[train_mask]
+        test_indices = indices[~train_mask]
+        if len(train_indices) == 0 or len(test_indices) == 0:
+            n_train = int(n_samples * train_ratio)
+            n_train = min(max(n_train, 1), max(n_samples - 1, 1))
+            return indices[:n_train], indices[n_train:]
+        return train_indices, test_indices
+
+    def _maybe_subset_query_dataset(self, uav_dataset, cfg, use_train_uav):
+        if cfg.query_subset_mode in (None, "", "none") or cfg.query_subset_train_ratio is None:
+            return uav_dataset, {
+                "enabled": False,
+                "source_split": "train" if use_train_uav else "test",
+                "n_before": int(len(uav_dataset)),
+                "n_after": int(len(uav_dataset)),
+            }
+
+        train_indices, test_indices = self._compute_split_indices(
+            n_samples=len(uav_dataset),
+            train_ratio=cfg.query_subset_train_ratio,
+            split_mode=cfg.query_subset_mode,
+            random_seed=cfg.query_subset_random_seed,
+        )
+        take = str(cfg.query_subset_take).strip().lower()
+        if take == "train":
+            selected_rel = train_indices
+        elif take == "test":
+            selected_rel = test_indices
+        else:
+            raise ValueError(f"query_subset_take must be 'train' or 'test', got {cfg.query_subset_take!r}")
+
+        subset_dataset = Subset(uav_dataset, selected_rel.tolist())
+        subset_meta = {
+            "enabled": True,
+            "source_split": "train" if use_train_uav else "test",
+            "mode": str(cfg.query_subset_mode),
+            "train_ratio": float(cfg.query_subset_train_ratio),
+            "take": take,
+            "random_seed": int(cfg.query_subset_random_seed),
+            "n_before": int(len(uav_dataset)),
+            "n_after": int(len(subset_dataset)),
+            "selected_rel_indices_head": selected_rel[:10].tolist(),
+        }
+        base_attr = "train_indices" if use_train_uav else "test_indices"
+        if hasattr(uav_dataset, base_attr):
+            base_indices = np.asarray(getattr(uav_dataset, base_attr), dtype=np.int64)
+            subset_meta["selected_source_indices_head"] = base_indices[selected_rel[:10]].tolist()
+        return subset_dataset, subset_meta
+
     def _prepare_query_batch(self, imgs, coords_uav, gallery_scale, cfg):
         if not cfg.query_rot2uniform and not cfg.query_scale2uniform:
             return imgs, coords_uav
@@ -130,8 +225,15 @@ class Stage1RetrievalEvaluator:
         dist_th = cfg.dist_th
         if dist_th is None:
             dist_th = float(sat_dataset.halfimg_radius_nrc) * 1.1
+        nrc2meter = None
+        dist_th_meter = None
+        if hasattr(sat_dataset, "halfimg_radius_meter") and hasattr(sat_dataset, "halfimg_radius_nrc"):
+            nrc2meter = float(sat_dataset.halfimg_radius_meter) / max(float(sat_dataset.halfimg_radius_nrc), 1e-8)
+            dist_th_meter = float(dist_th) * nrc2meter
         return {
             "norm_dist": float(dist_th),
+            "dist_meter": None if dist_th_meter is None else float(dist_th_meter),
+            "nrc2meter": None if nrc2meter is None else float(nrc2meter),
             "rot": None if cfg.rot_th_deg is None else float(cfg.rot_th_deg),
             "scale_ratio": None if cfg.scale_ratio_th is None else float(cfg.scale_ratio_th),
         }
@@ -157,6 +259,11 @@ class Stage1RetrievalEvaluator:
 
         sat_dataset = self.trainer.sat_datasets[scene_name]
         uav_dataset = self.trainer.uav_datasets_train[scene_name] if cfg.use_train_uav else self.trainer.uav_datasets_test[scene_name]
+        uav_dataset, query_subset_meta = self._maybe_subset_query_dataset(
+            uav_dataset=uav_dataset,
+            cfg=cfg,
+            use_train_uav=cfg.use_train_uav,
+        )
         dataloader = self._make_uav_dataloader(uav_dataset, batch_size=int(cfg.batch_size), num_workers=int(cfg.num_workers))
 
         runtime_gallery_bank = self._build_runtime_gallery_bank(cfg)
@@ -180,6 +287,7 @@ class Stage1RetrievalEvaluator:
         try:
             coords_topk_all = []
             coords_gt_all = []
+            feats_q_all = []
             processed = 0
             for batch in dataloader:
                 if isinstance(batch, (list, tuple)):
@@ -205,6 +313,7 @@ class Stage1RetrievalEvaluator:
 
                 coords_topk_all.append(coords_topk)
                 coords_gt_all.append(coords_uav.detach().cpu())
+                feats_q_all.append(feats_q.detach().cpu())
                 processed += coords_uav.shape[0]
         finally:
             self._restore_modes(models_all, orig_modes)
@@ -214,7 +323,8 @@ class Stage1RetrievalEvaluator:
 
         coords_topk_all = torch.cat(coords_topk_all, dim=0)
         coords_gt_all = torch.cat(coords_gt_all, dim=0)
-        metrics, errors = compute_topk_acc_from_coords(
+        feats_q_all = torch.cat(feats_q_all, dim=0)
+        acc_metrics_raw, err_stats = compute_progressive_topk_acc_from_coords(
             coords_topk_all,
             coords_gt_all,
             dist_th=thresholds["norm_dist"],
@@ -222,14 +332,50 @@ class Stage1RetrievalEvaluator:
             scale_ratio_th=thresholds["scale_ratio"],
             k_values=cfg.k_values,
         )
+        progressive_acc_metrics = (
+            dict(acc_metrics_raw.get("progressive_acc_metrics", {}))
+            if isinstance(acc_metrics_raw.get("progressive_acc_metrics", {}), dict)
+            else {}
+        )
+        progressive_acc_metric_sources = (
+            dict(acc_metrics_raw.get("progressive_acc_metric_sources", {}))
+            if isinstance(acc_metrics_raw.get("progressive_acc_metric_sources", {}), dict)
+            else {}
+        )
+        legacy_acc_metrics_source = str(acc_metrics_raw.get("legacy_acc_metrics_source", "dist_rot_scale_recall"))
+        acc_metrics = {
+            str(key): float(value)
+            for key, value in acc_metrics_raw.items()
+            if str(key).startswith("top") and str(key).endswith("_acc")
+        }
+        report_meta = {
+            "integrate_scale": thresholds["scale_ratio"] is not None,
+            "scale_select_mode": None,
+            "legacy_acc_metrics_source": legacy_acc_metrics_source,
+            "progressive_acc_metric_sources": progressive_acc_metric_sources,
+            "query_subset": query_subset_meta,
+            "progressive_recall_policy": {
+                "dist_recall": "dist<=dist_th",
+                "dist_rot_recall": "dist<=dist_th and rot<=rot_th",
+                "dist_rot_scale_recall": "dist<=dist_th and rot<=rot_th and scale<=scale_ratio_th",
+                "rot_fallback_to_dist": thresholds["rot"] is None,
+                "scale_fallback_to_dist_rot": thresholds["scale_ratio"] is None,
+            },
+        }
 
         if cfg.print_results:
             report_title = f"{cfg.report_title} [{scene_name}]"
-            print_topk_eval_results(
-                metrics,
-                errors,
+            print_progressive_topk_eval_results(
+                {
+                    **acc_metrics,
+                    "progressive_acc_metrics": progressive_acc_metrics,
+                    "legacy_acc_metrics_source": legacy_acc_metrics_source,
+                    "progressive_acc_metric_sources": progressive_acc_metric_sources,
+                },
+                err_stats,
                 thresholds,
                 report_title=report_title,
+                report_meta=report_meta,
                 log_lines=eval_log_lines,
             )
 
@@ -238,9 +384,16 @@ class Stage1RetrievalEvaluator:
             "n_queries": int(coords_gt_all.shape[0]),
             "k_values": tuple(int(k) for k in cfg.k_values),
             "thresholds": thresholds,
-            "metrics": metrics,
-            "errors": errors,
+            "report_title": f"{cfg.report_title} [{scene_name}]",
+            "report_meta": report_meta,
+            "metrics": acc_metrics,
+            "errors": err_stats,
+            "acc_metrics": acc_metrics,
+            "progressive_acc_metrics": progressive_acc_metrics,
+            "err_stats": err_stats,
+            "n_eval": int(coords_gt_all.shape[0]),
             "coords_topk": coords_topk_all,
             "coords_gt": coords_gt_all,
+            "feats_query": feats_q_all,
             "runtime_gallery_summary": runtime_gallery_bank.summary(),
         }

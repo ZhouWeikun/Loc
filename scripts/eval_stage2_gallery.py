@@ -72,6 +72,22 @@ def _parse_k_values(text):
     return tuple(values)
 
 
+def _parse_n_bins_4d(text):
+    if text is None:
+        return None
+    text = str(text).strip()
+    if not text:
+        return None
+    norm_text = text.lower().replace("x", ",")
+    items = [item.strip() for item in norm_text.split(",") if item.strip()]
+    if len(items) != 4:
+        raise ValueError(f"n_bins_4d must provide 4 integers, got: {text!r}")
+    values = tuple(int(item) for item in items)
+    if any(v <= 0 for v in values):
+        raise ValueError(f"n_bins_4d entries must be > 0, got: {values}")
+    return values
+
+
 def _build_script_arg_parser():
     parser = argparse.ArgumentParser(
         description="Evaluate Stage-2 retrieval fitness with aligned eval settings.",
@@ -95,8 +111,14 @@ def _build_script_arg_parser():
     parser.add_argument(
         "--mode",
         default="rc",
-        choices=("rc", "rc_rot", "rc_scale", "rc_rot_scale"),
+        choices=("rc", "rc_rot", "rc_scale", "rc_rot_scale", "n_bins_4d"),
         help="Gallery layout / evaluation mode.",
+    )
+    parser.add_argument(
+        "--n-bins-4d",
+        type=str,
+        default="",
+        help="Direct gallery bins as nr,nc,rot,scale or nrxncxrotxscale. Only used when --mode n_bins_4d.",
     )
     parser.add_argument("--overlap", type=float, default=0.5, help="Gallery overlap ratio.")
     parser.add_argument(
@@ -217,7 +239,7 @@ def _resolve_stage2_ckpt(script_args, opt):
     )
 
 
-def _resolve_mode_defaults(mode):
+def _resolve_mode_defaults(mode, n_bins_4d=None):
     defaults = {
         "rc": {
             "query_rot2uniform": True,
@@ -248,6 +270,27 @@ def _resolve_mode_defaults(mode):
             "report_title": "Stage2 RC + Rot + Scale Localization",
         },
     }
+    if mode == "n_bins_4d":
+        n_bins = _parse_n_bins_4d(n_bins_4d)
+        if n_bins is None:
+            raise ValueError("--n-bins-4d must be provided when --mode n_bins_4d.")
+        has_rot = int(n_bins[2]) > 1
+        has_scale = int(n_bins[3]) > 1
+        if has_rot and has_scale:
+            report_title = "Stage2 n_bins_4d RC + Rot + Scale Localization"
+        elif has_rot:
+            report_title = "Stage2 n_bins_4d RC + Rot Localization"
+        elif has_scale:
+            report_title = "Stage2 n_bins_4d RC + Scale Localization"
+        else:
+            report_title = "Stage2 n_bins_4d RC Localization"
+        return {
+            "query_rot2uniform": not has_rot,
+            "query_scale2uniform": False,
+            "report_rot_error": has_rot,
+            "report_scale_error": has_scale,
+            "report_title": report_title,
+        }
     return defaults[mode]
 
 
@@ -256,6 +299,7 @@ def _build_layout_cfg(script_args):
 
     kwargs = {
         "mode": script_args.mode,
+        "n_bins_4d": _parse_n_bins_4d(script_args.n_bins_4d),
         "overlap": script_args.overlap,
         "fixed_rot": script_args.fixed_rot,
         "fixed_scale": script_args.fixed_scale,
@@ -263,11 +307,13 @@ def _build_layout_cfg(script_args):
         "n_scales": script_args.n_scales,
         "scale_mode": script_args.scale_mode,
     }
+    if script_args.mode == "n_bins_4d" and kwargs["n_bins_4d"] is None:
+        raise ValueError("--n-bins-4d must be provided when --mode n_bins_4d.")
     return Stage2ReferenceGalleryLayoutConfig(**kwargs)
 
 
 def _build_eval_cfg(trainer, script_args):
-    mode_defaults = _resolve_mode_defaults(script_args.mode)
+    mode_defaults = _resolve_mode_defaults(script_args.mode, script_args.n_bins_4d)
     batch_size = script_args.batch_size
     if batch_size is None:
         batch_size = int(getattr(trainer.opt, "batchsize_uav", 32))
@@ -418,3 +464,14 @@ if __name__ == "__main__":
     --mode rc \
     --save-json gen_fm_exps/analysis/stage2_eval_epoch480.json
     """
+
+# python /home/data/zwk/pyproj_neuloc_v0/scripts/eval_stage2_fitness.py \
+#     --p_yaml /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc03_interval82_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie/opts.yaml \
+#     --stage2-ckpt /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc03_interval82_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie/epoch960_R1=85_MeanErr192m_MidErr76m.pth \
+#     --mode rc_rot_scale \
+#     --overlap 0.375 \
+#     --delta-rot-deg 10 \
+#     --n-scales 4 \
+#     --scale-mode linear \
+#     --cache-gallery \
+#     --gallery-name-prefix visloc03_interval82

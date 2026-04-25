@@ -4,7 +4,7 @@ exp_setting:
   exp_name: stage1_wingtra_debug #tripleLoss_singleEdge_hardest_fm_mask
   save_freq: 10
   tensorboard: True
-  val: False
+  val: True
   val_freq: 1
 
   # load2test: 继续训练或测试时加载的checkpoint（字符串路径）
@@ -20,6 +20,9 @@ data_setting:
   imgsize2net: 224
   satimgsize2crop: 244   #satimgsize2crop：res02m:zuchwil=540,zurich=614; res03m:zuchwil=400; res05m:zurich=224
   add_random_satimg_negs: True
+  reject_sampling: False
+  reject_batch_aware: False
+  pair_alignment_mode: full_4d
   n_rand2sample_per_pos: 256 #16
   sat_as_query: False #sat_as_query数量=batchsize_uav
   split_train_ratio: 0.9
@@ -87,6 +90,16 @@ network_setting:
     hidden_layer_dim: 512
     use_residual: true
     with_dustbin: true
+  adapter_config:
+    enabled: false
+    normalize_before_aggregator: false
+    n_last_blocks_with_adapter: 4
+    bottleneck_dim: 64
+    attn_adapter: true
+    ffn_parallel_adapter: true
+    scale: 0.2
+    dropout: 0.0
+    init: zero_up
   backbone: dinov2_vitb14
   freeze_backbone: false
   backbone_config:

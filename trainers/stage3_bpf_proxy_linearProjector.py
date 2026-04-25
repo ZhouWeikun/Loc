@@ -3680,7 +3680,7 @@ class MetricNetTrainer(GridHashFitTrainer):
         # self.sms_loss = pairLoss_multiEdge_logSum(beta=10.0, margin=0.1, learnable_beta=True).to(self.device)
         self.sms_loss = pairLoss_singleEdge_weightedHardest(beta=10.0, margin=0., learnable_beta=True).to(self.device)
         self.param2optimize['loss_fn'] = self.sms_loss
-        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam')
+        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam', opt=self.opt)
         # 其他候选loss：
         # self.wde_loss = WeightedDirichletEnergyLoss(apply_log=True)
         # from losses.WeightedSoftTripletLoss_fm_mat import SWTLoss_fm_mat

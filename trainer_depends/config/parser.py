@@ -12,6 +12,7 @@
 import argparse
 import yaml
 import os
+import copy
 
 
 def print_config_summary(opt, header="最终配置:"):
@@ -37,6 +38,40 @@ def print_config_summary(opt, header="最终配置:"):
         print(f"  [scenes_setting]: {opt.scenes_setting}")
 
     opt._config_summary_printed = True
+
+
+def _expand_selected_scene_config(scenes_setting):
+    if not isinstance(scenes_setting, dict):
+        return scenes_setting
+
+    scene_registry = scenes_setting.get('scene_registry', None)
+    if not isinstance(scene_registry, dict) or not scene_registry:
+        return scenes_setting
+
+    selected_scene_name = scenes_setting.get('selected_scene_name', None)
+    if not selected_scene_name:
+        raise ValueError("scenes_setting.scene_registry is provided, but selected_scene_name is missing.")
+    if selected_scene_name not in scene_registry:
+        available = ", ".join(sorted(scene_registry.keys()))
+        raise KeyError(
+            f"selected_scene_name '{selected_scene_name}' not found in scene_registry. "
+            f"Available scenes: {available}"
+        )
+
+    selected_scene = copy.deepcopy(scene_registry[selected_scene_name])
+    if not isinstance(selected_scene, dict):
+        raise TypeError(
+            f"scene_registry['{selected_scene_name}'] must be a dict, "
+            f"got {type(selected_scene).__name__}"
+        )
+    selected_scene.setdefault('name', selected_scene_name)
+
+    expanded = copy.deepcopy(scenes_setting)
+    expanded['selected_scene_name'] = selected_scene_name
+    if selected_scene.get('dataset_name'):
+        expanded['dataset_name'] = selected_scene['dataset_name']
+    expanded['scenes'] = [selected_scene]
+    return expanded
 
 
 def get_parse(print_summary=True):
@@ -65,10 +100,26 @@ def get_parse(print_summary=True):
     # Stage checkpoint配置（用于多阶段训练）
     parser.add_argument('--load_stage1_ckpt', default="", type=str, help='Stage 1的checkpoint路径')
     parser.add_argument('--load_stage2_ckpt', default="", type=str, help='Stage 2的checkpoint路径')
+    parser.add_argument('--stage3_analysis_export_root', default="", type=str, help='Stage 3测试分析结果导出目录')
+    parser.add_argument('--stage3_recall_cfg', default="per_scene", type=str, help='Stage 3 recall阈值配置名；per_scene表示按场景映射')
+    parser.add_argument('--stage3_recall_cfg_yaml', default="trainer_depends/configs/stage3_recall_thresholds.yaml", type=str, help='Stage 3 recall阈值配置YAML')
     parser.add_argument('--inherit_stage1_yaml', default="", type=str, help='Stage 2初始化时继承Stage 1配置参数的opts/base yaml路径')
     parser.add_argument('--inherit_stage1_scope', default='network,data', type=str, help='Stage 2从Stage 1 YAML继承的范围: network,data,scenes,hardware，可用逗号分隔')
     parser.add_argument('--inherit_stage2_yaml', default="", type=str, help='Stage 3初始化时继承Stage 2网络结构参数的opts/base yaml路径')
     parser.add_argument('--inherit_stage2_scope', default='network', type=str, help='Stage 3从Stage 2 YAML继承的范围: network,data,scenes,hardware，可用逗号分隔')
+    parser.add_argument('--selected_scene_name', default="", type=str, help='覆盖 scenes_setting.selected_scene_name')
+    parser.add_argument(
+        '--inherit_stage1_fm_stage2',
+        default=False,
+        type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'},
+        help='Stage 3是否通过Stage 2的配置继续继承Stage 1相关默认参数',
+    )
+    parser.add_argument(
+        '--inherit_stage1_fm_stage2_scope',
+        default="",
+        type=str,
+        help='Stage 3经由Stage 2继续继承Stage 1时使用的scope；为空时回退到Stage 2记录的 inherit_stage1_scope',
+    )
 
     # 硬件配置
     parser.add_argument('--gpu_ids', default='0', type=str, help='GPU IDs, 例如: 0 或 0,1,2')
@@ -91,7 +142,7 @@ def get_parse(print_summary=True):
         help='是否冻结视觉backbone；False时允许backbone参与训练',
     )
     parser.add_argument('--aggregator_type', default='salad', type=str,
-                        help='聚合器类型: salad, g2m')
+                        help='聚合器类型: salad, g2m, g2m_scalar_p, g2m_channelwise_p, gem, fsra, lpn, netvlad')
 
     # 训练配置
     parser.add_argument('--num_epochs', default=100, type=int, help='训练轮数')
@@ -110,10 +161,30 @@ def get_parse(print_summary=True):
         help='是否为每个query额外添加随机采样的satellite negatives',
     )
     parser.add_argument(
+        '--reject_sampling', '--reject_sampleing',
+        dest='reject_sampling',
+        default=False,
+        type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'},
+        help='是否对随机 satellite negatives 启用正样本邻域拒绝采样',
+    )
+    parser.add_argument(
+        '--reject_batch_aware',
+        default=False,
+        type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'},
+        help='是否在 batch collate 阶段额外剔除落入任意 query 邻域的 satellite negatives',
+    )
+    parser.add_argument(
         '--sat_as_query',
         default=False,
         type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'},
         help='是否将sat image也作为query构造配对样本',
+    )
+    parser.add_argument(
+        '--pair_alignment_mode',
+        default='full_4d',
+        type=str,
+        choices=('full_4d', 'xy_only'),
+        help='query-positive 配对对齐方式: full_4d=xy/rot/scale对齐, xy_only=仅xy对齐且sat positive固定rot=0、scale=train-mean',
     )
 
     # Grid配置
@@ -202,10 +273,13 @@ def get_parse(print_summary=True):
     # 先将合并后的YAML配置应用到opt对象
     for section, params in final_merged_config.items():
         if section == 'scenes_setting':
-            setattr(opt, 'scenes_setting', params)
+            setattr(opt, 'scenes_setting', _expand_selected_scene_config(params))
             continue
 
         if isinstance(params, dict):
+            if section == 'data_setting' and 'reject_sampleing' in params and 'reject_sampling' not in params:
+                params = dict(params)
+                params['reject_sampling'] = params['reject_sampleing']
             for key, value in params.items():
                 # 只有当命令行参数是其默认值时，才允许YAML覆盖
                 if hasattr(opt, key) and getattr(opt, key) == getattr(default_args, key):
@@ -232,6 +306,13 @@ def get_parse(print_summary=True):
                 'weight': 1.0
             }]
         }
+    else:
+        if getattr(opt, 'selected_scene_name', ''):
+            if not isinstance(opt.scenes_setting, dict):
+                raise TypeError("selected_scene_name override requires scenes_setting to be a dict")
+            opt.scenes_setting = copy.deepcopy(opt.scenes_setting)
+            opt.scenes_setting['selected_scene_name'] = opt.selected_scene_name
+        opt.scenes_setting = _expand_selected_scene_config(opt.scenes_setting)
 
     legacy_exps_dir = getattr(opt, 'exps_dir', None)
     if not getattr(opt, 'dir2save_log', None):
@@ -261,13 +342,34 @@ def get_parse(print_summary=True):
     if not isinstance(aggregator_config, dict):
         raise TypeError(f"aggregator_config must be a dict, got {type(aggregator_config).__name__}")
     opt.aggregator_config = dict(aggregator_config)
+    if hasattr(opt, 'reject_sampleing'):
+        opt.reject_sampling = bool(getattr(opt, 'reject_sampleing'))
+
+    adapter_config = getattr(opt, 'adapter_config', {})
+    if adapter_config is None:
+        adapter_config = {}
+    if not isinstance(adapter_config, dict):
+        raise TypeError(f"adapter_config must be a dict, got {type(adapter_config).__name__}")
+    opt.adapter_config = dict(adapter_config)
+
+    hash_lod_aggregator = getattr(opt, 'hash_lod_aggregator', {})
+    if hash_lod_aggregator is None:
+        hash_lod_aggregator = {}
+    if not isinstance(hash_lod_aggregator, dict):
+        raise TypeError(f"hash_lod_aggregator must be a dict, got {type(hash_lod_aggregator).__name__}")
+    opt.hash_lod_aggregator = dict(hash_lod_aggregator)
 
     # --- 7. 组织参数到 group_dict ---
     group_info = {
         'exp_setting': ['p_yaml', 'exp_name', 'dir2save_log', 'dir2save_ckpt', 'load2train', 'load2test',
                         'load_stage1_ckpt', 'load_stage2_ckpt',
+                        'stage3_analysis_export_root',
+                        'stage3_recall_cfg', 'stage3_recall_cfg_yaml',
                         'inherit_stage1_yaml', 'inherit_stage1_scope',
-                        'inherit_stage2_yaml', 'inherit_stage2_scope', 'tensorboard',
+                        'inherit_stage2_yaml', 'inherit_stage2_scope',
+                        'selected_scene_name',
+                        'inherit_stage1_fm_stage2', 'inherit_stage1_fm_stage2_scope',
+                        'tensorboard',
                         'save_freq', 'val', 'val_freq',
                         'p_satinfo_json', 'p_uavinfo_json', 'p_uav_geocsv'],
         'data_setting': [
@@ -278,7 +380,10 @@ def get_parse(print_summary=True):
             'split_train_ratio',
             'split_mode',
             'add_random_satimg_negs',
+            'reject_sampling',
+            'reject_batch_aware',
             'sat_as_query',
+            'pair_alignment_mode',
         ],
         'hardware_setting': ['gpu_ids', 'num_worker', 'satmaps_on_cpu', 'autocast',
                             'batchsize_sat', 'batchsize_uav', 'batchsize_uav_test'],
@@ -288,15 +393,39 @@ def get_parse(print_summary=True):
             'backbone_config',
             'aggregator_type',
             'aggregator_config',
+            'adapter_config',
             'freeze_grid',
             'p_grid_config_yaml',
+            'hash_lod_aggregator',
             'posenc_multires_rc',
             'posenc_multires_rot',
             'posenc_multires_scale',
             'grid_mlp_hidden_dim',
             'grid_mlp_num_blocks',
+            'apr_target_mode',
+            'apr_mlp_hidden_dim',
+            'apr_mlp_num_layers',
+            'apr_mlp_norm',
+            'apr_mlp_dropout',
+            'apr_mlp_activation',
+            'apr_output_tanh',
+            'apr_normalize_input_feat',
+            'apr_eval_clamp',
+            'apr_require_stage1_ckpt',
         ],
-        'learning_setting': ['num_epochs'],
+        'learning_setting': [
+            'num_epochs',
+            'loss_type',
+            'infonce_temperature',
+            'infonce_negative_mode',
+            'apr_optimizer',
+            'apr_lr',
+            'apr_weight_decay',
+            'apr_loss_weight_nrc',
+            'apr_loss_weight_rot',
+            'apr_loss_weight_scale',
+            'apr_max_eval_batches',
+        ],
     }
     opt.group_dict = group_info
     opt._config_summary_printed = False

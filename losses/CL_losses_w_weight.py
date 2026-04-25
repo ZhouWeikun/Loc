@@ -383,7 +383,6 @@ class pairLoss_multiEdge_logSum(nn.Module):
             # 这就像狄利克雷能量中的“弹性势能”，保证场始终有收缩趋势，不会松弛。
             scale = self.base_pull_strength + (1.0 - self.base_pull_strength) * dynamic_weight
             loss_pos = (d_ph_sub * scale).mean()
-
         else:
             # --- Mode B: LogSumExp Energy (场平滑优化) ---
             # 思想：正样本区域的每一个像素都不应该偏离。

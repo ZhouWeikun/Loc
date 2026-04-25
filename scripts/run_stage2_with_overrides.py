@@ -57,7 +57,7 @@ from scripts.run_stage1_with_overrides import (
 DEFAULT_BASE_YAML = os.path.join(PROJECT_ROOT, "trainer_depends", "configs", "stage2_INGP_visloc.yaml")
 DEFAULT_TRAIN_SCRIPT = os.path.join(PROJECT_ROOT, "trainers", "stage2_INGP.py")
 DEFAULT_TMP_DIR = os.path.join(PROJECT_ROOT, "gen_fm_exps", "run_yamls")
-DEFAULT_CFG_VAR_FILE = os.path.join(PROJECT_ROOT, "gen_fm_exps", "run_yamls", "stage2_cfg_var.txt")
+DEFAULT_CFG_VAR_FILE = os.path.join(PROJECT_ROOT, "scripts", "stage2_cfg_var.txt")
 DEFAULT_GRID_BASE_YAML = os.path.join(PROJECT_ROOT, "trainer_depends", "configs", "nerf_hash_visloc.yaml")
 GRIDCFG_PREFIX = "gridcfg."
 
@@ -350,4 +350,5 @@ if __name__ == "__main__":
     #     cfg_var_file="gen_fm_exps/run_yamls/stage2_cfg_var.txt",
     #     dry_run=False,
     # )
-    # python run_stage2_with_overrides.py  --cfg-var-file tmp_run_yamls/stage2_cfg_var.txt
+    # CLI example:
+    # python scripts/run_stage2_with_overrides.py --cfg-var-file scripts/stage2_cfg_var.txt --base-yaml trainer_depends/configs/stage2_INGP_visloc.yaml --grid-base-yaml trainer_depends/configs/nerf_hash_visloc.yaml

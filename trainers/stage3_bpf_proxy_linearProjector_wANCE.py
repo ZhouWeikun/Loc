@@ -3455,7 +3455,7 @@ class MetricNetTrainer(GridHashFitTrainer):
             self.sms_loss = pairLoss_multiEdge_logSum(beta=10.0, margin=0.1, learnable_beta=True).to(self.device)
             self.param2optimize['loss_fn'] = self.sms_loss
 
-        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam')
+        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam', opt=self.opt)
 
         # 2. 加载checkpoint
         begin_epoch = self._load_checkpoint(

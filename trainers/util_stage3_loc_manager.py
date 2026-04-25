@@ -18,19 +18,33 @@ class Stage3FineLocManager:
         self.temperature = temperature
         self.chunk_size = chunk_size
 
-        self.eval_cfg = {"dist_lambda": 1.0, "rot_th": 10.0, "scale_ratio_th": None}
-        self.final_eval_cfg = {"dist_lambda": 1.1, "rot_th": 11.0, "scale_ratio_th": None}
+        self.eval_cfg = {"dist_lambda": 1.0, "dist_th": None, "rot_th": 10.0, "scale_ratio_th": None}
+        self.final_eval_cfg = {"dist_lambda": 1.1, "dist_th": None, "rot_th": 11.0, "scale_ratio_th": None}
         if eval_thresh_cfg is not None:
             if not isinstance(eval_thresh_cfg, dict):
                 raise ValueError("eval_thresh_cfg must be a dict or None.")
+            if "dist_th" not in eval_thresh_cfg and "dist_th_meter" in eval_thresh_cfg:
+                if not hasattr(self.trainer.sat_dataset, "halfimg_radius_meter") or not hasattr(self.trainer.sat_dataset, "halfimg_radius_nrc"):
+                    raise ValueError("dist_th_meter requires sat_dataset.halfimg_radius_meter and sat_dataset.halfimg_radius_nrc")
+                eval_thresh_cfg = dict(eval_thresh_cfg)
+                meter2nrc = float(self.trainer.sat_dataset.halfimg_radius_nrc) / max(
+                    float(self.trainer.sat_dataset.halfimg_radius_meter), 1e-8
+                )
+                eval_thresh_cfg["dist_th"] = float(eval_thresh_cfg["dist_th_meter"]) * meter2nrc
             if "scale_ratio_th" not in eval_thresh_cfg and "scale_th" in eval_thresh_cfg:
                 eval_thresh_cfg = dict(eval_thresh_cfg)
                 old_scale_th = eval_thresh_cfg.pop("scale_th")
                 eval_thresh_cfg["scale_ratio_th"] = None if old_scale_th is None else (1.0 + float(old_scale_th))
-            for key in ("dist_lambda", "rot_th", "scale_ratio_th"):
+            for key in ("dist_lambda", "dist_th", "rot_th", "scale_ratio_th"):
                 if key in eval_thresh_cfg:
                     self.eval_cfg[key] = eval_thresh_cfg[key]
                     self.final_eval_cfg[key] = eval_thresh_cfg[key]
+            if self.final_eval_cfg["dist_th"] is not None:
+                dist_lambda = float(self.final_eval_cfg["dist_th"]) / max(
+                    float(self.trainer.sat_dataset.halfimg_radius_nrc), 1e-8
+                )
+                self.eval_cfg["dist_lambda"] = dist_lambda
+                self.final_eval_cfg["dist_lambda"] = dist_lambda
 
     # ============================================================
     # Candidate Building
@@ -275,7 +289,7 @@ class Stage3FineLocManager:
             tag=save_tag,
             temperature=self.temperature,
         )
-        self.report_spatial_classification(
+        spatial_classification_metrics = self.report_spatial_classification(
             pred_pdf_3d_all=pred_pdf_3d_all,
             q_label_3d_all=q_label_3d_all,
             title=report_title,
@@ -291,6 +305,10 @@ class Stage3FineLocManager:
             "n_coarse": n_coarse,
             "n_coarse_3d": n_coarse_3d,
             "cell_centers_3d": cell_centers_3d,
+            "spatial_classification_report": {
+                "report_title": str(report_title),
+                "metrics": spatial_classification_metrics,
+            },
         }
 
     # ============================================================
@@ -305,6 +323,7 @@ class Stage3FineLocManager:
         rot_th=10.0,
         scale_ratio_th=None,
         scale_select_mode=None,
+        return_details=False,
     ):
         from scripts.analysis.util_stage3_analyze_pred3d import (
             compute_topN_acc_given_threshold,
@@ -320,13 +339,23 @@ class Stage3FineLocManager:
         else:
             coords_gt_all = coords_gt_source.to(coords_pred.device)
 
+        dist_th_nrc = self.final_eval_cfg.get("dist_th", None)
+        if dist_th_nrc is None:
+            dist_th_nrc = self.trainer.sat_dataset.halfimg_radius_nrc * dist_lambda
         thresh_cfg = {
-            "norm_dist": self.trainer.sat_dataset.halfimg_radius_nrc * dist_lambda,
+            "norm_dist": float(dist_th_nrc),
+            "dist_meter": None,
+            "nrc2meter": None,
             "rot": rot_th,
             "scale_ratio": scale_ratio_th,
         }
+        if hasattr(self.trainer.sat_dataset, "halfimg_radius_meter") and hasattr(self.trainer.sat_dataset, "halfimg_radius_nrc"):
+            nrc2meter = float(self.trainer.sat_dataset.halfimg_radius_meter) / max(
+                float(self.trainer.sat_dataset.halfimg_radius_nrc), 1e-8
+            )
+            thresh_cfg["nrc2meter"] = float(nrc2meter)
+            thresh_cfg["dist_meter"] = float(thresh_cfg["norm_dist"]) * nrc2meter
 
-        print(f"\n>>> [{tag}] 评估结果:")
         base_k_values = [1, 5, 10, 16, 32, 64, 128, 256, 512]
         if coords_pred.ndim == 2:
             k_max = 1
@@ -344,7 +373,7 @@ class Stage3FineLocManager:
         coords_pred = coords_pred[:min_len]
         coords_gt_all = coords_gt_all[:min_len]
 
-        acc_metrics, err_stats = compute_topN_acc_given_threshold(
+        acc_metrics_raw, err_stats = compute_topN_acc_given_threshold(
             coords_pred=coords_pred,
             coords_gt=coords_gt_all,
             dist_th=thresh_cfg["norm_dist"],
@@ -352,15 +381,59 @@ class Stage3FineLocManager:
             scale_ratio_th=thresh_cfg["scale_ratio"],
             k_values=target_k_values,
         )
+        progressive_acc_metrics = (
+            dict(acc_metrics_raw.get("progressive_acc_metrics", {}))
+            if isinstance(acc_metrics_raw.get("progressive_acc_metrics", {}), dict)
+            else {}
+        )
+        progressive_acc_metric_sources = (
+            dict(acc_metrics_raw.get("progressive_acc_metric_sources", {}))
+            if isinstance(acc_metrics_raw.get("progressive_acc_metric_sources", {}), dict)
+            else {}
+        )
+        legacy_acc_metrics_source = str(acc_metrics_raw.get("legacy_acc_metrics_source", "dist_rot_scale_recall"))
+        acc_metrics = {
+            str(key): float(value)
+            for key, value in acc_metrics_raw.items()
+            if str(key).startswith("top") and str(key).endswith("_acc")
+        }
+        report_meta = {
+            "integrate_scale": scale_ratio_th is not None,
+            "scale_select_mode": scale_select_mode,
+            "legacy_acc_metrics_source": legacy_acc_metrics_source,
+            "progressive_acc_metric_sources": progressive_acc_metric_sources,
+            "progressive_recall_policy": {
+                "dist_recall": "dist<=dist_th",
+                "dist_rot_recall": "dist<=dist_th and rot<=rot_th",
+                "dist_rot_scale_recall": (
+                    "dist<=dist_th and rot<=rot_th and scale<=scale_ratio_th"
+                ),
+                "rot_fallback_to_dist": thresh_cfg["rot"] is None,
+                "scale_fallback_to_dist_rot": thresh_cfg["scale_ratio"] is None,
+            },
+        }
         print_topN_acc_results(
-            acc_metrics,
+            {
+                **acc_metrics,
+                "progressive_acc_metrics": progressive_acc_metrics,
+                "legacy_acc_metrics_source": legacy_acc_metrics_source,
+                "progressive_acc_metric_sources": progressive_acc_metric_sources,
+            },
             err_stats,
             thresh_cfg,
-            report_meta={
-                "integrate_scale": scale_ratio_th is not None,
-                "scale_select_mode": scale_select_mode,
-            },
+            report_title=str(tag),
+            report_meta=report_meta,
         )
+        if return_details:
+            return {
+                "report_title": str(tag),
+                "thresholds": dict(thresh_cfg),
+                "report_meta": dict(report_meta),
+                "acc_metrics": acc_metrics,
+                "progressive_acc_metrics": progressive_acc_metrics,
+                "err_stats": err_stats,
+                "n_eval": int(min_len),
+            }
         return acc_metrics
 
     def report_spatial_classification(self, pred_pdf_3d_all, q_label_3d_all, title):

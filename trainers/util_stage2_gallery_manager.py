@@ -10,6 +10,7 @@ import tqdm
 @dataclass
 class Stage2ReferenceGalleryLayoutConfig:
     mode: str = "rc_rot_scale"
+    n_bins_4d: object = None
     overlap: float = 0.5
     fixed_rot: float = 0.0
     fixed_scale: object = None
@@ -51,7 +52,7 @@ class Stage2ReferenceGalleryBank:
     @staticmethod
     def _normalize_mode(mode):
         mode = str(mode).strip().lower()
-        valid_modes = ("rc", "rc_rot", "rc_scale", "rc_rot_scale")
+        valid_modes = ("rc", "rc_rot", "rc_scale", "rc_rot_scale", "n_bins_4d")
         if mode not in valid_modes:
             raise ValueError(f"layout mode must be one of {valid_modes}, got {mode}")
         return mode
@@ -120,6 +121,17 @@ class Stage2ReferenceGalleryBank:
         cfg.mode = self._normalize_mode(cfg.mode)
         cfg.scale_mode = self._normalize_scale_mode(cfg.scale_mode)
 
+        if cfg.mode == "n_bins_4d":
+            n_bins = np.asarray(cfg.n_bins_4d, dtype=np.int32).reshape(-1)
+            if n_bins.size != 4 or (n_bins <= 0).any():
+                raise ValueError("n_bins_4d must be length-4 with positive entries.")
+            cfg.n_bins_4d = tuple(int(v) for v in n_bins.tolist())
+            cfg.fixed_rot = float(cfg.fixed_rot)
+            cfg.fixed_scale = None if cfg.fixed_scale is None else float(cfg.fixed_scale)
+            cfg.delta_rot_deg = float(cfg.delta_rot_deg)
+            cfg.n_scales = int(cfg.n_bins_4d[3])
+            return cfg
+
         if not (0 <= float(cfg.overlap) < 1):
             raise ValueError("overlap must be in [0, 1).")
 
@@ -146,6 +158,26 @@ class Stage2ReferenceGalleryBank:
         rot_values_deg = -180.0 + torch.arange(n_rot, dtype=torch.float32) * float(delta_rot_deg)
         return torch.deg2rad(rot_values_deg)
 
+    @staticmethod
+    def _build_uniform_axis_values(axis_min, axis_max, n_bins):
+        n_bins = int(n_bins)
+        if n_bins <= 0:
+            raise ValueError("n_bins must be > 0.")
+        axis_min = float(axis_min)
+        axis_max = float(axis_max)
+        if axis_max <= axis_min:
+            raise ValueError(f"axis_max must be > axis_min, got ({axis_min}, {axis_max})")
+        bin_size = (axis_max - axis_min) / float(n_bins)
+        return axis_min + (torch.arange(n_bins, dtype=torch.float32) + 0.5) * bin_size
+
+    @staticmethod
+    def _build_uniform_rot_values(n_rot):
+        n_rot = int(n_rot)
+        if n_rot <= 0:
+            raise ValueError("n_rot must be > 0.")
+        centers = (torch.arange(n_rot, dtype=torch.float32) + 0.5) * (2.0 * np.pi / float(n_rot)) - np.pi
+        return ((centers + np.pi) % (2.0 * np.pi)) - np.pi
+
     def _build_scale_values(self, n_scales, scale_mode):
         scale_values, satimgsize_values = self.sat_dataset.mk_sacle_levels(
             n_level=int(n_scales),
@@ -169,6 +201,76 @@ class Stage2ReferenceGalleryBank:
             return False
         first_shape = tuple(int(v) for v in grid_shapes[0])
         return all(tuple(int(v) for v in shape) == first_shape for shape in grid_shapes)
+
+    def _build_shared_overlap_rc_grid(self, overlap):
+        # Use one reference crop size for overlap-mode layouts so rc is independent of the scale axis.
+        ref_scale = float(self._get_scale_mean())
+        ref_crop_px = ref_scale * float(self.sat_dataset.scale_ref_m) / float(self.sat_dataset.geo_res_m)
+        nrcs_flat, grid_shape = self._build_rc_grid(satimgsize2crop=ref_crop_px, overlap=overlap)
+        row_values = nrcs_flat[:, 0].reshape(grid_shape[0], grid_shape[1])[:, 0]
+        col_values = nrcs_flat[:, 1].reshape(grid_shape[0], grid_shape[1])[0, :]
+        meta = {
+            "shared_rc_grid": True,
+            "rc_grid_reference_scale": ref_scale,
+            "rc_grid_reference_crop_px": float(ref_crop_px),
+            "row_centers_nrc_range": (
+                float(row_values[0].item()),
+                float(row_values[-1].item()),
+            ),
+            "col_centers_nrc_range": (
+                float(col_values[0].item()),
+                float(col_values[-1].item()),
+            ),
+        }
+        return nrcs_flat, grid_shape, meta
+
+    def _build_coords_from_n_bins(self, cfg):
+        n_nr, n_nc, n_rot, n_scale = [int(v) for v in cfg.n_bins_4d]
+        nr_min, nr_max = self.sat_dataset.nr2sample_range
+        nc_min, nc_max = self.sat_dataset.nc2sample_range
+
+        row_values = self._build_uniform_axis_values(nr_min, nr_max, n_nr)
+        col_values = self._build_uniform_axis_values(nc_min, nc_max, n_nc)
+        rot_values = self._build_uniform_rot_values(n_rot)
+        scale_values, satimgsize_values = self._build_scale_values(n_scale, cfg.scale_mode)
+
+        rr, cc, rot_grid, scale_grid = torch.meshgrid(
+            row_values,
+            col_values,
+            rot_values,
+            scale_values.to(torch.float32),
+            indexing="ij",
+        )
+        coords_gallery = torch.stack([rr, cc, rot_grid, scale_grid], dim=-1).reshape(-1, 4)
+
+        fixed_rot = float(rot_values[0].item()) if n_rot == 1 else None
+        fixed_scale = float(scale_values[0].item()) if n_scale == 1 else None
+        delta_rot_deg = None if n_rot <= 1 else float(360.0 / n_rot)
+
+        meta = {
+            "fixed_scale": fixed_scale,
+            "fixed_rot": fixed_rot,
+            "delta_rot_deg": delta_rot_deg,
+            "rot_values": rot_values.tolist(),
+            "scale_values": scale_values.tolist(),
+            "satimgsize_values": satimgsize_values.tolist(),
+            "crop_sizes_px": satimgsize_values.tolist(),
+            "grid_shapes_rc": [[int(n_nr), int(n_nc)] for _ in range(n_scale)],
+            "gallery_shape": [int(n_nr), int(n_nc), int(n_rot), int(n_scale)],
+            "n_bins_4d": [int(n_nr), int(n_nc), int(n_rot), int(n_scale)],
+            "n_rot": int(n_rot),
+            "n_scale": int(n_scale),
+            "is_regular_grid_4d": True,
+            "row_centers_nrc_range": (
+                float(row_values[0].item()),
+                float(row_values[-1].item()),
+            ),
+            "col_centers_nrc_range": (
+                float(col_values[0].item()),
+                float(col_values[-1].item()),
+            ),
+        }
+        return coords_gallery, meta
 
     def _build_rc_coords(self, cfg):
         fixed_scale = self._resolve_fixed_scale(cfg.fixed_scale)
@@ -232,30 +334,18 @@ class Stage2ReferenceGalleryBank:
 
     def _build_rc_scale_coords(self, cfg):
         scale_values, satimgsize_values = self._build_scale_values(cfg.n_scales, cfg.scale_mode)
-        gallery_coords = []
-        grid_shapes = []
+        nrcs_flat, grid_shape, shared_rc_meta = self._build_shared_overlap_rc_grid(cfg.overlap)
+        n_pos = int(nrcs_flat.shape[0])
+        n_scale = int(scale_values.numel())
 
-        for scale_val, satimgsize2crop in zip(scale_values, satimgsize_values):
-            nrcs_flat, grid_shape = self._build_rc_grid(satimgsize2crop=satimgsize2crop.item(), overlap=cfg.overlap)
-            coords_scale = torch.cat(
-                [
-                    nrcs_flat,
-                    torch.full((nrcs_flat.shape[0], 1), float(cfg.fixed_rot), dtype=torch.float32),
-                    torch.full((nrcs_flat.shape[0], 1), float(scale_val.item()), dtype=torch.float32),
-                ],
-                dim=-1,
-            )
-            gallery_coords.append(coords_scale)
-            grid_shapes.append(list(grid_shape))
+        nrc_rep = nrcs_flat[:, None, :].expand(-1, n_scale, -1)
+        rot_rep = torch.full((n_pos, n_scale, 1), float(cfg.fixed_rot), dtype=torch.float32)
+        scale_rep = scale_values[None, :, None].expand(n_pos, -1, 1)
+        coords_gallery = torch.cat([nrc_rep, rot_rep, scale_rep], dim=-1).reshape(-1, 4)
 
-        coords_gallery = torch.cat(gallery_coords, dim=0)
-        is_regular = self._all_grid_shapes_same(grid_shapes)
-        n_bins_4d = None
-        gallery_shape = None
-        if is_regular:
-            grid_h, grid_w = grid_shapes[0]
-            n_bins_4d = [int(grid_h), int(grid_w), 1, int(scale_values.numel())]
-            gallery_shape = list(n_bins_4d)
+        grid_shapes = [list(grid_shape) for _ in range(n_scale)]
+        n_bins_4d = [int(grid_shape[0]), int(grid_shape[1]), 1, int(n_scale)]
+        gallery_shape = list(n_bins_4d)
 
         meta = {
             "fixed_scale": None,
@@ -268,38 +358,28 @@ class Stage2ReferenceGalleryBank:
             "gallery_shape": gallery_shape,
             "n_bins_4d": n_bins_4d,
             "n_rot": 1,
-            "n_scale": int(scale_values.numel()),
-            "is_regular_grid_4d": bool(is_regular),
+            "n_scale": int(n_scale),
+            "is_regular_grid_4d": True,
+            **shared_rc_meta,
         }
         return coords_gallery, meta
 
     def _build_rc_rot_scale_coords(self, cfg):
         scale_values, satimgsize_values = self._build_scale_values(cfg.n_scales, cfg.scale_mode)
         rot_values = self._build_rot_values(cfg.delta_rot_deg)
-        gallery_coords = []
-        grid_shapes = []
+        nrcs_flat, grid_shape, shared_rc_meta = self._build_shared_overlap_rc_grid(cfg.overlap)
+        n_pos = int(nrcs_flat.shape[0])
+        n_rot = int(rot_values.numel())
+        n_scale = int(scale_values.numel())
 
-        for scale_val, satimgsize2crop in zip(scale_values, satimgsize_values):
-            nrcs_flat, grid_shape = self._build_rc_grid(satimgsize2crop=satimgsize2crop.item(), overlap=cfg.overlap)
-            nrcs_expanded = nrcs_flat.unsqueeze(1).expand(-1, rot_values.numel(), -1)
-            rot_expanded = rot_values[None, :, None].expand(nrcs_flat.shape[0], -1, 1)
-            scale_expanded = torch.full(
-                (nrcs_flat.shape[0], rot_values.numel(), 1),
-                float(scale_val.item()),
-                dtype=torch.float32,
-            )
-            coords_scale = torch.cat([nrcs_expanded, rot_expanded, scale_expanded], dim=-1).reshape(-1, 4)
-            gallery_coords.append(coords_scale)
-            grid_shapes.append(list(grid_shape))
+        nrc_rep = nrcs_flat[:, None, None, :].expand(-1, n_rot, n_scale, -1)
+        rot_rep = rot_values[None, :, None, None].expand(n_pos, -1, n_scale, 1)
+        scale_rep = scale_values[None, None, :, None].expand(n_pos, n_rot, -1, 1)
+        coords_gallery = torch.cat([nrc_rep, rot_rep, scale_rep], dim=-1).reshape(-1, 4)
 
-        coords_gallery = torch.cat(gallery_coords, dim=0)
-        is_regular = self._all_grid_shapes_same(grid_shapes)
-        n_bins_4d = None
-        gallery_shape = None
-        if is_regular:
-            grid_h, grid_w = grid_shapes[0]
-            n_bins_4d = [int(grid_h), int(grid_w), int(rot_values.numel()), int(scale_values.numel())]
-            gallery_shape = list(n_bins_4d)
+        grid_shapes = [list(grid_shape) for _ in range(n_scale)]
+        n_bins_4d = [int(grid_shape[0]), int(grid_shape[1]), int(n_rot), int(n_scale)]
+        gallery_shape = list(n_bins_4d)
 
         meta = {
             "fixed_scale": None,
@@ -312,9 +392,10 @@ class Stage2ReferenceGalleryBank:
             "grid_shapes_rc": grid_shapes,
             "gallery_shape": gallery_shape,
             "n_bins_4d": n_bins_4d,
-            "n_rot": int(rot_values.numel()),
-            "n_scale": int(scale_values.numel()),
-            "is_regular_grid_4d": bool(is_regular),
+            "n_rot": int(n_rot),
+            "n_scale": int(n_scale),
+            "is_regular_grid_4d": True,
+            **shared_rc_meta,
         }
         return coords_gallery, meta
 
@@ -322,7 +403,9 @@ class Stage2ReferenceGalleryBank:
         cfg = self._validate_layout_cfg(layout_cfg)
         self.layout_cfg = cfg
 
-        if cfg.mode == "rc":
+        if cfg.mode == "n_bins_4d":
+            coords_gallery, meta = self._build_coords_from_n_bins(cfg)
+        elif cfg.mode == "rc":
             coords_gallery, meta = self._build_rc_coords(cfg)
         elif cfg.mode == "rc_rot":
             coords_gallery, meta = self._build_rc_rot_coords(cfg)
@@ -345,7 +428,7 @@ class Stage2ReferenceGalleryBank:
             "layout_cfg": asdict(cfg),
             "scene_name": getattr(self.sat_dataset, "name", None),
             "mode": cfg.mode,
-            "overlap": float(cfg.overlap),
+            "overlap": None if cfg.mode == "n_bins_4d" else float(cfg.overlap),
             "scale_mode": cfg.scale_mode,
             "n_points": int(self.coords_gallery.shape[0]),
             "gallery_has_rot": self._has_effective_rotation(meta.get("rot_values", [])),
@@ -467,6 +550,9 @@ class Stage2ReferenceGalleryBank:
             "delta_rot_deg": self.meta.get("delta_rot_deg", None),
             "crop_sizes_px": self.meta.get("crop_sizes_px", None),
             "grid_shapes_rc": self.meta.get("grid_shapes_rc", None),
+            "shared_rc_grid": self.meta.get("shared_rc_grid", None),
+            "rc_grid_reference_scale": self.meta.get("rc_grid_reference_scale", None),
+            "rc_grid_reference_crop_px": self.meta.get("rc_grid_reference_crop_px", None),
             "has_feats": self.feats_gallery is not None,
             "has_index": self.faiss_index is not None,
         }

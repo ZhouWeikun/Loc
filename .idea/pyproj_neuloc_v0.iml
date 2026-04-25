@@ -11,6 +11,8 @@
       <excludeFolder url="file://$MODULE_DIR$/train_img_encoder/exps" />
       <excludeFolder url="file://$MODULE_DIR$/train_map_multimlp" />
       <excludeFolder url="file://$MODULE_DIR$/train_map_singlemlp" />
+      <excludeFolder url="file://$MODULE_DIR$/train_img_encoder" />
+      <excludeFolder url="file://$MODULE_DIR$/evaluate_img_encoder" />
     </content>
     <content url="file://$MODULE_DIR$/train_img_encoder/datasets_custom/datasets" />
     <content url="file://$MODULE_DIR$/../pyproj_pylib_zwk/raster_handler" />

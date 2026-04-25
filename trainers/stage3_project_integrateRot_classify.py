@@ -3442,7 +3442,7 @@ class MetricNetTrainer(GridHashFitTrainer):
 
         # 1. 优化器
         from tool.util_mk_optimizer import create_optimizer_w_temple
-        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam')
+        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam', opt=self.opt)
 
         # 2. 加载checkpoint
         begin_epoch = self._load_checkpoint(

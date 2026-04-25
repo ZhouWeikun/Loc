@@ -192,17 +192,70 @@ def compute_topN_acc_given_threshold(
     - 支持 rot_th_deg 为 None。此时只评价 2D 位置精度 (只要 dist 合格即视为 Hit)。
     - Scale 采用倍率误差计算，定义为 max(pred/gt, gt/pred)，完美预测时为 1.0x。
     """
-    return compute_topk_acc_from_coords(
+    dist_metrics, errors = compute_topk_acc_from_coords(
         coords_pred,
         coords_gt,
         dist_th=dist_th,
-        rot_th_deg=rot_th_deg,
-        scale_ratio_th=scale_ratio_th,
+        rot_th_deg=None,
+        scale_ratio_th=None,
         k_values=k_values,
     )
+    dist_metrics = {str(k): float(v) for k, v in dist_metrics.items()}
+
+    progressive_acc_metrics = {
+        "dist_recall": dict(dist_metrics),
+    }
+    progressive_acc_metric_sources = {
+        "dist_recall": "computed",
+    }
+
+    if rot_th_deg is None:
+        progressive_acc_metrics["dist_rot_recall"] = dict(progressive_acc_metrics["dist_recall"])
+        progressive_acc_metric_sources["dist_rot_recall"] = "alias_of_dist_recall"
+    else:
+        dist_rot_metrics, _ = compute_topk_acc_from_coords(
+            coords_pred,
+            coords_gt,
+            dist_th=dist_th,
+            rot_th_deg=rot_th_deg,
+            scale_ratio_th=None,
+            k_values=k_values,
+        )
+        progressive_acc_metrics["dist_rot_recall"] = {str(k): float(v) for k, v in dist_rot_metrics.items()}
+        progressive_acc_metric_sources["dist_rot_recall"] = "computed"
+
+    if scale_ratio_th is None:
+        progressive_acc_metrics["dist_rot_scale_recall"] = dict(progressive_acc_metrics["dist_rot_recall"])
+        progressive_acc_metric_sources["dist_rot_scale_recall"] = "alias_of_dist_rot_recall"
+    else:
+        dist_rot_scale_metrics, _ = compute_topk_acc_from_coords(
+            coords_pred,
+            coords_gt,
+            dist_th=dist_th,
+            rot_th_deg=rot_th_deg,
+            scale_ratio_th=scale_ratio_th,
+            k_values=k_values,
+        )
+        progressive_acc_metrics["dist_rot_scale_recall"] = {
+            str(k): float(v) for k, v in dist_rot_scale_metrics.items()
+        }
+        progressive_acc_metric_sources["dist_rot_scale_recall"] = "computed"
+
+    if scale_ratio_th is not None:
+        legacy_acc_metrics_source = "dist_rot_scale_recall"
+    elif rot_th_deg is not None:
+        legacy_acc_metrics_source = "dist_rot_recall"
+    else:
+        legacy_acc_metrics_source = "dist_recall"
+
+    legacy_metrics = dict(progressive_acc_metrics[legacy_acc_metrics_source])
+    legacy_metrics["progressive_acc_metrics"] = progressive_acc_metrics
+    legacy_metrics["legacy_acc_metrics_source"] = legacy_acc_metrics_source
+    legacy_metrics["progressive_acc_metric_sources"] = progressive_acc_metric_sources
+    return legacy_metrics, errors
 
 
-def print_topN_acc_results(metrics, errors, thresholds, report_meta=None):
+def print_topN_acc_results(metrics, errors, thresholds, report_meta=None, report_title="Fine Accuracy Report"):
     """
     美化打印精细评估结果。
 
@@ -212,13 +265,49 @@ def print_topN_acc_results(metrics, errors, thresholds, report_meta=None):
     - 支持 Scale 倍率阈值与倍率误差显示。
     - 包含 Top-1 的 Mean 和 Median 误差统计。
     """
-    print_topk_eval_results(
-        metrics,
-        errors,
-        thresholds,
-        report_title="Fine Accuracy Report",
-        report_meta=report_meta,
-    )
+    report_meta = dict(report_meta or {})
+    progressive_acc_metrics = metrics.get("progressive_acc_metrics", None) if isinstance(metrics, dict) else None
+    if not isinstance(progressive_acc_metrics, dict):
+        print_topk_eval_results(
+            metrics,
+            errors,
+            thresholds,
+            report_title=report_title,
+            report_meta=report_meta,
+        )
+        return
+
+    sections = [
+        ("dist_recall", "Dist Recall", {"norm_dist": thresholds.get("norm_dist"), "rot": None, "scale_ratio": None}),
+        (
+            "dist_rot_recall",
+            "Dist+Rot Recall",
+            {"norm_dist": thresholds.get("norm_dist"), "rot": thresholds.get("rot"), "scale_ratio": None},
+        ),
+        (
+            "dist_rot_scale_recall",
+            "Dist+Rot+Scale Recall",
+            {
+                "norm_dist": thresholds.get("norm_dist"),
+                "rot": thresholds.get("rot"),
+                "scale_ratio": thresholds.get("scale_ratio"),
+            },
+        ),
+    ]
+
+    for group_key, section_title, section_thresholds in sections:
+        section_metrics = progressive_acc_metrics.get(group_key, None)
+        if not isinstance(section_metrics, dict):
+            continue
+        section_meta = dict(report_meta)
+        section_meta["integrate_scale"] = section_thresholds.get("scale_ratio") is not None
+        print_topk_eval_results(
+            section_metrics,
+            errors,
+            section_thresholds,
+            report_title=f"{report_title} | {section_title}",
+            report_meta=section_meta,
+        )
 
 
 def compute_top_k_accuracy(pred_pdf, gt_labels, k_values=[1, 4, 9, 16, 50], dim_order="HWO"):

@@ -12,6 +12,141 @@ from .dataset_neuloc_4d  import UAVDataset, SatDataset
 from torch.utils.data import DataLoader
 import time
 
+
+def _sample_uniform_nrcs_cpu(num_samples, row_range, col_range):
+    rows = np.random.uniform(row_range[0], row_range[1], size=num_samples).astype(np.float32)
+    cols = np.random.uniform(col_range[0], col_range[1], size=num_samples).astype(np.float32)
+    return np.stack([rows, cols], axis=-1)
+
+
+def _sample_outside_exclusion_box_cpu(nrc, threshold, row_range, col_range, total_num_negatives):
+    nr_min = max(row_range[0], float(nrc[0]) - float(threshold))
+    nr_max = min(row_range[1], float(nrc[0]) + float(threshold))
+    nc_min = max(col_range[0], float(nrc[1]) - float(threshold))
+    nc_max = min(col_range[1], float(nrc[1]) + float(threshold))
+
+    regions = []
+
+    def add_region(r0, r1, c0, c1):
+        height = float(r1) - float(r0)
+        width = float(c1) - float(c0)
+        area = height * width
+        if height > 0 and width > 0 and area > 0:
+            regions.append((float(r0), float(r1), float(c0), float(c1), area))
+
+    add_region(row_range[0], nr_min, col_range[0], col_range[1])
+    add_region(nr_max, row_range[1], col_range[0], col_range[1])
+    add_region(nr_min, nr_max, col_range[0], nc_min)
+    add_region(nr_min, nr_max, nc_max, col_range[1])
+
+    if not regions:
+        return _sample_uniform_nrcs_cpu(total_num_negatives, row_range, col_range)
+
+    areas = np.array([region[-1] for region in regions], dtype=np.float64)
+    probs = areas / areas.sum()
+    region_indices = np.random.choice(len(regions), size=total_num_negatives, p=probs)
+
+    neg_samples = np.zeros((total_num_negatives, 2), dtype=np.float32)
+    for region_idx, (r0, r1, c0, c1, _) in enumerate(regions):
+        mask = region_indices == region_idx
+        count = int(mask.sum())
+        if count <= 0:
+            continue
+        neg_samples[mask, 0] = np.random.uniform(r0, r1, size=count).astype(np.float32)
+        neg_samples[mask, 1] = np.random.uniform(c0, c1, size=count).astype(np.float32)
+    return neg_samples
+
+
+def _compute_reject_box_conflicts(pos_nrcs, neg_nrcs, threshold):
+    pos = torch.as_tensor(pos_nrcs, dtype=torch.float32).reshape(-1, 2)
+    neg = torch.as_tensor(neg_nrcs, dtype=torch.float32)
+    neg_shape = neg.shape[:-1]
+    neg_flat = neg.reshape(-1, 2)
+    delta = torch.abs(neg_flat.unsqueeze(1) - pos.unsqueeze(0))
+    conflicts = ((delta[..., 0] <= float(threshold)) & (delta[..., 1] <= float(threshold))).any(dim=1)
+    return conflicts.reshape(neg_shape)
+
+
+def _sample_outside_all_reject_boxes_cpu(pos_nrcs, threshold, row_range, col_range, total_num_negatives):
+    if total_num_negatives <= 0:
+        return torch.zeros((0, 2), dtype=torch.float32)
+
+    collected = []
+    target = int(total_num_negatives)
+    candidate_count = max(target * 4, 64)
+
+    for _ in range(6):
+        candidates = _sample_uniform_nrcs_cpu(candidate_count, row_range, col_range)
+        conflicts = _compute_reject_box_conflicts(pos_nrcs, candidates, threshold).reshape(-1)
+        valid = torch.from_numpy(candidates)[~conflicts]
+        if valid.numel() > 0:
+            collected.append(valid.to(dtype=torch.float32))
+        current = sum(chunk.shape[0] for chunk in collected)
+        if current >= target:
+            break
+        candidate_count = max(candidate_count * 2, 64)
+
+    if collected:
+        valid_pool = torch.cat(collected, dim=0)
+        if valid_pool.shape[0] >= target:
+            keep_idx = torch.randperm(valid_pool.shape[0])[:target]
+            return valid_pool[keep_idx]
+        refill_idx = torch.randint(valid_pool.shape[0], (target - valid_pool.shape[0],))
+        return torch.cat([valid_pool, valid_pool[refill_idx]], dim=0)
+
+    print(
+        "[UAVSatPairDataset] warning: no valid batch-aware negatives found outside reject boxes; "
+        "falling back to uniform random coordinates."
+    )
+    return torch.from_numpy(_sample_uniform_nrcs_cpu(target, row_range, col_range))
+
+
+def _sanitize_batch_aware_negatives(batch, sat_dataset, reject_threshold_factor=1.1):
+    if sat_dataset is None:
+        return batch
+
+    coords_uav = batch.get('coords_uav', None)
+    coords_uav_neg = batch.get('coords_uav_neg', None)
+    satimgs_neg = batch.get('satimgs_neg', None)
+    if coords_uav is None or coords_uav_neg is None or satimgs_neg is None:
+        return batch
+
+    threshold = float(sat_dataset.halfimg_radius_nrc) * float(reject_threshold_factor)
+    pos_nrcs = coords_uav[:, :2].detach().cpu().to(dtype=torch.float32)
+    neg_nrcs = coords_uav_neg[..., :2].detach().cpu().to(dtype=torch.float32)
+    conflict_mask = _compute_reject_box_conflicts(pos_nrcs, neg_nrcs, threshold)
+    n_conflicts = int(conflict_mask.sum().item())
+    if n_conflicts <= 0:
+        return batch
+
+    replacement_nrcs = _sample_outside_all_reject_boxes_cpu(
+        pos_nrcs=pos_nrcs,
+        threshold=threshold,
+        row_range=sat_dataset.nr2sample_range,
+        col_range=sat_dataset.nc2sample_range,
+        total_num_negatives=n_conflicts,
+    )
+
+    coords_uav_neg = coords_uav_neg.clone()
+    satimgs_neg = satimgs_neg.clone()
+    flat_mask = conflict_mask.reshape(-1)
+    flat_coords = coords_uav_neg.reshape(-1, coords_uav_neg.shape[-1])
+    flat_coords[flat_mask, :2] = replacement_nrcs.to(dtype=flat_coords.dtype, device=flat_coords.device)
+
+    replacement_coords = flat_coords[flat_mask]
+    recropped, _ = sat_dataset.crop_satimg_by_4d_coords_fast(
+        replacement_coords,
+        random_satmap=True,
+        return_satmap_id=True,
+    )
+
+    flat_satimgs = satimgs_neg.reshape(-1, *satimgs_neg.shape[2:])
+    flat_satimgs[flat_mask] = recropped.to(device=flat_satimgs.device, dtype=flat_satimgs.dtype)
+    batch['coords_uav_neg'] = coords_uav_neg
+    batch['satimgs_neg'] = satimgs_neg
+    return batch
+
+
 class UAVSatPairDataset(Dataset):
     """
     UAV-Satellite配对数据集
@@ -34,6 +169,7 @@ class UAVSatPairDataset(Dataset):
         n_neg_per_query=1,
         sat_as_query=False,
         nrc_reject_sampling=False,
+        pair_alignment_mode='full_4d',
     ):
         """
         Args:
@@ -48,13 +184,43 @@ class UAVSatPairDataset(Dataset):
         self.device = device
         self.n_neg_per_query = n_neg_per_query
         self.nrc_reject_sampling = nrc_reject_sampling
+        self.pair_alignment_mode = str(pair_alignment_mode).strip().lower()
+        if self.pair_alignment_mode not in {'full_4d', 'xy_only'}:
+            raise ValueError(
+                f"pair_alignment_mode must be 'full_4d' or 'xy_only', got {pair_alignment_mode!r}"
+            )
         # 如果有多时相遥感图，则遥感图之间可相互检索
         self.n_satmaps = len(self.sat_dataset.satmaps)
         self.sat_as_query = sat_as_query
+        self.pos_scale_mean = self._compute_positive_scale_mean()
         if self.sat_as_query and self.n_satmaps <= 1:
             raise ValueError(
                 f"sat_as_query=True requires at least 2 satellite images, got n_satmaps={self.n_satmaps}"
             )
+
+    def _compute_positive_scale_mean(self):
+        if hasattr(self.uav_dataset, 'uav_coords_4d_torch_train'):
+            coords = self.uav_dataset.uav_coords_4d_torch_train
+        elif hasattr(self.uav_dataset, 'uav_coords_4d_torch'):
+            coords = self.uav_dataset.uav_coords_4d_torch
+        else:
+            coords = None
+
+        if coords is not None and torch.is_tensor(coords) and coords.numel() > 0:
+            return float(coords[:, 3].detach().cpu().to(dtype=torch.float32).mean().item())
+
+        if hasattr(self.uav_dataset, 'uav_scales') and len(self.uav_dataset.uav_scales) > 0:
+            return float(np.asarray(self.uav_dataset.uav_scales, dtype=np.float32).mean())
+
+        return 1.0
+
+    def _build_positive_sat_coords(self, coords_uav):
+        coords_pos = coords_uav.clone() if torch.is_tensor(coords_uav) else torch.as_tensor(coords_uav, dtype=torch.float32)
+        if self.pair_alignment_mode == 'xy_only':
+            coords_pos = coords_pos.clone()
+            coords_pos[2] = 0.0
+            coords_pos[3] = float(self.pos_scale_mean)
+        return coords_pos
 
     def __len__(self):
         return len(self.uav_dataset)
@@ -75,10 +241,11 @@ class UAVSatPairDataset(Dataset):
         # 1. 从UAV数据集获取UAV图像和增强后的4D坐标
         # UAVDataset现在直接返回 (uavimg, coords_4d)
         uavimg, coords_uav = self.uav_dataset[index]
+        coords_sat_pos = self._build_positive_sat_coords(coords_uav)
 
         # 2. 采样正样本卫星图（与UAV位置对应）
         satimgs_pos, satmap_id_pos = self.sat_dataset.crop_satimg_by_4d_coords_fast(
-            coords_uav, return_satmap_id=True
+            coords_sat_pos, return_satmap_id=True
         )
 
         # 多遥感图时，为 query/pos 各自随机采样一张图
@@ -120,7 +287,7 @@ class UAVSatPairDataset(Dataset):
                 # 采样负样本坐标（排除正样本附近区域）
                 nrcs_neg = self._sample_negatives_cpu(
                     nrcs_uav_np,
-                    threshold=self.sat_dataset.halfimg_radius_nrc*1.1,
+                    threshold=self.sat_dataset.halfimg_radius_nrc,
                     row_range=self.sat_dataset.nr2sample_range,
                     col_range=self.sat_dataset.nc2sample_range,
                     total_num_negatives=self.n_neg_per_query,
@@ -154,6 +321,7 @@ class UAVSatPairDataset(Dataset):
             'satimgs_pos': satimgs_pos,
             'satimgs_neg': satimgs_neg,
             'coords_uav': coords_uav,
+            'coords_sat_pos': coords_sat_pos,
             'coords_uav_neg': coords_uav_neg,
             'satmap_id_pos': satmap_id_pos,
             'satmap_id_neg': satmap_id_neg,
@@ -360,40 +528,19 @@ class UAVSatPairDataset(Dataset):
             nrcs = nrcs[np.newaxis, :]
 
         nrc = nrcs[0]
-
-        # 定义排除区域
-        nr_min = max(row_range[0], nrc[0] - threshold)
-        nr_max = min(row_range[1], nrc[0] + threshold)
-        nc_min = max(col_range[0], nrc[1] - threshold)
-        nc_max = min(col_range[1], nrc[1] + threshold)
-
-        # 采样负样本
-        neg_samples = []
-        attempts = 0
-        max_attempts = total_num_negatives * 100
-
-        while len(neg_samples) < total_num_negatives and attempts < max_attempts:
-            # 在整个范围内随机采样
-            nr_cand = np.random.uniform(row_range[0], row_range[1])
-            nc_cand = np.random.uniform(col_range[0], col_range[1])
-
-            # 检查是否在排除区域外
-            if not (nr_min <= nr_cand <= nr_max and nc_min <= nc_cand <= nc_max):
-                neg_samples.append([nr_cand, nc_cand])
-
-            attempts += 1
-
-        # 如果采样失败，使用边界点
-        while len(neg_samples) < total_num_negatives:
-            neg_samples.append([row_range[0], col_range[0]])
-
-        neg_samples = np.array(neg_samples[:total_num_negatives], dtype=np.float32)
+        neg_samples = _sample_outside_exclusion_box_cpu(
+            nrc=nrc,
+            threshold=threshold,
+            row_range=row_range,
+            col_range=col_range,
+            total_num_negatives=total_num_negatives,
+        )
         if ret_tensor:
             return torch.from_numpy(neg_samples)
         return neg_samples
 
 
-def collate_uav_sat_pair(batch):
+def collate_uav_sat_pair(batch, sat_dataset=None, reject_batch_aware=False, reject_threshold_factor=1.1):
     """
     自定义collate函数，将多个样本组合成batch
 
@@ -427,6 +574,12 @@ def collate_uav_sat_pair(batch):
             'coords_uav_neg': coords_uav_neg,
             'satimgs_neg': satimgs_neg,
         })
+        if reject_batch_aware:
+            dict2return = _sanitize_batch_aware_negatives(
+                dict2return,
+                sat_dataset=sat_dataset,
+                reject_threshold_factor=reject_threshold_factor,
+            )
 
     #samples from satimg as query:
     has_satimg_query = ('satimg_query' in  batch[0]) and ( batch[0]['coords_sat_query'] is not None)

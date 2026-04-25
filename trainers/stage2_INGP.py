@@ -26,6 +26,7 @@ import shutil
 import yaml
 import numpy as np
 from collections.abc import Sequence
+from datetime import datetime
 
 # 添加项目根目录到路径
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -324,6 +325,14 @@ class GridHashFitTrainer(BaseTrainer):
         # Stage 2组件（将被训练）
         self.grid = components.create_grid()
         self.feat_grid_dim = int(getattr(self.grid, 'output_dim', self.feat_q_dim))
+        self.hash_lod_aggregator = components.create_hash_lod_aggregator()
+        if self.hash_lod_aggregator is not None:
+            if self.feat_grid_dim != self.hash_lod_aggregator.input_dim:
+                raise ValueError(
+                    f"HashGrid output_dim={self.feat_grid_dim} does not match "
+                    f"hash_lod_aggregator input_dim={self.hash_lod_aggregator.input_dim}"
+                )
+            self.feat_grid_dim = self.hash_lod_aggregator.output_dim
         # version1：
         self.grid_mlp = components.create_grid_mlp(
             self.feat_grid_dim,
@@ -384,6 +393,8 @@ class GridHashFitTrainer(BaseTrainer):
             'grid': self.grid,
             'grid_mlp': self.grid_mlp
         }
+        if self.hash_lod_aggregator is not None:
+            self.param2optimize['hash_lod_aggregator'] = self.hash_lod_aggregator
 
         self.param2freeze = {
             'vis_encoder': self.vis_encoder,
@@ -405,6 +416,8 @@ class GridHashFitTrainer(BaseTrainer):
             ('grid', self.grid),
             ('grid_mlp', self.grid_mlp),
         ]
+        if self.hash_lod_aggregator is not None:
+            component_status.append(('hash_lod_aggregator', self.hash_lod_aggregator))
         for module_name, module in component_status:
             total_params, trainable_params = self._count_module_params(module)
             status = 'trainable' if trainable_params > 0 else 'frozen'
@@ -493,6 +506,12 @@ class GridHashFitTrainer(BaseTrainer):
         return feats_grid
 
 
+    def _postprocess_grid_feats(self, feats_grid, coords_6d):
+        if self.hash_lod_aggregator is None:
+            return feats_grid
+        return self.hash_lod_aggregator(feats_grid, coords_6d)
+
+
     def _ensure_stage2_eval_runtime(self):
         """确保Stage 2评估所需的数据集和坐标归一化器已初始化"""
         if not hasattr(self, 'sat_dataset') or self.sat_dataset is None:
@@ -531,6 +550,7 @@ class GridHashFitTrainer(BaseTrainer):
             coords_6d = self.coord_normer.raw_to_norm(coords_4d, append_linear_rot=True)
             grid_coords_3d = torch.cat([coords_6d[:, 0:2], coords_6d[:, -1:]], dim=-1)
             feats_grid = self._get_feats_fm_grid(grid_coords_3d)
+            feats_grid = self._postprocess_grid_feats(feats_grid, coords_6d)
             coords_encoded = self.pos_encoder_grid(coords_6d[:, :5])
             feats_grid = self.grid_mlp(inputs=feats_grid, condition_features=coords_encoded)
             if normalize:
@@ -761,6 +781,7 @@ class GridHashFitTrainer(BaseTrainer):
             )
 
         eval_res = None
+        eval_artifact_paths = None
         if retrieval_eval_cfg is not None:
             retrieval_evaluator = Stage2RetrievalEvaluator(
                 trainer=self,
@@ -779,8 +800,22 @@ class GridHashFitTrainer(BaseTrainer):
                     eval_log_lines=eval_log_lines,
                     load2test=getattr(self.opt, "load2test", ""),
                 )
+                try:
+                    eval_artifact_paths = self._save_stage2_gallery_eval_artifacts(
+                        save_dir=gallery_state["gallery_save_dir"],
+                        gallery_bank=gallery_bank,
+                        eval_res=eval_res,
+                        layout_cfg=layout_cfg,
+                        feature_cfg=feature_cfg,
+                        retrieval_eval_cfg=retrieval_eval_cfg,
+                        ckpt_path=gallery_state["ckpt_path"],
+                        load2test=getattr(self.opt, "load2test", ""),
+                    )
+                except Exception as exc:
+                    print(f"[Stage2 Gallery Eval] failed to save structured artifacts: {exc}")
 
         gallery_state["eval_res"] = eval_res
+        gallery_state["eval_artifact_paths"] = eval_artifact_paths
         return gallery_state
 
 
@@ -798,6 +833,36 @@ class GridHashFitTrainer(BaseTrainer):
             except Exception:
                 return value
         return value
+
+    @staticmethod
+    def _to_pt_bundleable(value):
+        if isinstance(value, dict):
+            return {str(k): GridHashFitTrainer._to_pt_bundleable(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [GridHashFitTrainer._to_pt_bundleable(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(GridHashFitTrainer._to_pt_bundleable(v) for v in value)
+        if torch.is_tensor(value):
+            return value.detach().cpu()
+        if isinstance(value, np.ndarray):
+            return torch.from_numpy(value.copy())
+        if hasattr(value, "item") and callable(getattr(value, "item")):
+            try:
+                return value.item()
+            except Exception:
+                return value
+        return value
+
+    @staticmethod
+    def _resolve_stage2_gallery_eval_paths(save_dir):
+        return {
+            "manifest": os.path.join(save_dir, "stage2_retrieval_eval_manifest.json"),
+            "config_json": os.path.join(save_dir, "stage2_retrieval_eval_config.json"),
+            "report_json": os.path.join(save_dir, "stage2_retrieval_eval_report.json"),
+            "bundle_pt": os.path.join(save_dir, "stage2_retrieval_eval_bundle.pt"),
+            "legacy_summary_json": os.path.join(save_dir, "eval_summary.json"),
+            "legacy_report_txt": os.path.join(save_dir, "eval_report.txt"),
+        }
 
 
     @staticmethod
@@ -817,6 +882,20 @@ class GridHashFitTrainer(BaseTrainer):
             "delta_rot_deg": float(cfg.delta_rot_deg),
             "n_scales": int(cfg.n_scales),
             "scale_mode": str(cfg.scale_mode),
+        }
+
+    @staticmethod
+    def _normalize_feature_cfg_for_report(feature_cfg):
+        if feature_cfg is None:
+            return None
+        cfg = feature_cfg if isinstance(feature_cfg, Stage2ReferenceGalleryFeatureConfig) else (
+            Stage2ReferenceGalleryFeatureConfig(**feature_cfg)
+        )
+        return {
+            "chunk_size_coords": int(cfg.chunk_size_coords),
+            "normalize_feats": bool(cfg.normalize_feats),
+            "build_faiss": bool(cfg.build_faiss),
+            "show_progress": bool(cfg.show_progress),
         }
 
 
@@ -845,6 +924,110 @@ class GridHashFitTrainer(BaseTrainer):
             "report_rot_error": bool(cfg.report_rot_error),
             "report_scale_error": bool(cfg.report_scale_error),
         }
+
+    @classmethod
+    def _build_stage2_gallery_eval_config_payload(
+            cls,
+            gallery_bank,
+            gallery_save_dir,
+            layout_cfg,
+            feature_cfg,
+            retrieval_eval_cfg,
+            ckpt_path,
+            load2test="",
+    ):
+        return {
+            "schema_version": 1,
+            "scene_name": str(getattr(gallery_bank.sat_dataset, "name", gallery_bank.meta.get("scene_name", ""))),
+            "stage2_ckpt": ckpt_path,
+            "load2test": load2test,
+            "gallery_save_dir": gallery_save_dir,
+            "layout_cfg": cls._normalize_layout_cfg_for_report(layout_cfg),
+            "feature_cfg": cls._normalize_feature_cfg_for_report(feature_cfg),
+            "retrieval_eval_cfg": cls._normalize_eval_cfg_for_report(retrieval_eval_cfg),
+            "gallery_summary": cls._to_jsonable(gallery_bank.summary()),
+            "gallery_meta": cls._to_jsonable(gallery_bank.meta),
+        }
+
+    @classmethod
+    def _build_stage2_gallery_eval_report_payload(cls, eval_res):
+        return {
+            "schema_version": 1,
+            "scene_name": str(eval_res.get("scene_name", "")),
+            "report_title": str(eval_res.get("report_title", "")),
+            "n_queries": int(eval_res.get("n_queries", 0)),
+            "n_eval": int(eval_res.get("n_eval", eval_res.get("n_queries", 0))),
+            "k_values": cls._to_jsonable(eval_res.get("k_values", [])),
+            "thresholds": cls._to_jsonable(eval_res.get("thresholds", {})),
+            "metrics": cls._to_jsonable(eval_res.get("metrics", {})),
+            "shared_errors": cls._to_jsonable(eval_res.get("shared_errors", {})),
+            "recall@k": cls._to_jsonable(eval_res.get("recall@k", {})),
+            "runtime_gallery_summary": cls._to_jsonable(eval_res.get("runtime_gallery_summary", {})),
+            "error_rc_norm": cls._to_jsonable(eval_res.get("error_rc_norm", None)),
+            "error_rc_norm_median": cls._to_jsonable(eval_res.get("error_rc_norm_median", None)),
+            "error_rc_meter": cls._to_jsonable(eval_res.get("error_rc_meter", None)),
+            "error_rc_meter_median": cls._to_jsonable(eval_res.get("error_rc_meter_median", None)),
+            "error_rot_deg": cls._to_jsonable(eval_res.get("error_rot_deg", None)),
+            "error_rot_deg_median": cls._to_jsonable(eval_res.get("error_rot_deg_median", None)),
+            "error_scale_ratio": cls._to_jsonable(eval_res.get("error_scale_ratio", None)),
+            "error_scale_ratio_median": cls._to_jsonable(eval_res.get("error_scale_ratio_median", None)),
+            "error_scale_normed": cls._to_jsonable(eval_res.get("error_scale_normed", None)),
+            "error_scale_normed_median": cls._to_jsonable(eval_res.get("error_scale_normed_median", None)),
+        }
+
+    @classmethod
+    def _save_stage2_gallery_eval_artifacts(
+            cls,
+            save_dir,
+            gallery_bank,
+            eval_res,
+            layout_cfg,
+            feature_cfg,
+            retrieval_eval_cfg,
+            ckpt_path,
+            load2test="",
+    ):
+        os.makedirs(save_dir, exist_ok=True)
+        paths = cls._resolve_stage2_gallery_eval_paths(save_dir)
+        config_payload = cls._build_stage2_gallery_eval_config_payload(
+            gallery_bank=gallery_bank,
+            gallery_save_dir=save_dir,
+            layout_cfg=layout_cfg,
+            feature_cfg=feature_cfg,
+            retrieval_eval_cfg=retrieval_eval_cfg,
+            ckpt_path=ckpt_path,
+            load2test=load2test,
+        )
+        report_payload = cls._build_stage2_gallery_eval_report_payload(eval_res)
+        manifest_payload = {
+            "schema_version": 1,
+            "saved_at_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "scene_name": str(eval_res.get("scene_name", "")),
+            "gallery_save_dir": save_dir,
+            "files": {
+                "config_json": os.path.basename(paths["config_json"]),
+                "report_json": os.path.basename(paths["report_json"]),
+                "bundle_pt": os.path.basename(paths["bundle_pt"]),
+                "legacy_summary_json": os.path.basename(paths["legacy_summary_json"]),
+                "legacy_report_txt": os.path.basename(paths["legacy_report_txt"]),
+            },
+        }
+        bundle_payload = {
+            "schema_version": 1,
+            "config": config_payload,
+            "report": report_payload,
+            "coords_topk": eval_res.get("coords_topk", None),
+            "coords_gt": eval_res.get("coords_gt", None),
+        }
+
+        with open(paths["manifest"], "w", encoding="utf-8") as f:
+            json.dump(cls._to_jsonable(manifest_payload), f, ensure_ascii=False, indent=2, sort_keys=True)
+        with open(paths["config_json"], "w", encoding="utf-8") as f:
+            json.dump(cls._to_jsonable(config_payload), f, ensure_ascii=False, indent=2, sort_keys=True)
+        with open(paths["report_json"], "w", encoding="utf-8") as f:
+            json.dump(cls._to_jsonable(report_payload), f, ensure_ascii=False, indent=2, sort_keys=True)
+        torch.save(cls._to_pt_bundleable(bundle_payload), paths["bundle_pt"])
+        return paths
 
 
     @classmethod
@@ -1081,6 +1264,7 @@ class GridHashFitTrainer(BaseTrainer):
 
                 # 从Grid提取特征
                 feats_grid = self._get_feats_fm_grid(torch.concatenate([coords_all_6d[:,:2],coords_all_6d[:,-1:]],dim=-1))  # [2B, feat_dim]
+                feats_grid = self._postprocess_grid_feats(feats_grid, coords_all_6d)
                 # 位置编码
                 # version1:
                 coords_all_encoded = self.pos_encoder_grid(
@@ -1102,16 +1286,16 @@ class GridHashFitTrainer(BaseTrainer):
 
                 # 计算loss（Grid特征拟合视觉特征）
                 # mseloss_abs
-                # loss = loss_mse(feats_grid.squeeze(), feats_vis.squeeze()) * 1000
+                loss = loss_mse(feats_grid.squeeze(), feats_vis.squeeze()) * 1000
                 # mseloss_rel
-                vis_mean = feats_vis.mean(dim=0, keepdim=True)
-                grid_mean = feats_grid.mean(dim=0, keepdim=True)
-                vis_res = feats_vis - vis_mean
-                grid_res = feats_grid - grid_mean
-                loss_abs = TF.mse_loss(feats_grid, feats_vis)
-                loss_res = TF.mse_loss(grid_res, vis_res)
-                loss = 0.5 * loss_abs + 0.5 * loss_res
-                loss = loss * 10000
+                # vis_mean = feats_vis.mean(dim=0, keepdim=True)
+                # grid_mean = feats_grid.mean(dim=0, keepdim=True)
+                # vis_res = feats_vis - vis_mean
+                # grid_res = feats_grid - grid_mean
+                # loss_abs = TF.mse_loss(feats_grid, feats_vis)
+                # loss_res = TF.mse_loss(grid_res, vis_res)
+                # loss = 0.5 * loss_abs + 0.5 * loss_res
+                # loss = loss * 1000
 
                 # 反向传播
                 self.optimizer.zero_grad()
@@ -1397,6 +1581,7 @@ class GridHashFitTrainer(BaseTrainer):
 
             # 从Grid提取特征
             feats_grid = self._get_feats_fm_grid(grid_coords_3d)
+            feats_grid = self._postprocess_grid_feats(feats_grid, coords_all_6d)
 
             # 位置编码：使用前5维（nr, nc, cos, sin, log_scale）
             coords_all_encoded = self.pos_encoder_grid(coords_all_6d[:, :5])

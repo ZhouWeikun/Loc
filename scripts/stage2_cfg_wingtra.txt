@@ -1,0 +1,121 @@
+# Stage-2 batch override template
+#
+# Usage:
+#   python scripts/run_stage2_with_overrides.py \
+#     --cfg-var-file gen_fm_exps/run_yamls/stage2_cfg_var.txt
+#
+# Notes:
+# - Supports one-line experiments, or multi-line experiments terminated by `;`.
+# - Each experiment is a comma-separated list of key=value pairs.
+# - You can use leaf keys directly when they are unique.
+# - To patch the temporary nerf_hash YAML for one experiment, use:
+#     gridcfg.<key>=value
+# - Uncomment and edit one or more examples below before use.
+
+
+#interval91,zurich,dinov2,adF4:
+#exp_name=stage2_zurich_interval91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B1_PN1cubie,
+#selected_scene_name=zurich,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4/epoch007_zurichR83ME136m_zurichR72mME210m.pth
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=1,
+#load2train=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B1_PN1cubie_3/epoch990.pth,
+#num_epochs=2000;
+
+#interval91,zuchwil,dinov2,adF4:
+#exp_name=stage2_zuchwil_interval91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B1_PN1cubie,
+#selected_scene_name=zuchwil,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4/epoch007_zurichR83ME136m_zurichR72mME210m.pth
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=1,
+#load2train=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zuchwil_interval91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B1_PN1cubie/epoch990.pth,
+#num_epochs=2000;
+
+
+#segment91,zurich,dinov2,adF4:
+#exp_name=stage2_zurich_segment91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_PN1cubie,
+#selected_scene_name=zurich,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_2/epoch010.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_2/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2;
+#load2train=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_segment91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_PN1cubie/epoch810_R73ME288m.pth;
+
+#segment91,zuchwil,dinov2,adF4:
+#exp_name=stage2_zuchwil_segment91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie,
+#selected_scene_name=zuchwil,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_2/epoch010.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_2/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2;
+
+#segment91,zurich,dinov3,debug:
+#exp_name=stage2_zurich_segment91_tripleLoss_singleEdge_hardest_fmMask_dinov3_codebookW18_mlpH1024B1_PN1cubie,
+#selected_scene_name=zurich,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_tripleLoss_singleEdge_hardest_fmMask_dinov3/epoch087_zurichR70MidErr28m_zuchwilR60MidErr35m.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_tripleLoss_singleEdge_hardest_fmMask_dinov3/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=1;
+
+
+###############################stage1 wRejectSampling########################
+##interval91,zurich,dinov2,adF4,w_reject_sampling:
+#exp_name=stage2_zurich_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_PN1cubie,
+#selected_scene_name=zurich,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/epoch004_zurichR1=82MedErr23m_zuchwilR1=76MedErr=25m.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2;
+#
+##interval91,zuchwil,dinov2,adF4,w_reject_sampling:
+#exp_name=stage2_zuchwil_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_PN1cubie,
+#selected_scene_name=zuchwil,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/epoch004_zurichR1=82MedErr23m_zuchwilR1=76MedErr=25m.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2;
+#
+##segment91,zurich,dinov2,adF4,w_reject_sampling:
+##exp_name=stage2_zurich_segment91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_PN1cubie,
+##selected_scene_name=zurich,
+##load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch007_zurichR1=80MidErr24m_zuchwilR1=70MidErr28m.pth,
+##inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml,
+##grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2;
+#
+##segment91,zuchwil,dinov2,adF4,w_reject_sampling:
+#exp_name=stage2_zuchwil_segment91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_PN1cubie,
+#selected_scene_name=zuchwil,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch007_zurichR1=80MidErr24m_zuchwilR1=70MidErr28m.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2;
+
+
+
+#gem:
+##interval91,zurich,dinov2,adF4,w_reject_sampling:
+#exp_name=stage2_zurich_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_gem_codebookW18_mlpH1024B2_PN1cubie,
+#selected_scene_name=zurich,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_gem/epoch020_Zurich_R1=83_MedErr=23m_zuchwil_R1=75_MedErr=25m.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_gem/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2;
+#
+###interval91,zuchwil,dinov2,adF4,w_reject_sampling:
+#exp_name=stage2_zuchwil_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_gem_codebookW18_mlpH1024B2_PN1cubie,
+#selected_scene_name=zuchwil,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_gem/epoch020_Zurich_R1=83_MedErr=23m_zuchwil_R1=75_MedErr=25m.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_gem/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2;
+
+
+#salad with msloss:
+#exp_name=stage2_zurich_interval91_wRejectSampling_msloss_dinov2_adF4_salad_codebookW18_mlpH1024B2_PN1cubie,
+#selected_scene_name=zurich,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_msLoss_dinov2_adF4_salad_2/epoch016_zurich_R1=72.27_MedErr=27.5m_zuchwil_R1=66.44_MedErr=32.8m.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_msLoss_dinov2_adF4_salad_2/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2,
+#num_epochs=1000;
+
+#salad with msloss + hash_agg:
+exp_name=stage2_zurich_interval91_wRejectSampling_msloss_dinov2_adF4_salad_codebookW18_mlpH512B1_PN1cubie_hash_agg,
+selected_scene_name=zurich,
+load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_msLoss_dinov2_adF4_salad_2/epoch016_zurich_R1=72.27_MedErr=27.5m_zuchwil_R1=66.44_MedErr=32.8m.pth,
+inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_msLoss_dinov2_adF4_salad_2/opts.yaml,
+network_setting.p_grid_config_yaml=trainer_depends/configs/nerf_hash_wingtra_lodagg1024.yaml,
+network_setting.hash_lod_aggregator.enabled=true,
+grid_mlp_hidden_dim=512,grid_mlp_num_blocks=1,
+num_epochs=1000;

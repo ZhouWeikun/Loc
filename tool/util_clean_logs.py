@@ -1,7 +1,7 @@
 import os
 import shutil
 import argparse
-from typing import List, Set
+from typing import List, Optional, Set
 
 
 def _list_subdirs(directory: str) -> List[str]:
@@ -11,6 +11,17 @@ def _list_subdirs(directory: str) -> List[str]:
         name for name in os.listdir(directory)
         if os.path.isdir(os.path.join(directory, name))
     )
+
+
+def _find_prefix_ckpt(log_name: str, ckpt_names: Set[str]) -> Optional[str]:
+    """
+    若 log_name 形如 "{ckpt_name}_{extra}"（ckpt 名是 log 名的前缀），
+    返回匹配的 ckpt_name；否则返回 None。
+    """
+    for ckpt_name in ckpt_names:
+        if log_name.startswith(ckpt_name + "_"):
+            return ckpt_name
+    return None
 
 
 def _collect_ckpt_exp_names(
@@ -64,17 +75,31 @@ def clean_logs_without_ckpt(
     )
     log_exp_names = _list_subdirs(log_root)
 
+    # 精确匹配：log 名与 ckpt 名完全相同 → 保留
+    # 前缀匹配但多余后缀：log 名 = ckpt名_xx → 也删除
+    # 无任何匹配 → 删除
     logs_to_delete = [
         exp_name for exp_name in log_exp_names
         if exp_name not in ckpt_exp_names
     ]
+
+    # 在待删除列表中，区分"前缀匹配但有多余后缀"与"完全无关"两类
+    prefix_variant_logs = []   # log名 = 某ckpt名 + "_xx"
+    unrelated_logs = []        # log名与任何ckpt名均无前缀关系
+    for exp_name in logs_to_delete:
+        matched_ckpt = _find_prefix_ckpt(exp_name, ckpt_exp_names)
+        if matched_ckpt is not None:
+            prefix_variant_logs.append((exp_name, matched_ckpt))
+        else:
+            unrelated_logs.append(exp_name)
 
     print("-" * 60)
     print(f"Checkpoint root: {ckpt_root}")
     print(f"Log root: {log_root}")
     print(f"Found {len(ckpt_exp_names)} valid ckpt experiment folders.")
     print(f"Found {len(log_exp_names)} log folders.")
-    print(f"Unmatched log folders: {len(logs_to_delete)}")
+    print(f"Unmatched log folders: {len(logs_to_delete)} "
+          f"(unrelated: {len(unrelated_logs)}, prefix-variant: {len(prefix_variant_logs)})")
     print("-" * 60)
 
     if not logs_to_delete:
@@ -96,9 +121,14 @@ def clean_logs_without_ckpt(
 
     print("\n" + "=" * 20 + " SUMMARY " + "=" * 20)
     action_verb = "to be deleted" if dry_run else "deleted"
-    print(f"Log folders {action_verb} ({len(logs_to_delete)}):")
-    for exp_name in logs_to_delete:
-        print(f"  - {exp_name}")
+    if unrelated_logs:
+        print(f"[No ckpt match] Log folders {action_verb} ({len(unrelated_logs)}):")
+        for exp_name in unrelated_logs:
+            print(f"  - {exp_name}")
+    if prefix_variant_logs:
+        print(f"[Prefix match, extra suffix] Log folders {action_verb} ({len(prefix_variant_logs)}):")
+        for exp_name, base_ckpt in prefix_variant_logs:
+            print(f"  - {exp_name}  (base ckpt: {base_ckpt})")
     print("=" * 49)
 
     return logs_to_delete

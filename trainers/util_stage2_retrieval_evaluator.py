@@ -12,10 +12,14 @@ class Stage2RetrievalEvalConfig:
     use_train_uav: bool = False
     batch_size: int = 32
     num_workers: int = 0
+    show_progress: bool = True
     query_rot2uniform: bool = False
     query_scale2uniform: bool = False
     k_values: tuple = (1, 5, 10, 20, 50)
     dist_th: float = None
+    dist_lambda: float = None
+    rot_th_deg: float = None
+    scale_ratio_th: float = None
     max_queries: int = None
     print_results: bool = True
     report_title: str = "Stage2 Retrieval Eval"
@@ -133,8 +137,13 @@ class Stage2RetrievalEvaluator:
     def _resolve_thresholds(self, sat_dataset, cfg):
         dist_th = cfg.dist_th
         if dist_th is None:
-            dist_th = float(sat_dataset.halfimg_radius_nrc)
-        return {"norm_dist": float(dist_th), "rot": None, "scale_ratio": None}
+            dist_lambda = 1.0 if cfg.dist_lambda is None else float(cfg.dist_lambda)
+            dist_th = float(sat_dataset.halfimg_radius_nrc) * dist_lambda
+        return {
+            "norm_dist": float(dist_th),
+            "rot": None if cfg.rot_th_deg is None else float(cfg.rot_th_deg),
+            "scale_ratio": None if cfg.scale_ratio_th is None else float(cfg.scale_ratio_th),
+        }
 
     @staticmethod
     def _compute_top1_arrays(coords_topk_all, coords_gt_all):
@@ -229,8 +238,8 @@ class Stage2RetrievalEvaluator:
             coords_topk_all,
             coords_gt_all,
             dist_th=thresholds["norm_dist"],
-            rot_th_deg=None,
-            scale_ratio_th=None,
+            rot_th_deg=thresholds["rot"],
+            scale_ratio_th=thresholds["scale_ratio"],
             k_values=cfg.k_values,
         )
 
@@ -295,6 +304,8 @@ class Stage2RetrievalEvaluator:
         return {
             "scene_name": scene_name,
             "n_queries": int(coords_gt_all.shape[0]),
+            "n_eval": int(coords_gt_all.shape[0]),
+            "report_title": str(cfg.report_title),
             "k_values": tuple(int(k) for k in cfg.k_values),
             "thresholds": thresholds,
             "metrics": metrics,
@@ -303,8 +314,14 @@ class Stage2RetrievalEvaluator:
             "coords_gt": coords_gt_all,
             "recall@k": recall_at_k,
             "error_rc_norm": float(dist_top1.mean().item()),
+            "error_rc_norm_median": float(dist_top1.median().item()),
             "error_rc_meter": float(dist_meter_top1.mean().item()),
+            "error_rc_meter_median": float(dist_meter_top1.median().item()),
             "error_rot_deg": float(rot_deg_top1.mean().item()),
+            "error_rot_deg_median": float(rot_deg_top1.median().item()),
+            "error_scale_ratio": float(torch.exp(scale_log_top1).mean().item()),
+            "error_scale_ratio_median": float(torch.exp(scale_log_top1).median().item()),
             "error_scale_normed": float(scale_normed_top1.mean().item()),
+            "error_scale_normed_median": float(scale_normed_top1.median().item()),
             "runtime_gallery_summary": self.gallery_bank.summary(),
         }

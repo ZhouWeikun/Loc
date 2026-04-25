@@ -138,7 +138,7 @@ train_img_encoder/exps/
 train_map_mutimlp_skzm/exps/
 train_map_singlemlp/exps/
 train_img_encoder/exps
-evaluate_img_encdoer/
+evaluate_img_encoder/
 trainers/.exps/
 trainers/exps/
 trainers/vis_results/

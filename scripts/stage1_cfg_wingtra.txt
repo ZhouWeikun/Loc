@@ -1,0 +1,120 @@
+# Stage-1 batch override template
+#
+# Usage:
+#   python scripts/run_stage1_with_overrides.py \
+#     --cfg-var-file scripts/stage1_cfg_wingtra.txt \
+#     --base-yaml trainer_depends/configs/stage1_visual_encoder_wingtra.yaml
+#
+# Notes:
+# - One experiment per line.
+# - Each line is a comma-separated list of key=value pairs.
+# - You can use leaf keys directly when they are unique.
+# - Uncomment and edit one or more examples below before use.
+
+
+#############train with salad:##########
+#exp_name = stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad,
+#split_train_ratio=0.9, split_mode=interval, reject_sampling=True, reject_batch_aware=True,
+#loss_type=tripleLoss_singleEdge_hardest_fm_mask,
+#backbone=dinov2,freeze_backbone=True,network_setting.adapter_config.enabled=True,
+#aggregator_type=salad,
+#batchsize_sat=384,batchsize_uav=32,
+#num_epochs=100;
+#
+#exp_name = stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad,
+#split_train_ratio=0.9, split_mode=segment, reject_sampling=True, reject_batch_aware=True,
+#loss_type=tripleLoss_singleEdge_hardest_fm_mask,
+#backbone=dinov2,freeze_backbone=True,network_setting.adapter_config.enabled=True,
+#aggregator_type=salad,
+#batchsize_sat=384,batchsize_uav=32,
+#num_epochs=50;
+#
+#
+#
+#
+#############train with netvlad:##########
+#exp_name = stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_netvlad,
+#split_train_ratio=0.9, split_mode=interval, reject_sampling=True, reject_batch_aware=True,
+#loss_type=tripleLoss_singleEdge_hardest_fm_mask,
+#backbone=dinov2,freeze_backbone=True,network_setting.backbone_config.num_trainable_blocks=2,network_setting.adapter_config.enabled=True,
+#aggregator_type=netvlad,
+#network_setting.aggregator_config.output_dim=1024,
+#network_setting.aggregator_config.num_clusters=16,
+#network_setting.aggregator_config.alpha=100.0,
+#network_setting.aggregator_config.normalize_input=True,
+#network_setting.aggregator_config.cluster_init.enabled=True,
+#network_setting.aggregator_config.cluster_init.descriptors_per_image=8,
+#network_setting.aggregator_config.cluster_init.max_batches=64,
+#network_setting.aggregator_config.cluster_init.max_descriptors=50000,
+#network_setting.aggregator_config.cluster_init.kmeans_iters=25,
+#network_setting.aggregator_config.cluster_init.seed=123,
+#network_setting.aggregator_config.cluster_init.save_artifact=True,
+#batchsize_sat=384,batchsize_uav=28,
+#num_epochs=100;
+#
+#exp_name = stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_netvlad,
+#split_train_ratio=0.9, split_mode=segment, reject_sampling=True, reject_batch_aware=True
+#loss_type=tripleLoss_singleEdge_hardest_fm_mask,
+#backbone=dinov2,freeze_backbone=True,network_setting.backbone_config.num_trainable_blocks=2,network_setting.adapter_config.enabled=True,
+#aggregator_type=netvlad,
+#network_setting.aggregator_config.output_dim=1024,
+#network_setting.aggregator_config.num_clusters=16,
+#network_setting.aggregator_config.alpha=100.0,
+#network_setting.aggregator_config.normalize_input=True,
+#network_setting.aggregator_config.cluster_init.enabled=True,
+#network_setting.aggregator_config.cluster_init.descriptors_per_image=8,
+#network_setting.aggregator_config.cluster_init.max_batches=64,
+#network_setting.aggregator_config.cluster_init.max_descriptors=50000,
+#network_setting.aggregator_config.cluster_init.kmeans_iters=25,
+#network_setting.aggregator_config.cluster_init.seed=123,
+#network_setting.aggregator_config.cluster_init.save_artifact=True,
+#batchsize_sat=384,batchsize_uav=28,
+#num_epochs=50;
+
+
+############train with gem:##########
+#exp_name = stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_gem,
+#split_train_ratio=0.9, split_mode=interval, reject_sampling=True, reject_batch_aware=True,
+#loss_type=tripleLoss_singleEdge_hardest_fm_mask,
+#backbone=dinov2,freeze_backbone=True,network_setting.adapter_config.enabled=True,
+#aggregator_type=gem,
+#network_setting.aggregator_config.output_dim=1024,
+#network_setting.aggregator_config.p=3.0,
+#batchsize_sat=384,batchsize_uav=32,
+#num_epochs=100;
+
+#infoNCE + salad:
+#exp_name = stage1_wingtra_interval91_wRejectSampling_infoNCE_dinov2_adF4_salad,
+#split_train_ratio=0.9, split_mode=interval, reject_sampling=True, reject_batch_aware=True,
+#loss_type=infonce,learning_setting.infonce_temperature=0.1,learning_setting.infonce_negative_mode=batch_and_explicit,
+#backbone=dinov2,freeze_backbone=True,network_setting.adapter_config.enabled=True,
+#aggregator_type=salad,
+#batchsize_sat=384,batchsize_uav=32,
+#num_epochs=100;
+#
+#exp_name = stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_gem,
+#split_train_ratio=0.9, split_mode=segment, reject_sampling=True, reject_batch_aware=True,
+#loss_type=tripleLoss_singleEdge_hardest_fm_mask,
+#backbone=dinov2,freeze_backbone=True,network_setting.adapter_config.enabled=True,
+#aggregator_type=gem,
+#network_setting.aggregator_config.output_dim=1024,
+#network_setting.aggregator_config.p=3.0,
+#batchsize_sat=384,batchsize_uav=32,
+#num_epochs=50;
+
+#ms_loss + salad:
+#exp_name = stage1_wingtra_interval91_wRejectSampling_msLoss_dinov2_adF4_salad,
+#split_train_ratio=0.9, split_mode=interval, reject_sampling=True, reject_batch_aware=True,
+#loss_type=MSLoss_torch,
+#backbone=dinov2,freeze_backbone=True,network_setting.adapter_config.enabled=True,
+#aggregator_type=salad,
+#batchsize_sat=384,batchsize_uav=32,
+#num_epochs=100;
+
+exp_name = stage1_wingtra_interval91_wRejectSampling_infonce_dinov2_adF4_salad,
+split_train_ratio=0.9, split_mode=interval, reject_sampling=True, reject_batch_aware=True,
+loss_type=infonce,
+backbone=dinov2,freeze_backbone=True,network_setting.adapter_config.enabled=True,
+aggregator_type=salad,
+batchsize_sat=384,batchsize_uav=32,
+num_epochs=100;

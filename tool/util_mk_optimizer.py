@@ -5,6 +5,8 @@ OPTIMIZER_TEMPLATES = {
         'momentum': 0.9,
         'nesterov': True,
         'param_groups': [
+            {'param_source': 'no_decay.adapter', 'lr': 1e-3, 'weight_decay': 0.0},
+            {'param_source': 'adapter', 'lr': 1e-3, 'weight_decay': 5e-4},
             # 专门放 bias / norm 的 no_decay
             {'param_source': 'no_decay', 'lr': 1e-3, 'weight_decay': 0.0},
             # 预训练 encoder：微调用非常小 lr，no_decay 分组在下方实施
@@ -21,6 +23,8 @@ OPTIMIZER_TEMPLATES = {
         'eps': 1e-8,
         'betas': (0.9, 0.999),
         'param_groups': [
+            {'param_source': 'no_decay.adapter', 'lr': 5e-5, 'weight_decay': 0.0},
+            {'param_source': 'adapter', 'lr': 5e-5, 'weight_decay': 1e-2},
             {'param_source': 'no_decay', 'lr': 5e-5, 'weight_decay': 0.0},
             # 微调 encoder：非常小的 lr 与适度 weight_decay（可用 1e-2 或更小）
             {'param_source': 'img_encoder', 'lr': 5e-5, 'weight_decay': 1e-2},
@@ -39,10 +43,12 @@ OPTIMIZER_TEMPLATES = {
             {'param_source': 'no_decay', 'lr': 5e-5, 'weight_decay': 0.0},
             {'param_source': 'img_encoder', 'lr': 5e-5, 'weight_decay': 1e-6},
             {'param_source': 'vis_encoder', 'lr': 5e-5, 'weight_decay': 1e-6},
+            {'param_source': 'adapter', 'lr': 5e-5, 'weight_decay': 1e-6},
+            {'param_source': 'no_decay.adapter', 'lr': 5e-5, 'weight_decay': 0.0},
             {'param_source': 'aggregator', 'lr': 1e-4, 'weight_decay': 1e-6},
             {'param_source': 'vis_aggregator', 'lr': 1e-4, 'weight_decay': 1e-6},
-            {'param_source': 'grid', 'lr': 1, 'weight_decay': 0},
-            {'param_source': 'grid_mlp', 'lr': 1e-2, 'weight_decay': 1e-6},
+            {'param_source': 'grid', 'lr': 1, 'weight_decay': 0}, #backbone=freezed->lr=1
+            {'param_source': 'grid_mlp', 'lr': 1e-2, 'weight_decay': 1e-6},#backbone=freezed->lr=1e-2
             {'param_source': 'metric_net', 'lr': 1e-3, 'weight_decay': 1e-6},
             {'param_source': 'projector', 'lr': 1e-4, 'weight_decay': 1e-6},
             {'param_source': 'rank_former', 'lr': 1e-3, 'weight_decay': 1e-6},
@@ -61,7 +67,10 @@ def _is_norm_or_bias_name(name: str) -> bool:
     n = name.lower()
     return ('bias' in n) or ('bn' in n) or ('layernorm' in n) or ('ln' in n) or ('norm' in n) or ('batchnorm' in n)
 
-def create_optimizer_w_temple(modules: dict[str, nn.Module], opt_template_name: str) -> optim.Optimizer:
+def _is_adapter_param_name(name: str) -> bool:
+    return 'adapter' in name.lower()
+
+def create_optimizer_w_temple(modules: dict[str, nn.Module], opt_template_name: str, opt=None) -> optim.Optimizer:
     """
     Robust builder that prevents duplicate parameters across param-groups.
     - modules: {'img_encoder': ..., 'mlp': ..., 'hash_grid': ...}
@@ -93,6 +102,52 @@ def create_optimizer_w_temple(modules: dict[str, nn.Module], opt_template_name: 
         if src is None or lr is None:
             continue
         group_wd = g.get('weight_decay', global_wd)
+
+        if src == 'no_decay.adapter':
+            group_params = []
+            for full_name, p in named_params.items():
+                if not p.requires_grad:
+                    continue
+                short_name = full_name.split('.', 1)[1] if '.' in full_name else full_name
+                if not _is_adapter_param_name(short_name):
+                    continue
+                if not _is_norm_or_bias_name(short_name):
+                    continue
+                pid = id(p)
+                if pid in assigned_param_ids:
+                    total_skipped_duplicates += 1
+                    continue
+                group_params.append(p)
+                assigned_param_ids.add(pid)
+                total_added += 1
+            if group_params:
+                param_groups.append({'params': group_params, 'lr': lr, 'weight_decay': 0.0})
+                print(f"  - no_decay.adapter: {len(group_params)} params, lr={lr:.2e}, wd=0.0")
+            else:
+                print("  - no_decay.adapter: matched 0 params.")
+            continue
+
+        if src == 'adapter':
+            group_params = []
+            for full_name, p in named_params.items():
+                if not p.requires_grad:
+                    continue
+                short_name = full_name.split('.', 1)[1] if '.' in full_name else full_name
+                if not _is_adapter_param_name(short_name):
+                    continue
+                pid = id(p)
+                if pid in assigned_param_ids:
+                    total_skipped_duplicates += 1
+                    continue
+                group_params.append(p)
+                assigned_param_ids.add(pid)
+                total_added += 1
+            if group_params:
+                param_groups.append({'params': group_params, 'lr': lr, 'weight_decay': group_wd})
+                print(f"  - adapter: {len(group_params)} params, lr={lr:.2e}, wd={group_wd:.2e}")
+            else:
+                print("  - adapter: matched 0 params.")
+            continue
 
         # handle no_decay (global)
         if src == 'no_decay':

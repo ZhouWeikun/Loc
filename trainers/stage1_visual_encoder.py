@@ -22,6 +22,7 @@ import time
 import sys
 import os
 import numpy as np
+from contextlib import nullcontext
 
 # 添加项目根目录到路径
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -145,34 +146,41 @@ class VisualEncoderTrainer(BaseTrainer):
     def _setup_trainable_params(self):
         """设置可训练参数"""
         freeze_backbone = bool(getattr(self.opt, 'freeze_backbone', True))
-        if freeze_backbone:
+        adapter_enabled = bool(getattr(self.opt, 'adapter_config', {}).get('enabled', False))
+        if freeze_backbone and not adapter_enabled:
             for param in self.vis_encoder.parameters():
                 param.requires_grad = False
 
         self.param2optimize = {'vis_aggregator': self.vis_aggregator}
         self.param2freeze = {}
-        if freeze_backbone:
-            self.param2freeze['vis_encoder'] = self.vis_encoder
-        else:
-            self.param2optimize['vis_encoder'] = self.vis_encoder
-
-        trainable_names = ', '.join(self.param2optimize.keys())
-        frozen_names = ', '.join(self.param2freeze.keys()) if self.param2freeze else '(none)'
         n_trainable_backbone_params = sum(
             param.numel() for param in self.vis_encoder.parameters() if param.requires_grad
         )
+        if n_trainable_backbone_params > 0:
+            self.param2optimize['vis_encoder'] = self.vis_encoder
+        else:
+            self.param2freeze['vis_encoder'] = self.vis_encoder
+
+        trainable_names = ', '.join(self.param2optimize.keys())
+        frozen_names = ', '.join(self.param2freeze.keys()) if self.param2freeze else '(none)'
 
         print(f"参数配置 (freeze_backbone={freeze_backbone}):")
         print(f"  可训练: {trainable_names}")
         print(f"  冻结:   {frozen_names}\n")
-        if not freeze_backbone:
-            print(f"  vis_encoder 可训练参数量: {n_trainable_backbone_params}\n")
+        print(f"  vis_encoder 可训练参数量: {n_trainable_backbone_params}\n")
 
     def _forward_train_vis_encoder(self, imgs_input):
-        if getattr(self.opt, 'freeze_backbone', True):
+        has_trainable_params = any(param.requires_grad for param in self.vis_encoder.parameters())
+        if not has_trainable_params:
             with torch.no_grad():
                 return self.vis_encoder(imgs_input)
         return self.vis_encoder(imgs_input)
+
+    def _autocast_context(self):
+        use_amp = bool(getattr(self.opt, "autocast", False)) and getattr(self.device, "type", "") == "cuda"
+        if not use_amp:
+            return nullcontext()
+        return torch.autocast(device_type="cuda", dtype=torch.float16)
 
 
     def _init_multi_scene_dataloader(self):
@@ -246,16 +254,22 @@ class VisualEncoderTrainer(BaseTrainer):
     def train(self):
         """Stage 1训练主循环"""
         opt = self.opt
+        use_amp = bool(opt.autocast) and getattr(self.device, "type", "") == "cuda"
 
         print("\n" + "🚀"*40)
         print("开始 Stage 1 训练: Visual Encoder (vis_aggregator)")
         print("🚀"*40 + "\n")
 
         # 0. 初始化GradScaler（如果使用autocast）
-        if opt.autocast:
+        if use_amp:
             from torch.cuda.amp import GradScaler
-            self.scaler = GradScaler()
+            self.scaler = GradScaler(enabled=True)
             print("✅ 启用混合精度训练 (AMP)")
+        elif opt.autocast:
+            self.scaler = None
+            print("⚠️ autocast=True 但当前设备不是 CUDA，AMP 已禁用。")
+        else:
+            self.scaler = None
 
         # 0.5 初始化可学习的权重损失（用于学习beta）
         from losses.CL_losses_w_weight import pairLoss_singleEdge_weightedHardest
@@ -271,7 +285,7 @@ class VisualEncoderTrainer(BaseTrainer):
 
         # 1. 优化器
         from tool.util_mk_optimizer import create_optimizer_w_temple
-        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam')
+        self.optimizer = create_optimizer_w_temple(self.param2optimize, 'adam', opt=self.opt)
 
         # 2. 加载checkpoint（如果继续训练）
         begin_epoch = self._load_checkpoint(
@@ -296,6 +310,11 @@ class VisualEncoderTrainer(BaseTrainer):
         step = 0
 
         self.logger.info(f"开始训练，共{num_epochs}个epoch")
+        if getattr(opt, "val", False):
+            val_freq = max(1, int(getattr(opt, "val_freq", 1) or 1))
+            self.logger.info(f"Stage 1 Recall评估已启用: val_freq={val_freq}")
+        else:
+            self.logger.info("Stage 1 Recall评估已禁用: val=False")
 
         for epoch in range(begin_epoch, num_epochs):
             self.logger.info(f'Epoch {epoch}/{num_epochs - 1}')
@@ -313,23 +332,24 @@ class VisualEncoderTrainer(BaseTrainer):
                     coords_neg = coords_neg.reshape(-1,*coords_neg.shape[2:])
 
                 #=====================处理图像特征=====================
-                imgs_input = torch.cat([uavimgs, satimgs_pos, satimgs_neg], dim=0)
-                feats_patch = self._forward_train_vis_encoder(imgs_input)
+                with self._autocast_context():
+                    imgs_input = torch.cat([uavimgs, satimgs_pos, satimgs_neg], dim=0)
+                    feats_patch = self._forward_train_vis_encoder(imgs_input)
 
-                # 聚合器处理（可训练）
-                feats_agg = self.vis_aggregator(feats_patch)  # [3B, feat_dim]
+                    # 聚合器处理（可训练）
+                    feats_agg = self.vis_aggregator(feats_patch)  # [3B, feat_dim]
 
-                # 分离query和reference特征
-                B = uavimgs.shape[0]
-                feats_q = feats_agg[:B]  # UAV特征
-                feats_ref = feats_agg[B:]  # SAT特征（正样本+负样本）
+                    # 分离query和reference特征
+                    B = uavimgs.shape[0]
+                    feats_q = feats_agg[:B]  # UAV特征
+                    feats_ref = feats_agg[B:]  # SAT特征（正样本+负样本）
 
-                # 计算特征距离矩阵
-                feat_dist_mat = torch.norm(
-                    feats_q.unsqueeze(1) - feats_ref.unsqueeze(0),
-                    p=2,
-                    dim=-1
-                )  # [B, 2B]
+                    # 计算特征距离矩阵
+                    feat_dist_mat = torch.norm(
+                        feats_q.unsqueeze(1) - feats_ref.unsqueeze(0),
+                        p=2,
+                        dim=-1
+                    )  # [B, 2B]
 
                 # =====================处理坐标&权重&loss=====================
                 # 由坐标计算坐标权重矩阵（与 feats_ref 顺序对齐：pos 在前，neg 在后）
@@ -365,7 +385,7 @@ class VisualEncoderTrainer(BaseTrainer):
 
                 # 反向传播
                 self.optimizer.zero_grad()
-                if opt.autocast:
+                if use_amp:
                     self.scaler.scale(loss).backward()
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
@@ -397,7 +417,7 @@ class VisualEncoderTrainer(BaseTrainer):
                     self.optimizer
                 )
             # 评估 Recall（可选）
-            # if getattr(opt, "val", False) and ((epoch + 1) % getattr(opt, "val_freq", 1) == 0):
+            if self._should_run_epoch_eval(epoch):
                 self.eval_recall(
                     use_train_uav=False,
                     overlap=getattr(opt, "val_overlap", 0.5),
@@ -425,6 +445,12 @@ class VisualEncoderTrainer(BaseTrainer):
                 backup_experiment(self.exp_dir2save, self.opt)
 
         self.logger.info("✅ Stage 1 训练完成！")
+
+    def _should_run_epoch_eval(self, epoch):
+        if not getattr(self.opt, "val", False):
+            return False
+        val_freq = max(1, int(getattr(self.opt, "val_freq", 1) or 1))
+        return ((epoch + 1) % val_freq == 0) or (epoch == getattr(self.opt, "num_epochs", 0) - 1)
 
 
     def eval_recall(self, use_train_uav=False, overlap=0.5, chunk_size_vis=1024,
@@ -568,6 +594,7 @@ class VisualEncoderTrainer(BaseTrainer):
             # 统计 Recall
             success_counts = {k: 0 for k in k_values}
             total_queries = 0
+            top1_dist_nrc_all = []
 
             _log(f"\n[Scene: {scene_name}] 开始评估，共 {len(uav_dataset)} 个 queries")
 
@@ -610,6 +637,7 @@ class VisualEncoderTrainer(BaseTrainer):
                     coords_uav[:, None, :2].cpu() - coords_topk[:, :, :2],
                     p=2, dim=-1
                 )
+                top1_dist_nrc_all.append(dist_nrc[:, 0])
                 hits = dist_nrc < sat_dataset.halfimg_radius_nrc
 
                 for k in k_values:
@@ -623,10 +651,26 @@ class VisualEncoderTrainer(BaseTrainer):
                 continue
 
             recall_dict = {f"recall@{k}": success_counts[k] / total_queries for k in k_values}
+            if top1_dist_nrc_all:
+                top1_dist_nrc = torch.cat(top1_dist_nrc_all, dim=0)
+                nrc2meter = float(sat_dataset.halfimg_radius_meter) / max(float(sat_dataset.halfimg_radius_nrc), 1e-8)
+                recall_dict.update({
+                    "top1_dist_nrc_mean": float(top1_dist_nrc.mean().item()),
+                    "top1_dist_nrc_median": float(torch.median(top1_dist_nrc).item()),
+                    "top1_dist_meter_mean": float(top1_dist_nrc.mean().item() * nrc2meter),
+                    "top1_dist_meter_median": float(torch.median(top1_dist_nrc).item() * nrc2meter),
+                })
             results_all[scene_name] = recall_dict
 
             info2log = " | ".join([f"R@{k}={recall_dict[f'recall@{k}']*100:.3f}%" for k in k_values])
             _log(f"[Scene: {scene_name}] {info2log} (N={total_queries})")
+            if "top1_dist_nrc_mean" in recall_dict:
+                _log(
+                    f"[Scene: {scene_name}] top1_dist_mean={recall_dict['top1_dist_nrc_mean']:.6f} nrc"
+                    f" | top1_dist_median={recall_dict['top1_dist_nrc_median']:.6f} nrc"
+                    f" | meter_mean={recall_dict['top1_dist_meter_mean']:.3f}m"
+                    f" | meter_median={recall_dict['top1_dist_meter_median']:.3f}m"
+                )
 
         _log("=" * 80)
         _log("Recall 评估完成")

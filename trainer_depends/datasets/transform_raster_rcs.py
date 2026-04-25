@@ -13,7 +13,11 @@ These helpers keep the existing call signatures used across the codebase.
 from functools import lru_cache
 
 import numpy as np
-from pyproj import CRS, Transformer
+try:
+    from pyproj import CRS, Transformer
+except Exception:
+    CRS = None
+    Transformer = None
 
 
 def _to_np(x):
@@ -22,6 +26,10 @@ def _to_np(x):
 
 @lru_cache(maxsize=32)
 def _get_transformer(source_epsg_code, target_epsg_code):
+    if CRS is None or Transformer is None:
+        raise ImportError(
+            "pyproj is required for CRS transformation when source_epsg_code != target_epsg_code."
+        )
     source = CRS.from_epsg(int(source_epsg_code))
     target = CRS.from_epsg(int(target_epsg_code))
     return Transformer.from_crs(source, target, always_xy=True)

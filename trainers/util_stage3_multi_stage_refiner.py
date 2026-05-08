@@ -2031,7 +2031,9 @@ class SeedModeSearchPipeline:
             print(f"[SeedMode][Q{query_id}] Before-Stage3 ready | n_mode={len(active_modes)}")
 
         modes_before_stage3 = [mode.clone() for mode in active_modes]
+        t_mode_opt = time.perf_counter() - t_query0
         modes_final = modes_before_stage3
+        t_stage3 = 0.0
         if self.final_mode_optimizer is not None and bool(self.config.stage3.enable) and len(modes_before_stage3) > 0:
             t0 = time.perf_counter()
             modes_final = self.final_mode_optimizer.optimize_modes(
@@ -2048,6 +2050,7 @@ class SeedModeSearchPipeline:
                 )
         elif verbose:
             print(f"[SeedMode][Q{query_id}] Stage3 skipped | n_mode={len(modes_before_stage3)}")
+        t_mode_plus_stage3 = time.perf_counter() - t_query0
 
         if self.final_mode_optimizer is not None and len(modes_final) > 0:
             stage_trace.add_record(
@@ -2092,8 +2095,9 @@ class SeedModeSearchPipeline:
         elif verbose:
             print(f"[SeedMode][Q{query_id}] Stage4 skipped")
 
+        t_query_total = time.perf_counter() - t_query0
         if verbose:
-            print(f"[SeedMode][Q{query_id}] Query done | total={time.perf_counter() - t_query0:.3f}s")
+            print(f"[SeedMode][Q{query_id}] Query done | total={t_query_total:.3f}s")
 
         return SeedModeSearchResult(
             query_id=query_id,
@@ -2108,5 +2112,15 @@ class SeedModeSearchPipeline:
                 "n_modes_init": len(modes_init),
                 "n_modes_before_stage3": len(modes_before_stage3),
                 "n_modes_final": len(modes_final),
+                "timing": {
+                    "seed_screen_s": float(t_seed),
+                    "seed_cloud_s": float(t_cloud),
+                    "mode_relocate_s": float(t_reloc),
+                    "mode_finalize_s": float(t_stage15_finalize),
+                    "mode_opt_s": float(t_mode_opt),
+                    "stage3_cma_s": float(t_stage3),
+                    "mode_plus_stage3_s": float(t_mode_plus_stage3),
+                    "query_total_s": float(t_query_total),
+                },
             },
         )

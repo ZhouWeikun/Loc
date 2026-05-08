@@ -641,6 +641,72 @@ class MetricNetTrainer(GridHashFitTrainer):
     analyze_feat_freq_band = util_analyze_feat_freq_band
     analyze_energy_field = util_analyze_energy_field
 
+    def _prepare_energy_field_sat_background(self, query_id=20, use_train_uav=False, local_zoom_wh=None, satimg_id=0):
+        """Crop a satellite background patch aligned with analyze_energy_field bounds."""
+        sat_dataset = self.sat_dataset
+
+        global_nr_min = float(sat_dataset.nr2sample_min)
+        global_nr_max = float(sat_dataset.nr2sample_max)
+        global_nc_min = float(sat_dataset.nc2sample_min)
+        global_nc_max = float(sat_dataset.nc2sample_max)
+
+        if local_zoom_wh is None:
+            start_nr, end_nr = global_nr_min, global_nr_max
+            start_nc, end_nc = global_nc_min, global_nc_max
+        else:
+            coords_attr = "uav_coords_4d_torch_train" if use_train_uav else "uav_coords_4d_torch_test"
+            if not hasattr(self.uav_dataset_train if use_train_uav else self.uav_dataset_test, coords_attr):
+                dataset = self.uav_dataset_train if use_train_uav else self.uav_dataset_test
+                _, coord_q = dataset[int(query_id)]
+            else:
+                dataset = self.uav_dataset_train if use_train_uav else self.uav_dataset_test
+                coord_q = getattr(dataset, coords_attr)[int(query_id)]
+
+            zoom_nr, zoom_nc = local_zoom_wh
+            half_nr = (global_nr_max - global_nr_min) * float(zoom_nr) / 2
+            half_nc = (global_nc_max - global_nc_min) * float(zoom_nc) / 2
+            center_nr = float(coord_q[0].item())
+            center_nc = float(coord_q[1].item())
+
+            start_nr = max(global_nr_min, center_nr - half_nr)
+            end_nr = min(global_nr_max, center_nr + half_nr)
+            start_nc = max(global_nc_min, center_nc - half_nc)
+            end_nc = min(global_nc_max, center_nc + half_nc)
+
+        try:
+            sat_patch = sat_dataset.crop_rect_satimg(
+                nrc_topleft=(start_nr, start_nc),
+                nrc_rightbottom=(end_nr, end_nc),
+                type="tensor",
+                satimg_id=satimg_id,
+            )
+        except TypeError:
+            sat_patch = sat_dataset.crop_rect_satimg(
+                nrc_topleft=(start_nr, start_nc),
+                nrc_rightbottom=(end_nr, end_nc),
+                type="tensor",
+            )
+        return sat_dataset.denormalize_img(sat_patch)
+
+    @staticmethod
+    def _estimate_energy_field_grid_from_satimg(sat_img, long_side=192, min_side=32):
+        """Choose an NR/NC grid resolution that follows a satellite patch aspect ratio."""
+        sat_shape = sat_img.shape
+        if len(sat_shape) == 3 and sat_shape[0] in {1, 3, 4}:
+            sat_h, sat_w = int(sat_shape[1]), int(sat_shape[2])
+        else:
+            sat_h, sat_w = int(sat_shape[0]), int(sat_shape[1])
+
+        long_side = int(long_side)
+        min_side = int(min_side)
+        if sat_h >= sat_w:
+            n_nr = long_side
+            n_nc = max(min_side, int(round(long_side * sat_w / max(sat_h, 1))))
+        else:
+            n_nc = long_side
+            n_nr = max(min_side, int(round(long_side * sat_h / max(sat_w, 1))))
+        return n_nr, n_nc
+
 
 
     def test(self, use_train_uav=False):
@@ -664,7 +730,81 @@ class MetricNetTrainer(GridHashFitTrainer):
         for model in self.param2freeze.values():
             model.eval()
 
+        # 运行3D分类测试 (NR, NC, Rot)
+        eval_3d_classify = False
+        if eval_3d_classify:
+            results_3d = self._test_3d_classification_accuracy(
+                n_samples=256,
+                use_train_uav=use_train_uav,
+                temperature=self.energy_temperature,
+                save_pred_pdf=False,
+            )
+
+        # 可视化评估
+        # self.analyze_feat_freq_band(vis=False)
+        eval_vis= False
+        if eval_vis:
+            zoom=(0.9,0.9)
+            query_id=20
+            sat_patch_np = self._prepare_energy_field_sat_background(
+                query_id=query_id,
+                use_train_uav=use_train_uav,
+                local_zoom_wh=zoom,
+            )
+            n_nr, n_nc = self._estimate_energy_field_grid_from_satimg(
+                sat_patch_np,
+                long_side=192,
+                min_side=32,
+            )
+            self.analyze_energy_field(
+                n_nr=n_nr,
+                n_nc=n_nc,
+                use_train_uav=use_train_uav,
+                query_id=query_id,
+                plot_mode='ingp',
+                local_zoom_wh=zoom,
+                vis=True, # 必须开，才会保存 HTML 曲面图。但它不是等比例地图图的设置。
+                surface_plot_setting={
+                    "colorscale": "Magma",# "Viridis",RdBu_r,
+                    "show_axis_info": False,
+                    "clean_scene": True,
+                    "width": 1000,
+                    "height": int(1000 * n_nr / n_nc),
+                    "visencoder_show_axis_info": False,
+                    "z_aspect": 0.45,
+                },
+                #在 vis=True 的默认输出里使用。它不是等比例地图图的设置。
+                # plot_contour_setting={
+                    # "field_name": "energy_ingp",
+                    # "save_path": "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis/ours_ckpt_best/zurich_infonce_id{query_id}_zoom{zoom[0]:.2f}.html",
+                    # "background_img": sat_img,
+                    # "background_extent": (nc_min, nc_max, nr_max, nr_min),
+                # },
+                #开启等比例 raw NR/NC 坐标图
+                # 控制“画哪一个 field、保存到哪里、是否叠底图”。
+                render_map_contour=True,
+                map_contour_setting={
+                    "field_name": "energy_ingp",
+                    "save_path": f"/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis/ours_ckpt_best/zurich_infonce_id{query_id}_zoom{zoom[0]:.2f}.png",
+                    "background_img": sat_patch_np,
+                },
+                #  控制“怎么画”。比如热力图、等高线、颜色、透明度、GT marker、dpi。
+                map_plot_setting={
+                    "draw_heatmap": True,
+                    "draw_contour": False,
+                    "cmap": "magma", #viridis，coolwarm，magma
+                    "heatmap_alpha": 0.55,
+                    "n_fill_levels": 64,
+                    "n_line_levels": 32,
+                    "contour_alpha": 0.7,
+                    "show_gt_marker": True,
+                    "dpi": 300,
+                    "transparent": False,
+                },
+            )
+
         #设置评估相关
+        eval_thresh_cfg = self._resolve_stage3_eval_thresh_cfg_from_opt()
         stage3_test_overlap = 0.5
         grid_info = self._estimate_stage3_grid_shape_from_overlap(stage3_test_overlap)
         n_bins_4d = [
@@ -673,34 +813,87 @@ class MetricNetTrainer(GridHashFitTrainer):
             int(getattr(self.opt, "stage3_test_n_rot", getattr(self.opt, "stage3_n_rot", self.n_coarse[2]))),
             int(getattr(self.opt, "stage3_test_n_scale", 4)),
         ]
-        # 可视化评估
-        # self.analyze_feat_freq_band(vis=False)
-        self.analyze_energy_field(
-            n_nr=128,
-            n_nc=128,
-            vis=True,
-            query_id=20,
-            plot_mode='ingp',
-            local_zoom_wh=(0.055, 0.055),
-            plot_contour_setting={
-                "show_gt_marker": False,
-                'with_flow': False,
-                'flow_mode': 'ascent',
-                'cmap': ["#ffffff", "#2f2f2f"],
-                'n_fill_levels': 20,
-                'n_line_levels': 24,
-                'contour_line_color': "#505050",
-                'contour_line_width': 0.8,
-                'contour_line_alpha': 0.6,
-            },
-        )
-        # 6. 运行3D分类测试 (NR, NC, Rot)
-        # results_3d = self._test_3d_classification_accuracy(
-        #     n_samples=256,
-        #     use_train_uav=use_train_uav,
-        #     temperature=self.energy_temperature,
-        #     save_pred_pdf=False,
-        # )
+
+        #吸引盆评估
+        stage3_basin_enable = getattr(self.opt, "stage3_basin_enable", True)
+        if isinstance(stage3_basin_enable, str):
+            stage3_basin_enable = stage3_basin_enable.strip().lower() in {"1", "true", "yes", "y"}
+        if bool(stage3_basin_enable):
+            from trainers.util_stage3_basin_analyzer import Stage3BasinAnalyzer
+
+            def _as_bool(value):
+                if isinstance(value, str):
+                    return value.strip().lower() not in {"0", "false", "no", "n", "none", "null", ""}
+                return bool(value)
+
+            def _parse_optional_int_list(value):
+                if value is None or value == "":
+                    return None
+                if isinstance(value, str):
+                    parts = [p.strip() for p in value.replace(";", ",").split(",") if p.strip()]
+                    return [int(p) for p in parts]
+                if isinstance(value, Sequence):
+                    return [int(p) for p in value]
+                return [int(value)]
+
+            stage3_analysis_export_root = getattr(self.opt, "stage3_analysis_export_root", "")
+            basin_output_root = getattr(self.opt, "stage3_basin_output_root", "")
+            import os
+            if not basin_output_root and stage3_analysis_export_root:
+                basin_output_root = os.path.join(stage3_analysis_export_root, "stage3_basin")
+
+            stage3_basin_sample_radius_rc = 500/self.sat_dataset.halfimg_radius_meter*self.sat_dataset.halfimg_radius_nrc
+            t_basin0 = time.perf_counter()
+            basin_analyzer = Stage3BasinAnalyzer(
+                trainer=self,
+                eval_thresh_cfg=eval_thresh_cfg,
+                sample_radius_rc=(stage3_basin_sample_radius_rc,stage3_basin_sample_radius_rc),#getattr(self.opt, "stage3_basin_sample_radius_rc", (stage3_basin_sample_radius_rc,stage3_basin_sample_radius_rc)),
+                sample_radius_rot_deg=float(getattr(self.opt, "stage3_basin_sample_radius_rot_deg", 0.0)),
+                sample_radius_scale_ratio=float(getattr(self.opt, "stage3_basin_sample_radius_scale_ratio", 0.0)),
+                fix_rot=_as_bool(getattr(self.opt, "stage3_basin_fix_rot", True)),
+                fix_scale=_as_bool(getattr(self.opt, "stage3_basin_fix_scale", True)),
+                seed=getattr(self.opt, "stage3_basin_seed", None),
+                chunk_size=int(getattr(self.opt, "stage3_basin_chunk_size", 8192)),
+                temperature=self.energy_temperature,
+            )
+            basin_res = basin_analyzer.run(
+                n_samples=getattr(self.opt, "stage3_basin_n_samples", 32),
+                use_train_uav=_as_bool(getattr(self.opt, "stage3_basin_use_train_uav", use_train_uav)),
+                query_ids=_parse_optional_int_list(getattr(self.opt, "stage3_basin_query_ids", "")),
+                query_batch_size=int(getattr(self.opt, "stage3_basin_query_batch_size", 8)),
+                shuffle=_as_bool(getattr(self.opt, "stage3_basin_shuffle", False)),
+                num_particles=int(getattr(self.opt, "stage3_basin_num_particles", 32)),
+                cma_sigma0=stage3_basin_sample_radius_rc,#float(getattr(self.opt, "stage3_basin_cma_sigma0", stage3_basin_sample_radius_rc )),
+                cma_iters=int(getattr(self.opt, "stage3_basin_cma_iters", 11)),
+                cma_variant=getattr(self.opt, "stage3_basin_cma_variant", "Sep-CMA"),
+                cma_prob_mode=getattr(self.opt, "stage3_basin_cma_prob_mode", "product"),
+                cma_enable_early_stop=_as_bool(getattr(self.opt, "stage3_basin_cma_enable_early_stop", True)),
+                cma_early_stop_patience=int(getattr(self.opt, "stage3_basin_cma_early_stop_patience", 5)),
+                optimizer_backend=getattr(self.opt, "stage3_basin_optimizer_backend", "cma_es"),
+                stage1_5_iters=getattr(self.opt, "stage3_basin_stage1_5_iters", None),
+                stage1_5_elite_ratio=float(getattr(self.opt, "stage3_basin_stage1_5_elite_ratio", 0.125)),
+                stage1_5_radius_decay=float(getattr(self.opt, "stage3_basin_stage1_5_radius_decay", 1.0)),
+                stage1_5_move_stand=getattr(self.opt, "stage3_basin_stage1_5_move_stand", "elite_sum"),
+                save_particles=_as_bool(getattr(self.opt, "stage3_basin_save_particles", False)),
+                output_dir=basin_output_root,
+                progress=_as_bool(getattr(self.opt, "stage3_basin_progress", True)),
+            )
+            basin_summary = basin_res["summary"]
+            print(
+                "[Stage3-Basin] "
+                f"backend={basin_res['config'].get('optimizer_backend', 'cma_es')}\n"
+                f"queries={basin_summary['n_queries']} particles={basin_summary['total_particles']}\n"
+                f"success_particles={basin_summary['total_success']} "
+                f"particle_rate={basin_summary['overall_success_rate'] * 100.0:.3f}%\n"
+                f"query_success={basin_summary['successful_queries']}/{basin_summary['n_queries']} "
+                f"query_rate={basin_summary['query_localization_success_rate'] * 100.0:.3f}%\n"
+                f"mean_query_particle_rate={basin_summary['mean_query_success_rate'] * 100.0:.3f}%\n"
+                f"json={basin_summary.get('save_path', None)}\n"
+                f"txt={basin_summary.get('report_path', None)} | "
+                f"{time.perf_counter() - t_basin0:.3f}s"
+            )
+
+        #开始优化迭代评估
         use_seed_mode_pipeline = bool(getattr(self.opt, "use_seed_mode_pipeline", True))
         if use_seed_mode_pipeline:
             # n_bins_4d = [
@@ -733,7 +926,7 @@ class MetricNetTrainer(GridHashFitTrainer):
                 stage1_survival_ratio_per_round=(0.25,0.125),#序列输入，每轮迭代后剩下的候选mode
                 stage1_elite_ratio=0.125, #取ceil(stage1_samples_per_round * stage1_elite_ratio) 个 elite 样本来生成 center_raw
                 stage1_enable_scale_sampling=False,
-                chunk_size=8192*2,
+                chunk_size=8192*4,
 
                 stage3_enable=True,
                 cma_variant='Sep-CMA',
@@ -822,6 +1015,8 @@ class MetricNetTrainer(GridHashFitTrainer):
                 eval_thresh_cfg={"dist_lambda": 1.1*0.5, "rot_th": 11.0*0.5, "scale_ratio_th": 1.15},
                 # eval_thresh_cfg={"dist_lambda": 1.1, "rot_th": 11.0, "scale_ratio_th": 1.25},
             )
+
+
         debug_cma_es = True
         if debug_cma_es:
             return 0
@@ -1164,7 +1359,7 @@ if __name__ == "__main__":
     # 如果没有显式指定配置文件，回退到默认 stage3 配置。
     # 保持外部传入的 --p_yaml 优先，便于在不同场景间切换测试配置。
     if '--p_yaml' not in remaining_argv:
-        remaining_argv.extend(['--p_yaml', '/home/data/zwk/pyproj_neuloc_v0/trainer_depends/configs/stage3_visloc.yaml'])
+        remaining_argv.extend(['--p_yaml', '/home/data/zwk/pyproj_neuloc_v0/trainer_depends/configs/stage3_wingtra_infonce.yaml'])
 
     sys.argv[1:] = remaining_argv  # Pass remaining args to get_parse
 

@@ -26,10 +26,15 @@
 #    --scale-ratio-th 1.2 \
 #    --skip-existing
 
-# stage2:
-#python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_with_overrides.py --cfg-var-file /home/data/zwk/pyproj_neuloc_v0/scripts/stage2_cfg_wingtra.txt --base-yaml trainer_depends/configs/stage2_INGP_wingtra.yaml --grid-base-yaml trainer_depends/configs/nerf_hash_wingtra.yaml
-#
+## stage2:
+python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_with_overrides.py --cfg-var-file /home/data/zwk/pyproj_neuloc_v0/scripts/stage2_cfg_wingtra.txt --base-yaml trainer_depends/configs/stage2_INGP_wingtra.yaml --grid-base-yaml trainer_depends/configs/nerf_hash_wingtra.yaml
+##
 #python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_with_overrides.py --cfg-var-file /home/data/zwk/pyproj_neuloc_v0/scripts/stage2_cfg_visloc.txt --base-yaml trainer_depends/configs/stage2_INGP_visloc.yaml --grid-base-yaml trainer_depends/configs/nerf_hash_visloc.yaml
+
+#python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_with_overrides.py --cfg-var-file /home/data/zwk/pyproj_neuloc_v0/scripts/stage2_cfg_wingtra_tmp.txt --base-yaml trainer_depends/configs/stage2_INGP_wingtra.yaml --grid-base-yaml trainer_depends/configs/nerf_hash_wingtra.yaml
+#
+#python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_with_overrides.py --cfg-var-file /home/data/zwk/pyproj_neuloc_v0/scripts/stage2_cfg_visloc_tmp.txt --base-yaml trainer_depends/configs/stage2_INGP_visloc.yaml --grid-base-yaml trainer_depends/configs/nerf_hash_visloc.yaml
+
 
 
 #stage1,ctrl 实验：
@@ -75,44 +80,44 @@
 #  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/opts.yaml \
 #  --set exp_setting.exp_name=stage2_apr_mlp_zuchwil_interval91
 
-/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
-  --set scenes_setting.selected_scene_name=visloc_03 \
-  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_interval82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch035_03R1=94MeanErr101mMedErr73m_04R1=93MeanErr161MedErr99m.pth \
-  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_interval82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
-  --set exp_setting.exp_name=stage2_apr_mlp_visloc03_interval82 \
-  --set network_setting.apr_mlp_num_layers=6
-
-/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
-  --set scenes_setting.selected_scene_name=visloc_04 \
-  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_interval82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch035_03R1=94MeanErr101mMedErr73m_04R1=93MeanErr161MedErr99m.pth \
-  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_interval82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
-  --set exp_setting.exp_name=stage2_apr_mlp_visloc04_interval82 \
-  --set network_setting.apr_mlp_num_layers=6
-
-# APR,segment:
-/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
-  --set scenes_setting.selected_scene_name=zurich \
-  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch007_zurichR1=80MidErr24m_zuchwilR1=70MidErr28m.pth \
-  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
-  --set exp_setting.exp_name=stage2_apr_mlp_zurich_segment91
-
-/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
-  --set scenes_setting.selected_scene_name=zuchwil \
-  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch007_zurichR1=80MidErr24m_zuchwilR1=70MidErr28m.pth \
-  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
-  --set exp_setting.exp_name=stage2_apr_mlp_zuchwil_segment91
-
-/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
-  --set scenes_setting.selected_scene_name=visloc_03 \
-  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch014_03R85MidErr66m_04R90MidErr90m.pth \
-  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
-  --set exp_setting.exp_name=stage2_apr_mlp_visloc03_segment82 \
-  --set network_setting.apr_mlp_num_layers=6
-
-/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
-  --set scenes_setting.selected_scene_name=visloc_04 \
-  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch014_03R85MidErr66m_04R90MidErr90m.pth \
-  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
-  --set exp_setting.exp_name=stage2_apr_mlp_visloc04_segment82 \
-  --set network_setting.apr_mlp_num_layers=6
+#/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
+#  --set scenes_setting.selected_scene_name=visloc_03 \
+#  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_interval82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch035_03R1=94MeanErr101mMedErr73m_04R1=93MeanErr161MedErr99m.pth \
+#  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_interval82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
+#  --set exp_setting.exp_name=stage2_apr_mlp_visloc03_interval82 \
+#  --set network_setting.apr_mlp_num_layers=6
+#
+#/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
+#  --set scenes_setting.selected_scene_name=visloc_04 \
+#  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_interval82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch035_03R1=94MeanErr101mMedErr73m_04R1=93MeanErr161MedErr99m.pth \
+#  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_interval82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
+#  --set exp_setting.exp_name=stage2_apr_mlp_visloc04_interval82 \
+#  --set network_setting.apr_mlp_num_layers=6
+#
+## APR,segment:
+#/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
+#  --set scenes_setting.selected_scene_name=zurich \
+#  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch007_zurichR1=80MidErr24m_zuchwilR1=70MidErr28m.pth \
+#  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
+#  --set exp_setting.exp_name=stage2_apr_mlp_zurich_segment91
+#
+#/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
+#  --set scenes_setting.selected_scene_name=zuchwil \
+#  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch007_zurichR1=80MidErr24m_zuchwilR1=70MidErr28m.pth \
+#  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_segment91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
+#  --set exp_setting.exp_name=stage2_apr_mlp_zuchwil_segment91
+#
+#/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
+#  --set scenes_setting.selected_scene_name=visloc_03 \
+#  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch014_03R85MidErr66m_04R90MidErr90m.pth \
+#  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
+#  --set exp_setting.exp_name=stage2_apr_mlp_visloc03_segment82 \
+#  --set network_setting.apr_mlp_num_layers=6
+#
+#/root/miniconda3/envs/neuloc_wisp/bin/python /home/data/zwk/pyproj_neuloc_v0/scripts/run_stage2_arp_mlp.py\
+#  --set scenes_setting.selected_scene_name=visloc_04 \
+#  --set exp_setting.load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/epoch014_03R85MidErr66m_04R90MidErr90m.pth \
+#  --set exp_setting.inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad/opts.yaml \
+#  --set exp_setting.exp_name=stage2_apr_mlp_visloc04_segment82 \
+#  --set network_setting.apr_mlp_num_layers=6
 

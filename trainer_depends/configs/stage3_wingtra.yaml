@@ -1,7 +1,7 @@
 exp_setting:
   dir2save_log: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/logs  # 绝对路径
   dir2save_ckpt: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts  # 绝对路径
-  exp_name: stage3_neuralProxy_nr40_nc30_r36_CLsmsLS_wANCE_woSatquery
+  exp_name: stage3_debug
   save_freq: 5
   tensorboard: True
   val: False
@@ -12,11 +12,11 @@ exp_setting:
 
   # load_stage2_ckpt: Stage 2训练好的checkpoint路径
   # 例如: .exps/stage2_grid_hashfit/checkpoint_epoch99.pth
-  load_stage2_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_wRejectSampling_msloss_dinov2_adF4_salad_codebookW18_mlpH1024B2_PN1cubie/epoch999.pth"
-  inherit_stage2_yaml: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_wRejectSampling_msloss_dinov2_adF4_salad_codebookW18_mlpH1024B2_PN1cubie/opts.yaml"
+  load_stage2_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_PN1cubie/epoch999.pth"
+  inherit_stage2_yaml: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_PN1cubie/opts.yaml"
   inherit_stage2_scope: "network,data"
 
-  stage3_analysis_export_root: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_wRejectSampling_msloss_dinov2_adF4_salad_codebookW18_mlpH1024B2_PN1cubie/res_epoch999_debug
+  stage3_analysis_export_root: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_PN1cubie/res_epoch999_debug
   # load2test: 测试时加载的checkpoint（字符串路径）
   load2test: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage3_neural_proxy_nr40_nc30_r36_LossLogsumHD_ep2/epoch002.pth"
 #  load2test: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage3_project_integrateRot_classify_r36_t0.05/epoch001.pth"

@@ -318,6 +318,7 @@ class GridHashFitTrainer(BaseTrainer):
             multires_scale=posenc_multires_scale
         )
         self.pos_encoder_grid = self.pos_encoder_864
+        self.grid_mlp_use_coord_condition = bool(getattr(self.opt, 'grid_mlp_use_coord_condition', True))
 
         grid_mlp_hidden_dim = int(getattr(self.opt, 'grid_mlp_hidden_dim', 512))
         grid_mlp_num_blocks = int(getattr(self.opt, 'grid_mlp_num_blocks', 1))
@@ -336,7 +337,7 @@ class GridHashFitTrainer(BaseTrainer):
         # version1：
         self.grid_mlp = components.create_grid_mlp(
             self.feat_grid_dim,
-            self.pos_encoder_grid.out_dim,
+            self.pos_encoder_grid.out_dim if self.grid_mlp_use_coord_condition else 0,
             hidden_dim=grid_mlp_hidden_dim,
             num_blocks=grid_mlp_num_blocks,
             output_dim=self.feat_q_dim,
@@ -512,6 +513,12 @@ class GridHashFitTrainer(BaseTrainer):
         return self.hash_lod_aggregator(feats_grid, coords_6d)
 
 
+    def _encode_grid_mlp_condition(self, coords_6d):
+        if not self.grid_mlp_use_coord_condition:
+            return None
+        return self.pos_encoder_grid(coords_6d[..., :5])
+
+
     def _ensure_stage2_eval_runtime(self):
         """确保Stage 2评估所需的数据集和坐标归一化器已初始化"""
         if not hasattr(self, 'sat_dataset') or self.sat_dataset is None:
@@ -551,7 +558,7 @@ class GridHashFitTrainer(BaseTrainer):
             grid_coords_3d = torch.cat([coords_6d[:, 0:2], coords_6d[:, -1:]], dim=-1)
             feats_grid = self._get_feats_fm_grid(grid_coords_3d)
             feats_grid = self._postprocess_grid_feats(feats_grid, coords_6d)
-            coords_encoded = self.pos_encoder_grid(coords_6d[:, :5])
+            coords_encoded = self._encode_grid_mlp_condition(coords_6d)
             feats_grid = self.grid_mlp(inputs=feats_grid, condition_features=coords_encoded)
             if normalize:
                 feats_grid = TF.normalize(feats_grid, dim=-1)
@@ -759,7 +766,8 @@ class GridHashFitTrainer(BaseTrainer):
             feature_cfg = Stage2ReferenceGalleryFeatureConfig(**feature_cfg)
 
         if retrieval_eval_cfg is not None:
-            feature_cfg.build_faiss = True
+            search_backend = str(getattr(retrieval_eval_cfg, "search_backend", "faiss")).strip().lower()
+            feature_cfg.build_faiss = search_backend == "faiss"
 
         gallery_state = self.build_or_load_gallery_bank(
             layout_cfg=layout_cfg,
@@ -912,6 +920,7 @@ class GridHashFitTrainer(BaseTrainer):
             "show_progress": bool(cfg.show_progress),
             "query_rot2uniform": bool(cfg.query_rot2uniform),
             "query_scale2uniform": bool(cfg.query_scale2uniform),
+            "search_backend": str(getattr(cfg, "search_backend", "faiss")),
             "k_values": [int(k) for k in cfg.k_values],
             "dist_th": None if cfg.dist_th is None else float(cfg.dist_th),
             "dist_lambda": None if cfg.dist_lambda is None else float(cfg.dist_lambda),
@@ -961,6 +970,12 @@ class GridHashFitTrainer(BaseTrainer):
             "thresholds": cls._to_jsonable(eval_res.get("thresholds", {})),
             "metrics": cls._to_jsonable(eval_res.get("metrics", {})),
             "shared_errors": cls._to_jsonable(eval_res.get("shared_errors", {})),
+            "report_meta": cls._to_jsonable(eval_res.get("report_meta", {})),
+            "progressive_acc_metrics": cls._to_jsonable(eval_res.get("progressive_acc_metrics", {})),
+            "progressive_acc_metric_sources": cls._to_jsonable(eval_res.get("progressive_acc_metric_sources", {})),
+            "progressive_error_metrics": cls._to_jsonable(eval_res.get("progressive_error_metrics", {})),
+            "progressive_error_metric_sources": cls._to_jsonable(eval_res.get("progressive_error_metric_sources", {})),
+            "legacy_acc_metrics_source": cls._to_jsonable(eval_res.get("legacy_acc_metrics_source", None)),
             "recall@k": cls._to_jsonable(eval_res.get("recall@k", {})),
             "runtime_gallery_summary": cls._to_jsonable(eval_res.get("runtime_gallery_summary", {})),
             "error_rc_norm": cls._to_jsonable(eval_res.get("error_rc_norm", None)),
@@ -973,6 +988,13 @@ class GridHashFitTrainer(BaseTrainer):
             "error_scale_ratio_median": cls._to_jsonable(eval_res.get("error_scale_ratio_median", None)),
             "error_scale_normed": cls._to_jsonable(eval_res.get("error_scale_normed", None)),
             "error_scale_normed_median": cls._to_jsonable(eval_res.get("error_scale_normed_median", None)),
+            "search_backend": cls._to_jsonable(eval_res.get("search_backend", None)),
+            "retrieval_search_time_sec_total": cls._to_jsonable(eval_res.get("retrieval_search_time_sec_total", None)),
+            "retrieval_search_num_queries": cls._to_jsonable(eval_res.get("retrieval_search_num_queries", None)),
+            "retrieval_search_avg_sec_per_query": cls._to_jsonable(eval_res.get("retrieval_search_avg_sec_per_query", None)),
+            "retrieval_search_avg_ms_per_query": cls._to_jsonable(eval_res.get("retrieval_search_avg_ms_per_query", None)),
+            "retrieval_search_top_k": cls._to_jsonable(eval_res.get("retrieval_search_top_k", None)),
+            "retrieval_search_gallery_size": cls._to_jsonable(eval_res.get("retrieval_search_gallery_size", None)),
         }
 
     @classmethod
@@ -1042,6 +1064,12 @@ class GridHashFitTrainer(BaseTrainer):
             "thresholds": cls._to_jsonable(eval_res.get("thresholds", {})),
             "metrics": cls._to_jsonable(eval_res.get("metrics", {})),
             "shared_errors": cls._to_jsonable(eval_res.get("shared_errors", {})),
+            "report_meta": cls._to_jsonable(eval_res.get("report_meta", {})),
+            "progressive_acc_metrics": cls._to_jsonable(eval_res.get("progressive_acc_metrics", {})),
+            "progressive_acc_metric_sources": cls._to_jsonable(eval_res.get("progressive_acc_metric_sources", {})),
+            "progressive_error_metrics": cls._to_jsonable(eval_res.get("progressive_error_metrics", {})),
+            "progressive_error_metric_sources": cls._to_jsonable(eval_res.get("progressive_error_metric_sources", {})),
+            "legacy_acc_metrics_source": cls._to_jsonable(eval_res.get("legacy_acc_metrics_source", None)),
             "recall@k": {str(int(k)): float(v) for k, v in eval_res["recall@k"].items()},
             "error_rc_norm": float(eval_res["error_rc_norm"]),
             "error_rc_norm_median": float(eval_res["error_rc_norm_median"]),
@@ -1053,6 +1081,18 @@ class GridHashFitTrainer(BaseTrainer):
             "error_scale_ratio_median": float(eval_res["error_scale_ratio_median"]),
             "error_scale_normed": float(eval_res["error_scale_normed"]),
             "error_scale_normed_median": float(eval_res["error_scale_normed_median"]),
+            "search_backend": str(eval_res.get("search_backend", getattr(eval_cfg, "search_backend", "faiss"))),
+            "retrieval_search_time_sec_total": float(eval_res.get("retrieval_search_time_sec_total", 0.0)),
+            "retrieval_search_num_queries": int(eval_res.get("retrieval_search_num_queries", eval_res["n_queries"])),
+            "retrieval_search_avg_sec_per_query": float(eval_res.get("retrieval_search_avg_sec_per_query", 0.0)),
+            "retrieval_search_avg_ms_per_query": float(eval_res.get("retrieval_search_avg_ms_per_query", 0.0)),
+            "retrieval_search_top_k": int(eval_res.get("retrieval_search_top_k", max(int(k) for k in eval_res["k_values"]))),
+            "retrieval_search_gallery_size": int(
+                eval_res.get(
+                    "retrieval_search_gallery_size",
+                    eval_res.get("runtime_gallery_summary", {}).get("n_points", 0),
+                )
+            ),
             "runtime_gallery_summary": cls._to_jsonable(eval_res["runtime_gallery_summary"]),
         }
 
@@ -1095,6 +1135,14 @@ class GridHashFitTrainer(BaseTrainer):
             f"error_scale_ratio_median: {summary['error_scale_ratio_median']:.6f}x",
             f"error_scale_normed: {summary['error_scale_normed']:.6f}",
             f"error_scale_normed_median: {summary['error_scale_normed_median']:.6f}",
+            f"search_backend: {summary['search_backend']}",
+            "retrieval_search_time: total={total:.6f}s | avg={avg:.6f}ms/query | "
+            "top_k={top_k} | gallery_size={gallery_size}".format(
+                total=summary["retrieval_search_time_sec_total"],
+                avg=summary["retrieval_search_avg_ms_per_query"],
+                top_k=summary["retrieval_search_top_k"],
+                gallery_size=summary["retrieval_search_gallery_size"],
+            ),
             "",
         ])
         return "\n".join(lines)
@@ -1267,9 +1315,7 @@ class GridHashFitTrainer(BaseTrainer):
                 feats_grid = self._postprocess_grid_feats(feats_grid, coords_all_6d)
                 # 位置编码
                 # version1:
-                coords_all_encoded = self.pos_encoder_grid(
-                    coords_all_6d[:,:5],
-                )  # [2B, coord_encoded_dim]
+                coords_all_encoded = self._encode_grid_mlp_condition(coords_all_6d)  # [2B, coord_encoded_dim]
                 # Grid MLP调制
                 feats_grid = self.grid_mlp(
                     inputs=feats_grid,
@@ -1584,7 +1630,7 @@ class GridHashFitTrainer(BaseTrainer):
             feats_grid = self._postprocess_grid_feats(feats_grid, coords_all_6d)
 
             # 位置编码：使用前5维（nr, nc, cos, sin, log_scale）
-            coords_all_encoded = self.pos_encoder_grid(coords_all_6d[:, :5])
+            coords_all_encoded = self._encode_grid_mlp_condition(coords_all_6d)
 
             # Grid MLP调制
             feats_grid = self.grid_mlp(inputs=feats_grid, condition_features=coords_all_encoded)
@@ -1726,6 +1772,7 @@ class GridHashFitTrainer(BaseTrainer):
             'report_rc_meter': True,
             'report_rot_error': False,
             'report_scale_error': False,
+            'search_backend': 'faiss',
         }
         if eval_thresh_cfg is not None:
             thresh_cfg = dict(eval_thresh_cfg)

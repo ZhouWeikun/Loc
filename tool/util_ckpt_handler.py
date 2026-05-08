@@ -71,6 +71,45 @@ def save_param(save_dir_or_exp_name, dict2save):
 #             dict2load[k] = v
 #             v.load_state_dict(checkpoint[k])
 
+def _adapt_state_dict_for_module(module, state_dict, module_name=""):
+    """
+    Adapt known backward-compatible checkpoint layouts before strict loading.
+
+    Stage2GridFeatureMLP used to save the implementation module directly
+    (e.g. input_encoder.weight). Newer code wraps it under ``impl`` and thus
+    expects keys like ``impl.input_encoder.weight``.
+    """
+    if not hasattr(module, "state_dict") or not isinstance(state_dict, dict):
+        return state_dict
+
+    target_keys = set(module.state_dict().keys())
+    source_keys = set(state_dict.keys())
+    if not target_keys or not source_keys:
+        return state_dict
+
+    has_impl_targets = any(key.startswith("impl.") for key in target_keys)
+    has_impl_source = any(key.startswith("impl.") for key in source_keys)
+    if not has_impl_targets or has_impl_source:
+        return state_dict
+
+    converted = {}
+    converted_count = 0
+    for key, value in state_dict.items():
+        impl_key = f"impl.{key}"
+        if impl_key in target_keys:
+            converted[impl_key] = value
+            converted_count += 1
+        else:
+            converted[key] = value
+
+    if converted_count > 0:
+        label = f" for {module_name}" if module_name else ""
+        print(f"Adapted legacy state_dict{label}: added 'impl.' prefix to {converted_count} keys")
+        return converted
+
+    return state_dict
+
+
 # --- 修正后的函数 ---
 def load_param(load_from, dict2load):
     print(f"Loading parameters from: {load_from}")
@@ -84,7 +123,8 @@ def load_param(load_from, dict2load):
             else:
                 # 直接就地加载参数，不需要 "dict2load[k] = v"
                 if hasattr(v, 'load_state_dict'): # 确保对象有这个方法
-                    v.load_state_dict(checkpoint[k])
+                    state_dict = _adapt_state_dict_for_module(v, checkpoint[k], module_name=k)
+                    v.load_state_dict(state_dict)
                     print(f"Loaded parameters for: {k}")
                 else:
                     # 如果v不是模型或优化器，只是一个普通变量，直接赋值

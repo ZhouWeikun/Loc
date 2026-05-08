@@ -1,9 +1,10 @@
 from dataclasses import dataclass
+import time
 
 import torch
 import torch.nn.functional as TF
 
-from trainers.util_core_eval import compute_topk_acc_from_coords, print_topk_eval_results
+from trainers.util_core_eval import compute_progressive_topk_acc_from_coords, print_progressive_topk_eval_results
 from trainers.util_stage1_others import warp_uav_imgs
 
 
@@ -26,6 +27,7 @@ class Stage2RetrievalEvalConfig:
     report_rc_meter: bool = True
     report_rot_error: bool = False
     report_scale_error: bool = False
+    search_backend: str = "faiss"
 
 
 class Stage2RetrievalEvaluator:
@@ -63,13 +65,25 @@ class Stage2RetrievalEvaluator:
         for model, was_train in zip(models_all, orig_modes):
             model.train(was_train)
 
-    def _ensure_gallery_ready(self):
+    @staticmethod
+    def _normalize_search_backend(search_backend):
+        search_backend = str(search_backend).strip().lower()
+        valid_backends = ("faiss", "matrix")
+        if search_backend not in valid_backends:
+            raise ValueError(f"search_backend must be one of {valid_backends}, got {search_backend}")
+        return search_backend
+
+    def _ensure_gallery_ready(self, search_backend):
         if self.gallery_bank.coords_gallery is None:
             raise ValueError("gallery_bank.build_coords(...) must be called before retrieval evaluation.")
-        if self.gallery_bank.faiss_index is None:
+        if self.gallery_bank.feats_gallery is None and self.gallery_bank.faiss_index is None:
+            raise ValueError("gallery_bank must have features or a FAISS index before evaluation.")
+        if search_backend == "faiss" and self.gallery_bank.faiss_index is None:
             if self.gallery_bank.feats_gallery is None:
                 raise ValueError("gallery_bank must have features or a FAISS index before evaluation.")
             self.gallery_bank.build_faiss_index()
+        if search_backend == "matrix" and self.gallery_bank.feats_gallery is None:
+            raise ValueError("matrix search requires gallery_bank.feats_gallery.")
 
     def _resolve_runtime_datasets(self, cfg):
         if not hasattr(self.trainer, "sat_dataset"):
@@ -127,6 +141,23 @@ class Stage2RetrievalEvaluator:
             return TF.normalize(feats_q, dim=-1)
 
     @staticmethod
+    def _sync_if_cuda(tensor_or_device):
+        device = tensor_or_device.device if torch.is_tensor(tensor_or_device) else torch.device(tensor_or_device)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+
+    def _search_topk(self, feats_q, coords_gallery_cpu, top_k, search_backend, gallery_feats_matrix=None):
+        if search_backend == "faiss":
+            _, indices = self.gallery_bank.faiss_index.search(feats_q.detach().cpu().numpy(), k=top_k)
+            return coords_gallery_cpu[torch.from_numpy(indices).long()]
+
+        q_norm_sq = torch.sum(feats_q * feats_q, dim=1, keepdim=True)
+        g_norm_sq = torch.sum(gallery_feats_matrix * gallery_feats_matrix, dim=1).unsqueeze(0)
+        dists_sq = q_norm_sq + g_norm_sq - 2.0 * torch.matmul(feats_q, gallery_feats_matrix.transpose(0, 1))
+        _, indices = torch.topk(dists_sq, k=top_k, dim=1, largest=False, sorted=True)
+        return coords_gallery_cpu[indices.detach().cpu()]
+
+    @staticmethod
     def _resolve_scale_boundary(sat_dataset):
         if hasattr(sat_dataset, "satimgsize_scale_to_ref_m_boundary"):
             return sat_dataset.satimgsize_scale_to_ref_m_boundary
@@ -165,11 +196,11 @@ class Stage2RetrievalEvaluator:
         }
 
     def evaluate(self, eval_cfg=None, eval_log_lines=None):
-        self._ensure_gallery_ready()
-
         cfg = eval_cfg if isinstance(eval_cfg, Stage2RetrievalEvalConfig) else (
             Stage2RetrievalEvalConfig(**eval_cfg) if eval_cfg is not None else Stage2RetrievalEvalConfig()
         )
+        cfg.search_backend = self._normalize_search_backend(cfg.search_backend)
+        self._ensure_gallery_ready(cfg.search_backend)
 
         scene_name, sat_dataset, uav_dataset = self._resolve_runtime_datasets(cfg)
         dataloader = self._make_uav_dataloader(
@@ -184,13 +215,17 @@ class Stage2RetrievalEvaluator:
         coords_gallery_cpu = self.gallery_bank.coords_gallery.cpu()
         top_k = min(max(int(k) for k in cfg.k_values), int(coords_gallery_cpu.shape[0]))
         thresholds = self._resolve_thresholds(sat_dataset, cfg)
+        gallery_feats_matrix = None
+        if cfg.search_backend == "matrix":
+            gallery_feats_matrix = self.gallery_bank.feats_gallery.to(self.device, dtype=torch.float32)
 
         self._log(
             f"[Stage2RetrievalEvaluator] scene={scene_name}, "
             f"n_points={self.gallery_bank.meta.get('n_points', 0)}, "
             f"mode={self.gallery_bank.meta.get('mode', None)}, "
             f"n_rot={self.gallery_bank.meta.get('n_rot', None)}, "
-            f"n_scale={self.gallery_bank.meta.get('n_scale', None)}",
+            f"n_scale={self.gallery_bank.meta.get('n_scale', None)}, "
+            f"search_backend={cfg.search_backend}",
             eval_log_lines=eval_log_lines,
         )
 
@@ -199,6 +234,7 @@ class Stage2RetrievalEvaluator:
             coords_topk_all = []
             coords_gt_all = []
             processed = 0
+            search_time_sec_total = 0.0
 
             for batch in dataloader:
                 if cfg.max_queries is not None and processed >= int(cfg.max_queries):
@@ -220,8 +256,17 @@ class Stage2RetrievalEvaluator:
 
                 uavimgs, coords_uav = self._prepare_query_batch(uavimgs, coords_uav, gallery_scale, cfg)
                 feats_q = self._extract_query_feats(uavimgs)
-                _, indices = self.gallery_bank.faiss_index.search(feats_q.detach().cpu().numpy(), k=top_k)
-                coords_topk = coords_gallery_cpu[torch.from_numpy(indices).long()]
+                self._sync_if_cuda(feats_q)
+                search_start = time.perf_counter()
+                coords_topk = self._search_topk(
+                    feats_q=feats_q,
+                    coords_gallery_cpu=coords_gallery_cpu,
+                    top_k=top_k,
+                    search_backend=cfg.search_backend,
+                    gallery_feats_matrix=gallery_feats_matrix,
+                )
+                self._sync_if_cuda(feats_q)
+                search_time_sec_total += time.perf_counter() - search_start
 
                 coords_topk_all.append(coords_topk)
                 coords_gt_all.append(coords_uav.detach().cpu())
@@ -234,7 +279,7 @@ class Stage2RetrievalEvaluator:
 
         coords_topk_all = torch.cat(coords_topk_all, dim=0)
         coords_gt_all = torch.cat(coords_gt_all, dim=0)
-        metrics, shared_errors = compute_topk_acc_from_coords(
+        acc_metrics_raw, shared_errors = compute_progressive_topk_acc_from_coords(
             coords_topk_all,
             coords_gt_all,
             dist_th=thresholds["norm_dist"],
@@ -242,6 +287,46 @@ class Stage2RetrievalEvaluator:
             scale_ratio_th=thresholds["scale_ratio"],
             k_values=cfg.k_values,
         )
+        progressive_acc_metrics = (
+            dict(acc_metrics_raw.get("progressive_acc_metrics", {}))
+            if isinstance(acc_metrics_raw.get("progressive_acc_metrics", {}), dict)
+            else {}
+        )
+        progressive_acc_metric_sources = (
+            dict(acc_metrics_raw.get("progressive_acc_metric_sources", {}))
+            if isinstance(acc_metrics_raw.get("progressive_acc_metric_sources", {}), dict)
+            else {}
+        )
+        progressive_error_metrics = (
+            dict(acc_metrics_raw.get("progressive_error_metrics", {}))
+            if isinstance(acc_metrics_raw.get("progressive_error_metrics", {}), dict)
+            else {}
+        )
+        progressive_error_metric_sources = (
+            dict(acc_metrics_raw.get("progressive_error_metric_sources", {}))
+            if isinstance(acc_metrics_raw.get("progressive_error_metric_sources", {}), dict)
+            else {}
+        )
+        legacy_acc_metrics_source = str(acc_metrics_raw.get("legacy_acc_metrics_source", "dist_rot_scale_recall"))
+        metrics = {
+            str(key): float(value)
+            for key, value in acc_metrics_raw.items()
+            if str(key).startswith("top") and str(key).endswith("_acc")
+        }
+        report_meta = {
+            "integrate_scale": thresholds["scale_ratio"] is not None,
+            "scale_select_mode": None,
+            "legacy_acc_metrics_source": legacy_acc_metrics_source,
+            "progressive_acc_metric_sources": progressive_acc_metric_sources,
+            "progressive_error_metric_sources": progressive_error_metric_sources,
+            "progressive_recall_policy": {
+                "dist_recall": "dist<=dist_th",
+                "dist_rot_recall": "dist<=dist_th and rot<=rot_th",
+                "dist_rot_scale_recall": "dist<=dist_th and rot<=rot_th and scale<=scale_ratio_th",
+                "rot_fallback_to_dist": thresholds["rot"] is None,
+                "scale_fallback_to_dist_rot": thresholds["scale_ratio"] is None,
+            },
+        }
 
         top1_arrays = self._compute_top1_arrays(coords_topk_all, coords_gt_all)
         dist_top1 = top1_arrays["dist_top1"]
@@ -267,11 +352,19 @@ class Stage2RetrievalEvaluator:
             report_title = cfg.report_title
             if scene_name is not None:
                 report_title = f"{report_title} [{scene_name}]"
-            print_topk_eval_results(
-                metrics,
+            print_progressive_topk_eval_results(
+                {
+                    **metrics,
+                    "progressive_acc_metrics": progressive_acc_metrics,
+                    "legacy_acc_metrics_source": legacy_acc_metrics_source,
+                    "progressive_acc_metric_sources": progressive_acc_metric_sources,
+                    "progressive_error_metrics": progressive_error_metrics,
+                    "progressive_error_metric_sources": progressive_error_metric_sources,
+                },
                 shared_errors,
                 thresholds,
                 report_title=report_title,
+                report_meta=report_meta,
                 log_lines=eval_log_lines,
             )
             self._log(
@@ -296,11 +389,19 @@ class Stage2RetrievalEvaluator:
                     f"median={scale_normed_top1.median().item():.5f}",
                     eval_log_lines=eval_log_lines,
                 )
+            avg_search_sec_per_query = search_time_sec_total / max(int(coords_gt_all.shape[0]), 1)
+            self._log(
+                f"Retrieval Search Time ({cfg.search_backend}): total={search_time_sec_total:.6f}s, "
+                f"avg={avg_search_sec_per_query * 1000.0:.6f}ms/query, "
+                f"top_k={top_k}, gallery_size={int(coords_gallery_cpu.shape[0])}",
+                eval_log_lines=eval_log_lines,
+            )
 
         recall_at_k = {
             int(k): float(metrics.get(f"top{int(k)}_acc", 0.0)) / 100.0
             for k in cfg.k_values
         }
+        avg_search_sec_per_query = search_time_sec_total / max(int(coords_gt_all.shape[0]), 1)
         return {
             "scene_name": scene_name,
             "n_queries": int(coords_gt_all.shape[0]),
@@ -310,6 +411,12 @@ class Stage2RetrievalEvaluator:
             "thresholds": thresholds,
             "metrics": metrics,
             "shared_errors": shared_errors,
+            "report_meta": report_meta,
+            "progressive_acc_metrics": progressive_acc_metrics,
+            "progressive_acc_metric_sources": progressive_acc_metric_sources,
+            "progressive_error_metrics": progressive_error_metrics,
+            "progressive_error_metric_sources": progressive_error_metric_sources,
+            "legacy_acc_metrics_source": legacy_acc_metrics_source,
             "coords_topk": coords_topk_all,
             "coords_gt": coords_gt_all,
             "recall@k": recall_at_k,
@@ -323,5 +430,12 @@ class Stage2RetrievalEvaluator:
             "error_scale_ratio_median": float(torch.exp(scale_log_top1).median().item()),
             "error_scale_normed": float(scale_normed_top1.mean().item()),
             "error_scale_normed_median": float(scale_normed_top1.median().item()),
+            "search_backend": str(cfg.search_backend),
+            "retrieval_search_time_sec_total": float(search_time_sec_total),
+            "retrieval_search_num_queries": int(coords_gt_all.shape[0]),
+            "retrieval_search_avg_sec_per_query": float(avg_search_sec_per_query),
+            "retrieval_search_avg_ms_per_query": float(avg_search_sec_per_query * 1000.0),
+            "retrieval_search_top_k": int(top_k),
+            "retrieval_search_gallery_size": int(coords_gallery_cpu.shape[0]),
             "runtime_gallery_summary": self.gallery_bank.summary(),
         }

@@ -1,27 +1,33 @@
 exp_setting:
   dir2save_log: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/logs  # 绝对路径
   dir2save_ckpt: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts  # 绝对路径
-  exp_name: stage2_visloc03
-  save_freq: 10
+  exp_name: stage3_debug
+  save_freq: 5
   tensorboard: True
   val: False
   val_freq: 1
 
-  # load_stage1_ckpt: Stage 1训练好的checkpoint路径（用于初始化训练）
-  # 例如: .exps/stage1_visual_encoder/checkpoint_epoch99.pth
-  load_stage1_ckpt: "/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/multiscene_12km2_cl_salad_ep100/epoch095.pth"
-  inherit_stage1_yaml: "/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/multiscene_12km2_cl_salad_ep100/opts.yaml"
-  inherit_stage1_scope: "network,data"
-#  load_stage1_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_pairLoss_singleEdge_hardest_woSatQuery/epoch090_best.pth"
+  inherit_stage1_fm_stage2: True
+  inherit_stage1_fm_stage2_scope: "network"
 
-  # load2train: 继续训练当前Stage时加载的checkpoint（字符串路径）
+  # load_stage2_ckpt: Stage 2训练好的checkpoint路径
+  # 例如: .exps/stage2_grid_hashfit/checkpoint_epoch99.pth
+  load_stage2_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_noPoseCond/epoch999.pth"
+  inherit_stage2_yaml: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_noPoseCond/opts.yaml"
+  inherit_stage2_scope: "network,data"
+
+  stage3_analysis_export_root: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_zurich_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_noPoseCond/res_epoch999_debug
+  # load2test: 测试时加载的checkpoint（字符串路径）
+  load2test: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage3_neural_proxy_nr40_nc30_r36_LossLogsumHD_ep2/epoch002.pth"
+#  load2test: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage3_project_integrateRot_classify_r36_t0.05/epoch001.pth"
+
+
+  # load2train: 继续训练时加载的checkpoint（字符串路径）
   load2train: ""
-
-  # load2test: 测试当前Stage时加载的checkpoint（字符串路径）
-  load2test:  ""
 
 # ==================== 数据加载配置 ====================
 #data_setting:
+#  pad_mode: "zeros" #"zeors" or
 #  imgsize2net: 224
 #  satimgsize2crop: 244   #satimgsize2crop：res02m:zuchwil=540,zurich=614; res03m:zuchwil=400; res05m:zurich=224
 #  n_rand2sample_per_pos: 256 #16
@@ -37,53 +43,37 @@ exp_setting:
 # - "random": 随机选择场景
 # - "weighted": 根据场景权重加权采样
 scenes_setting:
-  sampling_strategy: "weighted"
+  sampling_strategy: "random"
   dataset_name: wingtra
   selected_scene_name: zurich
   scene_registry:
     zurich:
-      name: zurich
+      name: "zurich"
       p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/zurich_blocks12_proj2056_res03m.json
       p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info/uavimgs_metainfo.json
       p_uav_geocsv: /home/data/zwk/data_uavimgs_wingtra/Zurich/uavimgs_info/uavimgs_geo_corrected_v1.csv
-      weight: 1.0
+      weight: 1.0  # 采样权重（仅在sampling_strategy="weighted"时使用）
     zuchwil:
-      name: zuchwil
+      name: "zuchwil"
       p_satinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/zuchwil_blocks12_proj2056_res03m.json
       p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info/uavimgs_metainfo.json
       p_uav_geocsv: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info/uavimgs_geo_corrected_v1.csv
       weight: 1.0
 
-
 hardware_setting:
   autocast: False
-  batchsize_sat: 512 #24
-  batchsize_uav: 64
+  batchsize_sat: 32
+  batchsize_uav: 4
   batchsize_uav_test: 128
   gpu_ids: '0'
-  num_worker: 0
-  satmaps_on_cpu: true
+  num_worker: 8
 
 learning_setting:
-  num_epochs: 1000
+  num_epochs: 20
+  loss_type: pairloss_multiedge_logsum
+  stage3_overlap: 0.5
+  stage3_n_rot: 36
+  stage3_n_scale: 4
 
-network_setting:
-  #stage2
-  p_grid_config_yaml: trainer_depends/configs/nerf_hash_wingtra.yaml
-  posenc_multires_rc: 8
-  posenc_multires_rot: 6
-  posenc_multires_scale: 4
-  grid_mlp_hidden_dim: 512
-  grid_mlp_num_blocks: 1
-  grid_mlp_arch: residual_cond
-  grid_mlp_use_coord_condition: true
-
-#  p_grid_config_yaml: trainer_depends/configs/nerf_hash_wingtra_lodagg1024.yaml
-  hash_lod_aggregator:
-    enabled: false
-    mode: scale_softmax
-    coord_source: scale
-    scale_source: norm_log_scale
-    num_lods: 4
-    per_lod_dim: 1024
-    output_dim: 1024
+#network_setting:
+#  backbone: dinov3

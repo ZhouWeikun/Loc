@@ -70,6 +70,8 @@ network_setting:
   posenc_multires_scale: 4
   grid_mlp_hidden_dim: 1024 #org=512
   grid_mlp_num_blocks: 2
+  grid_mlp_arch: residual_cond
+  grid_mlp_use_coord_condition: true
 
 #  p_grid_config_yaml: trainer_depends/configs/nerf_hash_visloc_lodagg1024.yaml
   hash_lod_aggregator:

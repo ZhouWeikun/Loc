@@ -103,6 +103,35 @@ def get_parse(print_summary=True):
     parser.add_argument('--stage3_analysis_export_root', default="", type=str, help='Stage 3测试分析结果导出目录')
     parser.add_argument('--stage3_recall_cfg', default="per_scene", type=str, help='Stage 3 recall阈值配置名；per_scene表示按场景映射')
     parser.add_argument('--stage3_recall_cfg_yaml', default="trainer_depends/configs/stage3_recall_thresholds.yaml", type=str, help='Stage 3 recall阈值配置YAML')
+    parser.add_argument('--stage3_basin_enable', default=False, type=lambda x: str(x).strip().lower() in {'1', 'true', 'yes', 'y'}, help='是否在Stage 3 test中运行CMA-ES吸引盆分析')
+    parser.add_argument('--stage3_basin_output_root', default="", type=str, help='Stage 3吸引盆分析输出目录；为空时使用stage3_analysis_export_root/stage3_basin')
+    parser.add_argument('--stage3_basin_n_samples', default=256, type=int, help='Stage 3吸引盆分析测试样本数')
+    parser.add_argument('--stage3_basin_query_ids', default="", type=str, help='逗号分隔的query索引；非空时覆盖n_samples')
+    parser.add_argument('--stage3_basin_num_particles', default=128, type=int, help='每个query的CMA-ES population size')
+    parser.add_argument('--stage3_basin_query_batch_size', default=8, type=int, help='吸引盆分析每批query数量')
+    parser.add_argument('--stage3_basin_sample_radius_rc', default="5.0,5.0", type=str, help='围绕GT采样的nr,nc半径')
+    parser.add_argument('--stage3_basin_sample_radius_rot_deg', default=0.0, type=float, help='围绕GT采样的旋转半径，单位degree')
+    parser.add_argument('--stage3_basin_sample_radius_scale_ratio', default=0.0, type=float, help='围绕GT采样的相对scale半径')
+    parser.add_argument('--stage3_basin_fix_rot', default=True, type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'}, help='吸引盆分析中是否固定rot维度')
+    parser.add_argument('--stage3_basin_fix_scale', default=True, type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'}, help='吸引盆分析中是否固定scale维度')
+    parser.add_argument('--stage3_basin_seed', default=None, help='吸引盆分析随机种子；None/null/空字符串表示不固定')
+    parser.add_argument('--stage3_basin_chunk_size', default=8192, type=int, help='吸引盆分析评分chunk size')
+    parser.add_argument('--stage3_basin_cma_sigma0', default=0.2, type=float, help='吸引盆分析CMA-ES初始sigma')
+    parser.add_argument('--stage3_basin_cma_popsize', default=16, type=int, help='兼容保留；当前单种群实现使用stage3_basin_num_particles作为population size')
+    parser.add_argument('--stage3_basin_cma_iters', default=20, type=int, help='吸引盆分析CMA-ES迭代轮数')
+    parser.add_argument('--stage3_basin_cma_variant', default="Sep-CMA", type=str, help='吸引盆分析CMA-ES后端: CMA或Sep-CMA')
+    parser.add_argument('--stage3_basin_cma_prob_mode', default="product", type=str, help='吸引盆分析CMA-ES评分模式: ingp/projector/product')
+    parser.add_argument('--stage3_basin_cma_enable_early_stop', default=True, type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'}, help='吸引盆分析CMA-ES是否早停')
+    parser.add_argument('--stage3_basin_cma_early_stop_patience', default=5, type=int, help='吸引盆分析CMA-ES早停patience')
+    parser.add_argument('--stage3_basin_optimizer_backend', default="cma_es", type=str, help='吸引盆分析优化后端: cma_es或stage1_5')
+    parser.add_argument('--stage3_basin_stage1_5_iters', default=None, type=int, help='stage1_5后端迭代轮数；None时复用stage3_basin_cma_iters')
+    parser.add_argument('--stage3_basin_stage1_5_elite_ratio', default=0.125, type=float, help='stage1_5后端每轮elite比例')
+    parser.add_argument('--stage3_basin_stage1_5_radius_decay', default=1.0, type=float, help='stage1_5后端每轮采样半径衰减系数')
+    parser.add_argument('--stage3_basin_stage1_5_move_stand', default="elite_sum", type=str, help='stage1_5后端中心移动策略: best或elite_sum')
+    parser.add_argument('--stage3_basin_save_particles', default=False, type=lambda x: str(x).strip().lower() in {'1', 'true', 'yes', 'y'}, help='是否保存per-particle明细')
+    parser.add_argument('--stage3_basin_use_train_uav', default=False, type=lambda x: str(x).strip().lower() in {'1', 'true', 'yes', 'y'}, help='吸引盆分析是否使用train UAV split')
+    parser.add_argument('--stage3_basin_shuffle', default=False, type=lambda x: str(x).strip().lower() in {'1', 'true', 'yes', 'y'}, help='吸引盆分析是否shuffle测试样本')
+    parser.add_argument('--stage3_basin_progress', default=True, type=lambda x: str(x).strip().lower() not in {'0', 'false', 'no', 'n'}, help='吸引盆分析是否显示进度条')
     parser.add_argument('--inherit_stage1_yaml', default="", type=str, help='Stage 2初始化时继承Stage 1配置参数的opts/base yaml路径')
     parser.add_argument('--inherit_stage1_scope', default='network,data', type=str, help='Stage 2从Stage 1 YAML继承的范围: network,data,scenes,hardware，可用逗号分隔')
     parser.add_argument('--inherit_stage2_yaml', default="", type=str, help='Stage 3初始化时继承Stage 2网络结构参数的opts/base yaml路径')
@@ -365,6 +394,27 @@ def get_parse(print_summary=True):
                         'load_stage1_ckpt', 'load_stage2_ckpt',
                         'stage3_analysis_export_root',
                         'stage3_recall_cfg', 'stage3_recall_cfg_yaml',
+                        'stage3_basin_enable', 'stage3_basin_output_root',
+                        'stage3_basin_n_samples', 'stage3_basin_query_ids',
+                        'stage3_basin_num_particles', 'stage3_basin_query_batch_size',
+                        'stage3_basin_sample_radius_rc',
+                        'stage3_basin_sample_radius_rot_deg',
+                        'stage3_basin_sample_radius_scale_ratio',
+                        'stage3_basin_fix_rot', 'stage3_basin_fix_scale',
+                        'stage3_basin_seed', 'stage3_basin_chunk_size',
+                        'stage3_basin_cma_sigma0', 'stage3_basin_cma_popsize',
+                        'stage3_basin_cma_iters', 'stage3_basin_cma_variant',
+                        'stage3_basin_cma_prob_mode',
+                        'stage3_basin_cma_enable_early_stop',
+                        'stage3_basin_cma_early_stop_patience',
+                        'stage3_basin_optimizer_backend',
+                        'stage3_basin_stage1_5_iters',
+                        'stage3_basin_stage1_5_elite_ratio',
+                        'stage3_basin_stage1_5_radius_decay',
+                        'stage3_basin_stage1_5_move_stand',
+                        'stage3_basin_save_particles',
+                        'stage3_basin_use_train_uav',
+                        'stage3_basin_shuffle', 'stage3_basin_progress',
                         'inherit_stage1_yaml', 'inherit_stage1_scope',
                         'inherit_stage2_yaml', 'inherit_stage2_scope',
                         'selected_scene_name',
@@ -402,6 +452,8 @@ def get_parse(print_summary=True):
             'posenc_multires_scale',
             'grid_mlp_hidden_dim',
             'grid_mlp_num_blocks',
+            'grid_mlp_arch',
+            'grid_mlp_use_coord_condition',
             'apr_target_mode',
             'apr_mlp_hidden_dim',
             'apr_mlp_num_layers',

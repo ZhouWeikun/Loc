@@ -1002,6 +1002,9 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
         mode_final_all = []
         query_results = []
         t_start = time.perf_counter()
+        mode_opt_elapsed_s = 0.0
+        mode_plus_cma_elapsed_s = 0.0
+        cma_elapsed_s = 0.0
         query_iter = range(num_queries)
         query_progress = None
         if not bool(debug_stage_timing):
@@ -1016,6 +1019,7 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
             for q_idx in query_iter:
                 t_query0 = time.perf_counter()
                 l0_prob_q = l0_prob_4d_all[q_idx]
+                t_seed_build0 = time.perf_counter()
                 seed_coords, seed_scores = self._build_cma_init_seeds(
                     l0_prob_q=l0_prob_q,
                     coords_candidates_flat=coords_candidates_flat,
@@ -1024,6 +1028,7 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
                     scale_select_mode=scale_select_mode,
                     selection_space=l0_seed_selection_space,
                 )
+                seed_build_s = time.perf_counter() - t_seed_build0
                 seed_coords_all.append(seed_coords)
                 seed_scores_all.append(seed_scores)
                 feat_q = feats_vis_all[q_idx:q_idx + 1]
@@ -1062,6 +1067,12 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
                     coarse_seed_scores=seed_scores,
                     query_context=query_context,
                 )
+                query_timing = dict(query_result.metadata.get("timing", {}) or {})
+                query_timing["seed_build_s"] = float(seed_build_s)
+                query_result.metadata["timing"] = query_timing
+                mode_opt_elapsed_s += float(seed_build_s) + float(query_timing.get("mode_opt_s", 0.0))
+                mode_plus_cma_elapsed_s += float(seed_build_s) + float(query_timing.get("mode_plus_stage3_s", query_timing.get("query_total_s", 0.0)))
+                cma_elapsed_s += float(query_timing.get("stage3_cma_s", 0.0))
                 if bool(debug_stage_timing):
                     print(
                         f"[SeedMode] Query{q_idx} pipeline returned | "
@@ -1174,9 +1185,19 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
                 "seed_mode_final": seed_mode_final_report,
             }
         )
+        elapsed_ms = elapsed_s * 1000.0
+        per_sample_ms = elapsed_ms / max(num_queries, 1)
+        mode_opt_ms = mode_opt_elapsed_s * 1000.0
+        mode_opt_per_sample_ms = mode_opt_ms / max(num_queries, 1)
+        mode_plus_cma_ms = mode_plus_cma_elapsed_s * 1000.0
+        mode_plus_cma_per_sample_ms = mode_plus_cma_ms / max(num_queries, 1)
+        cma_ms = cma_elapsed_s * 1000.0
+        cma_per_sample_ms = cma_ms / max(num_queries, 1)
         print(
-            f"[Seed-Mode Timing] samples={num_queries}, total={elapsed_s:.3f}s, "
-            f"per_sample={elapsed_s / max(num_queries, 1):.3f}s"
+            f"[Seed-Mode Timing] samples={num_queries}, "
+            f"mode_opt_total={mode_opt_ms:.2f}ms, mode_opt_per_sample={mode_opt_per_sample_ms:.2f}ms, "
+            f"mode_plus_cma_total={mode_plus_cma_ms:.2f}ms, mode_plus_cma_per_sample={mode_plus_cma_per_sample_ms:.2f}ms, "
+            f"cma_only_total={cma_ms:.2f}ms, cma_only_per_sample={cma_per_sample_ms:.2f}ms"
         )
 
         dist_th_nrc = evaluator.final_eval_cfg.get("dist_th", None)
@@ -1277,6 +1298,20 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
                 "samples": int(num_queries),
                 "total_s": float(elapsed_s),
                 "per_sample_s": float(elapsed_s / max(num_queries, 1)),
+                "total_ms": float(elapsed_ms),
+                "per_sample_ms": float(per_sample_ms),
+                "mode_opt_total_s": float(mode_opt_elapsed_s),
+                "mode_opt_per_sample_s": float(mode_opt_elapsed_s / max(num_queries, 1)),
+                "mode_opt_total_ms": float(mode_opt_ms),
+                "mode_opt_per_sample_ms": float(mode_opt_per_sample_ms),
+                "mode_plus_cma_total_s": float(mode_plus_cma_elapsed_s),
+                "mode_plus_cma_per_sample_s": float(mode_plus_cma_elapsed_s / max(num_queries, 1)),
+                "mode_plus_cma_total_ms": float(mode_plus_cma_ms),
+                "mode_plus_cma_per_sample_ms": float(mode_plus_cma_per_sample_ms),
+                "cma_only_total_s": float(cma_elapsed_s),
+                "cma_only_per_sample_s": float(cma_elapsed_s / max(num_queries, 1)),
+                "cma_only_total_ms": float(cma_ms),
+                "cma_only_per_sample_ms": float(cma_per_sample_ms),
             },
         }
 

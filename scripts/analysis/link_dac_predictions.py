@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import warnings
 from fractions import Fraction
 from pathlib import Path
@@ -138,6 +139,21 @@ def _config_key(scene_key: str, split_mode: str) -> str:
 
 def _parse_prediction_filename(path: Path) -> Dict[str, str]:
     stem = path.stem
+    qdfl_match = re.match(
+        r"^qdfl_(03|04|Zuchwil|Zurich)_top_?\d+_(segment|interval)(?:_.*)?$",
+        stem,
+    )
+    if qdfl_match:
+        scene_tag, split_mode = qdfl_match.groups()
+        scene_key = SCENE_TAG_TO_KEY[scene_tag]
+        return {
+            "pred_file": path.name,
+            "scene_key": scene_key,
+            "scene_name": _scene_name_from_key(scene_key),
+            "split_mode": split_mode,
+            "config_key": _config_key(scene_key, split_mode),
+        }
+
     scene_tag, split_mode, _ = stem.split("_", 2)
     scene_key = SCENE_TAG_TO_KEY[scene_tag]
     return {

@@ -284,13 +284,14 @@ def _summary_row(
     n_queries: int,
     topk: int,
     acc_metrics: Dict[str, float],
+    aggregator: str = "dac_same_scene_top5",
 ) -> Dict[str, object]:
     return {
         "experiment_dir": experiment_dir,
         "scene": scene_name,
         "scene_name": scene_name,
         "dataset": dataset_name,
-        "aggregator": "dac_same_scene_top5",
+        "aggregator": aggregator,
         "stage1_ckpt": str(stage1_ckpt),
         "bundle_path": str(bundle_path),
         "report_path": str(report_path),
@@ -328,6 +329,7 @@ def build_one_bundle(
     scene_name = str(pred_meta["scene_name"])
     split_mode = str(pred_meta["split_mode"])
     dataset_name = "visloc" if scene_key.startswith("visloc") else "wingtra"
+    source_name = "qdfl_same_scene_top5" if Path(pred_file).name.startswith("qdfl_") else "dac_same_scene_top5"
 
     stage1_ckpt = _pick_stage1_ckpt(dataset_name=dataset_name, split_mode=split_mode)
     opts_yaml = _opts_yaml_from_ckpt(stage1_ckpt)
@@ -401,7 +403,7 @@ def build_one_bundle(
         "load2test": "",
         "gallery_save_dir": str(save_dir),
         "layout_cfg": {
-            "mode": "dac_same_scene_top5",
+            "mode": source_name,
             "source_pred_file": pred_file,
             "source_links_csv": str(links_csv),
             "gallery_overlap": "000",
@@ -421,7 +423,7 @@ def build_one_bundle(
             "max_queries": None,
         },
         "gallery_summary": {
-            "source": "dac_same_scene_top5",
+            "source": source_name,
             "n_points_effective_per_query": int(topk),
             "query_alignment": "uav_dataset_test_by_source_filename",
         },
@@ -459,7 +461,7 @@ def build_one_bundle(
     report_payload = {
         "schema_version": 1,
         "scene_name": scene_name,
-        "report_title": f"DAC Same-Scene Retrieval Eval [{scene_name}]",
+        "report_title": f"{source_name} Retrieval Eval [{scene_name}]",
         "n_queries": int(coords_gt.shape[0]),
         "n_eval": int(coords_gt.shape[0]),
         "k_values": list(k_values),
@@ -469,7 +471,7 @@ def build_one_bundle(
         "progressive_acc_metrics": _to_jsonable(progressive_acc_metrics),
         "err_stats": _to_jsonable(err_stats),
         "runtime_gallery_summary": {
-            "source": "dac_same_scene_top5",
+            "source": source_name,
             "topk": int(topk),
             "scene_key": scene_key,
         },
@@ -505,6 +507,7 @@ def build_one_bundle(
         "experiment_dir": experiment_dir,
         "scene_name": scene_name,
         "dataset_name": dataset_name,
+        "aggregator": source_name,
         "bundle_path": str(paths["bundle_pt"]),
         "report_path": str(paths["report_json"]),
         "config_path": str(paths["config_json"]),
@@ -543,9 +546,9 @@ def main() -> None:
 
     links_csvs = [Path(p).resolve() for p in (args.links_csv or [])]
     if not links_csvs:
-        links_csvs = sorted(filtered_dir.glob("*_same_scene_top5_links.csv"))
+        links_csvs = sorted(filtered_dir.glob("*_same_scene_top5*_links.csv"))
     if not links_csvs:
-        raise FileNotFoundError(f"No *_same_scene_top5_links.csv found under {filtered_dir}")
+        raise FileNotFoundError(f"No *_same_scene_top5*_links.csv found under {filtered_dir}")
 
     gallery_coord_index = _build_same_scene_gallery_coord_index(
         dataset_setting_dir=dataset_setting_dir,
@@ -576,6 +579,7 @@ def main() -> None:
             n_queries=int(row["n_queries"]),
             topk=int(row["topk"]),
             acc_metrics={"top1_acc": float(row["top1_acc"]), "top5_acc": float(row["top5_acc"])},
+            aggregator=str(row.get("aggregator", "dac_same_scene_top5")),
         )
         for row in results
     ]

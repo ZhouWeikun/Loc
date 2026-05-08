@@ -595,7 +595,9 @@ def analyze_feat_freq_band(self, n_points_per_subspace=1, use_fine=False,vis=Fal
 
 def analyze_energy_field(self, n_nr=128, n_nc=128, use_train_uav=True, local_zoom_wh=None, vis=False,
                                        use_vis_ref=False, chunk_size_vis=1024, analyse_fft=False, query_id=20,
-                                       plot_mode='both', plot_contour_setting=None):
+                                       plot_mode='both', plot_contour_setting=None,
+                                       render_map_contour=False, map_contour_setting=None,
+                                       map_plot_setting=None, surface_plot_setting=None):
         """
         随机取一帧，固定 rot/scale 与 coord_q 一致，在 nr/nc 平面均匀采样，计算 INGP 相似度/距离场。
 
@@ -606,7 +608,31 @@ def analyze_energy_field(self, n_nr=128, n_nc=128, use_train_uav=True, local_zoo
         plot_contour_setting:
             传给 vis_featmap.plot_contour 的可选字典。适合在外部直接调图像风格，
             例如 with_flow / cmap / n_fill_levels / n_line_levels / contour_line_*。
+
+        surface_plot_setting:
+            传给 HTML 交互式曲面图的可选字典，例如 colorscale / width / height /
+            show_axis_info / z_aspect / colorbar_title / include_plotlyjs。
         """
+        from trainers.util_stage3_energy_field_analyzer import Stage3EnergyFieldAnalyzer
+
+        return Stage3EnergyFieldAnalyzer(self).analyze(
+            n_nr=n_nr,
+            n_nc=n_nc,
+            use_train_uav=use_train_uav,
+            local_zoom_wh=local_zoom_wh,
+            vis=vis,
+            use_vis_ref=use_vis_ref,
+            chunk_size_vis=chunk_size_vis,
+            analyse_fft=analyse_fft,
+            query_id=query_id,
+            plot_mode=plot_mode,
+            plot_contour_setting=plot_contour_setting,
+            render_map_contour=render_map_contour,
+            map_contour_setting=map_contour_setting,
+            map_plot_setting=map_plot_setting,
+            surface_plot_setting=surface_plot_setting,
+        )
+
         plot_mode = str(plot_mode or 'both').strip().lower()
         if plot_mode not in {'ingp', 'both'}:
             raise ValueError(f"plot_mode must be 'ingp' or 'both', got {plot_mode}")

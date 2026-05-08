@@ -30,8 +30,17 @@ def _sorted_top_columns(row: Dict[str, str]) -> List[str]:
         normalized = _normalize_header(key)
         if normalized.startswith("top") and normalized[3:].isdigit():
             cols.append((int(normalized[3:]), normalized))
+        elif normalized.startswith("top") and normalized.endswith("_filename"):
+            rank_text = normalized[3:].split("_", 1)[0]
+            if rank_text.isdigit():
+                cols.append((int(rank_text), normalized))
     cols.sort()
     return [name for _, name in cols]
+
+
+def _top_column_rank(top_col: str) -> int:
+    suffix = _normalize_header(top_col)[3:]
+    return int(suffix.split("_", 1)[0])
 
 
 def _pick_same_scene_primary(
@@ -119,7 +128,7 @@ def _filter_prediction_file(
             same_scene_matches = [
                 match for match in candidate_matches if str(match["gallery_scene_key"]) == query_scene_key
             ]
-            original_rank = int(top_col[3:])
+            original_rank = _top_column_rank(top_col)
             same_scene_candidates.append(
                 {
                     "candidate_filename": candidate_filename,
@@ -267,7 +276,10 @@ def main() -> None:
         )
         summary.update(query_meta)
 
-        stem = pred_path.stem.replace("top128", f"same_scene_top{topk}")
+        stem = pred_path.stem
+        stem = stem.replace("top_128", f"same_scene_top{topk}")
+        stem = stem.replace("top128", f"same_scene_top{topk}")
+        stem = stem.removesuffix("_oldtest")
         raw_path = output_dir / f"{stem}.csv"
         wide_path = output_dir / f"{stem}_links.csv"
         long_path = output_dir / f"{stem}_links_long.csv"

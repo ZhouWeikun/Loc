@@ -365,13 +365,21 @@ class NetworkComponents:
         Returns:
             grid: Grid对象
         """
-        from app.nerf.main_nerf import NeRFAppConfig
-        from wisp.config._tyro import parse_args_tyro_v1
-        from wisp.config import instantiate
         import sys
 
         import os
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+        wisp_root = os.environ.get(
+            'KAOLIN_WISP_ROOT',
+            os.path.join(os.path.dirname(project_root), 'cache', 'kaolin-wisp'),
+        )
+        if os.path.isdir(wisp_root) and wisp_root not in sys.path:
+            sys.path.insert(0, wisp_root)
+
+        from app.nerf.main_nerf import NeRFAppConfig
+        from wisp.config._tyro import parse_args_tyro_v1
+        from wisp.config import instantiate
 
         if config_path is None:
             config_path = getattr(self.opt, 'p_grid_config_yaml', None)
@@ -469,26 +477,32 @@ class NetworkComponents:
         Returns:
             grid_mlp: 条件MLP模型
         """
-        from models.cond_modulator_shallow_serial import SerialModulatorShallow
+        from models.stage2_grid_mlp import Stage2GridFeatureMLP
 
         if output_dim is None:
             output_dim = input_dim
 
-        grid_mlp = SerialModulatorShallow(
+        arch = str(getattr(self.opt, 'grid_mlp_arch', 'residual_cond')).lower()
+        use_coord_condition = bool(getattr(self.opt, 'grid_mlp_use_coord_condition', True))
+
+        grid_mlp = Stage2GridFeatureMLP(
             input_dim=input_dim,
             condition_dim=condition_dim,
             hidden_dim=hidden_dim,
             num_blocks=num_blocks,
             output_dim=output_dim,
-            condition_operator='add'
+            arch=arch,
+            use_coord_condition=use_coord_condition,
         ).to(self.device)
 
-        print(f"✅ 创建条件MLP:")
+        print(f"✅ 创建Grid MLP:")
         print(f"   输入维度: {input_dim}D")
         print(f"   条件维度: {condition_dim}D")
         print(f"   隐藏维度: {hidden_dim}D")
         print(f"   块数量: {num_blocks}")
         print(f"   输出维度: {output_dim}D")
+        print(f"   结构类型: {arch}")
+        print(f"   使用坐标条件: {use_coord_condition}")
 
         return grid_mlp
 

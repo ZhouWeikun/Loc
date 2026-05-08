@@ -16,11 +16,11 @@ exp_setting:
 #  load_stage2_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc04_interval82_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie_2/epoch800_R1=87_rcError=160m.pth"
 #  inherit_stage2_yaml: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc04_interval82_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie_2/opts.yaml"
   #interval82:
-  load_stage2_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc04_interval82_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie/epoch999.pth"
-  inherit_stage2_yaml: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc04_interval82_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie/opts.yaml"
+  load_stage2_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc03_interval82_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie/epoch990_R1=88_MidErr=73m.pth"
+  inherit_stage2_yaml: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc03_interval82_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie/opts.yaml"
 
   inherit_stage2_scope: "network,data,scenes" #支持 network/data/scenes/hardware
-  stage3_analysis_export_root: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc04_interval82_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie/epoch999_res_debug
+  stage3_analysis_export_root: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc03_interval82_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie/epoch990_res_debug
 
   # load2test: 测试时加载的checkpoint（字符串路径）
   load2test: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage3_neural_proxy_nr40_nc30_r36_LossLogsumHD_ep2/epoch002.pth"
@@ -41,7 +41,7 @@ exp_setting:
 scenes_setting:
   sampling_strategy: "random"
   dataset_name: visloc
-  selected_scene_name: visloc_04
+  selected_scene_name: visloc_03
   scene_registry:
     visloc_03:
       name: visloc_03

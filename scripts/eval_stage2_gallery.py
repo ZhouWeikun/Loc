@@ -161,6 +161,22 @@ def _build_script_arg_parser():
         help="Comma-separated recall@k values.",
     )
     parser.add_argument(
+        "--search-backend",
+        default="faiss",
+        choices=("faiss", "matrix"),
+        help="Exact top-k backend. 'faiss' uses IndexFlatL2; 'matrix' uses torch matmul + topk and does not build a FAISS index.",
+    )
+    parser.add_argument(
+        "--recall-cfg",
+        default="",
+        help="Optional recall threshold config name. Use 'per_scene' to resolve by scene, or pass cfg name such as cfg03. Empty keeps legacy thresholds.",
+    )
+    parser.add_argument(
+        "--recall-cfg-yaml",
+        default="trainer_depends/configs/stage3_recall_thresholds.yaml",
+        help="YAML file containing recall threshold configs and optional per_scene mapping.",
+    )
+    parser.add_argument(
         "--cache-gallery",
         action="store_true",
         help="Cache gallery bank to disk and reuse it when available.",
@@ -239,6 +255,130 @@ def _resolve_stage2_ckpt(script_args, opt):
     )
 
 
+def _resolve_stage1_ckpt(script_args, opt):
+    if script_args.stage1_ckpt:
+        ckpt_path = _resolve_cli_path(script_args.stage1_ckpt)
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(f"Stage-1 checkpoint not found: {ckpt_path}")
+        return ckpt_path
+
+    load_stage1_ckpt = getattr(opt, "load_stage1_ckpt", "")
+    if load_stage1_ckpt:
+        ckpt_path = _resolve_cli_path(load_stage1_ckpt)
+        if os.path.exists(ckpt_path):
+            return ckpt_path
+
+    return ""
+
+
+def _load_recall_cfg_yaml(path_text):
+    path_abs = _resolve_cli_path(path_text)
+    if not os.path.isfile(path_abs):
+        raise FileNotFoundError(f"Recall cfg yaml not found: {path_abs}")
+
+    import yaml
+
+    with open(path_abs, "r", encoding="utf-8") as f:
+        cfg_root = yaml.safe_load(f) or {}
+    if not isinstance(cfg_root, dict):
+        raise TypeError(f"Recall cfg yaml must be a dict: {path_abs}")
+    return cfg_root, path_abs
+
+
+def _resolve_scene_name_for_recall(trainer):
+    scene_name = str(getattr(getattr(trainer, "sat_dataset", None), "name", "") or "").strip()
+    if scene_name:
+        return scene_name
+
+    scene_name = str(getattr(trainer.opt, "selected_scene_name", "") or "").strip()
+    if scene_name:
+        return scene_name
+
+    scenes_setting = getattr(trainer.opt, "scenes_setting", None)
+    if isinstance(scenes_setting, dict):
+        scene_name = str(scenes_setting.get("selected_scene_name", "") or "").strip()
+        if scene_name:
+            return scene_name
+        scenes = scenes_setting.get("scenes", [])
+        if scenes and isinstance(scenes[0], dict):
+            return str(scenes[0].get("name", "") or "").strip()
+    return ""
+
+
+def _build_stage2_eval_thresh_cfg(sat_dataset, raw_cfg):
+    raw_cfg = dict(raw_cfg)
+    eval_thresh_cfg = {}
+
+    if raw_cfg.get("dist_th_meter", None) is not None:
+        if not hasattr(sat_dataset, "halfimg_radius_meter") or not hasattr(sat_dataset, "halfimg_radius_nrc"):
+            raise ValueError("dist_th_meter requires sat_dataset.halfimg_radius_meter and sat_dataset.halfimg_radius_nrc")
+        meter2nrc = float(sat_dataset.halfimg_radius_nrc) / max(float(sat_dataset.halfimg_radius_meter), 1e-8)
+        dist_th = float(raw_cfg["dist_th_meter"]) * meter2nrc
+        eval_thresh_cfg["dist_th"] = float(dist_th)
+        eval_thresh_cfg["dist_lambda"] = float(dist_th) / max(float(sat_dataset.halfimg_radius_nrc), 1e-8)
+    elif raw_cfg.get("dist_th", None) is not None:
+        dist_th = float(raw_cfg["dist_th"])
+        eval_thresh_cfg["dist_th"] = dist_th
+        if hasattr(sat_dataset, "halfimg_radius_nrc"):
+            eval_thresh_cfg["dist_lambda"] = dist_th / max(float(sat_dataset.halfimg_radius_nrc), 1e-8)
+    elif raw_cfg.get("dist_lambda", None) is not None:
+        eval_thresh_cfg["dist_lambda"] = float(raw_cfg["dist_lambda"])
+
+    if raw_cfg.get("rot_th_deg", None) is not None:
+        eval_thresh_cfg["rot_th_deg"] = float(raw_cfg["rot_th_deg"])
+    elif raw_cfg.get("rot_th", None) is not None:
+        eval_thresh_cfg["rot_th"] = float(raw_cfg["rot_th"])
+
+    if raw_cfg.get("scale_ratio_th", None) is not None:
+        eval_thresh_cfg["scale_ratio_th"] = float(raw_cfg["scale_ratio_th"])
+    elif raw_cfg.get("scale_th", None) is not None:
+        eval_thresh_cfg["scale_th"] = float(raw_cfg["scale_th"])
+
+    return eval_thresh_cfg
+
+
+def _resolve_recall_eval_thresh_cfg(trainer, script_args):
+    selector = str(getattr(script_args, "recall_cfg", "") or "").strip()
+    if not selector or selector.lower() in {"none", "off", "legacy"}:
+        return None
+
+    trainer._ensure_stage2_eval_runtime()
+    cfg_root, cfg_yaml_abs = _load_recall_cfg_yaml(script_args.recall_cfg_yaml)
+    configs = cfg_root.get("configs", {})
+    if not isinstance(configs, dict) or not configs:
+        raise KeyError(f"Recall cfg yaml has no non-empty 'configs': {cfg_yaml_abs}")
+
+    scene_name = _resolve_scene_name_for_recall(trainer)
+    if selector.lower() in {"per_scene", "scene", "auto"}:
+        per_scene = cfg_root.get("per_scene", {})
+        if not isinstance(per_scene, dict):
+            raise TypeError(f"Recall cfg 'per_scene' must be a dict: {cfg_yaml_abs}")
+        cfg_name = str(per_scene.get(scene_name, cfg_root.get("default", ""))).strip()
+    elif selector.lower() == "default":
+        cfg_name = str(cfg_root.get("default", "")).strip()
+    else:
+        cfg_name = selector
+
+    if cfg_name not in configs:
+        available = ", ".join(sorted(str(k) for k in configs.keys()))
+        raise KeyError(
+            f"Recall cfg '{cfg_name}' not found for selector='{selector}', scene='{scene_name}'. "
+            f"Available configs: {available}"
+        )
+
+    raw_cfg = configs[cfg_name]
+    if not isinstance(raw_cfg, dict):
+        raise TypeError(f"Recall cfg '{cfg_name}' must be a dict, got {type(raw_cfg).__name__}")
+
+    eval_thresh_cfg = _build_stage2_eval_thresh_cfg(trainer.sat_dataset, raw_cfg)
+    print(
+        "[Stage2-RecallCfg] "
+        f"yaml={cfg_yaml_abs} selector={selector} scene={scene_name} "
+        f"resolved={cfg_name} thresholds={eval_thresh_cfg}"
+    )
+    return eval_thresh_cfg
+
+
 def _resolve_mode_defaults(mode, n_bins_4d=None):
     defaults = {
         "rc": {
@@ -312,7 +452,7 @@ def _build_layout_cfg(script_args):
     return Stage2ReferenceGalleryLayoutConfig(**kwargs)
 
 
-def _build_eval_cfg(trainer, script_args):
+def _build_eval_cfg(trainer, script_args, eval_thresh_cfg=None):
     mode_defaults = _resolve_mode_defaults(script_args.mode, script_args.n_bins_4d)
     batch_size = script_args.batch_size
     if batch_size is None:
@@ -322,7 +462,7 @@ def _build_eval_cfg(trainer, script_args):
     if num_workers is None:
         num_workers = int(getattr(trainer.opt, "num_worker_eval", 0))
 
-    return trainer._make_stage2_retrieval_eval_cfg(
+    kwargs = dict(
         use_train_uav=bool(script_args.use_train_uav),
         batch_size=int(batch_size),
         num_workers=int(num_workers),
@@ -334,7 +474,11 @@ def _build_eval_cfg(trainer, script_args):
         report_title=mode_defaults["report_title"],
         report_rot_error=bool(mode_defaults["report_rot_error"]),
         report_scale_error=bool(mode_defaults["report_scale_error"]),
+        search_backend=str(script_args.search_backend),
     )
+    if eval_thresh_cfg is not None:
+        kwargs["eval_thresh_cfg"] = eval_thresh_cfg
+    return trainer._make_stage2_retrieval_eval_cfg(**kwargs)
 
 
 def _build_cli_summary(eval_res, stage2_ckpt, layout_cfg, eval_cfg):
@@ -349,12 +493,32 @@ def _build_cli_summary(eval_res, stage2_ckpt, layout_cfg, eval_cfg):
             "num_workers": int(eval_cfg.num_workers),
             "query_rot2uniform": bool(eval_cfg.query_rot2uniform),
             "query_scale2uniform": bool(eval_cfg.query_scale2uniform),
+            "search_backend": str(getattr(eval_cfg, "search_backend", "faiss")),
             "k_values": [int(k) for k in eval_cfg.k_values],
             "max_queries": None if eval_cfg.max_queries is None else int(eval_cfg.max_queries),
         },
+        "thresholds": eval_res.get("thresholds", {}),
+        "report_meta": eval_res.get("report_meta", {}),
+        "progressive_acc_metrics": eval_res.get("progressive_acc_metrics", {}),
+        "progressive_acc_metric_sources": eval_res.get("progressive_acc_metric_sources", {}),
+        "progressive_error_metrics": eval_res.get("progressive_error_metrics", {}),
+        "progressive_error_metric_sources": eval_res.get("progressive_error_metric_sources", {}),
+        "legacy_acc_metrics_source": eval_res.get("legacy_acc_metrics_source", None),
         "recall@k": {str(int(k)): float(v) for k, v in eval_res["recall@k"].items()},
         "error_rc_norm": float(eval_res["error_rc_norm"]),
         "error_rc_meter": float(eval_res["error_rc_meter"]),
+        "search_backend": str(eval_res.get("search_backend", getattr(eval_cfg, "search_backend", "faiss"))),
+        "retrieval_search_time_sec_total": float(eval_res.get("retrieval_search_time_sec_total", 0.0)),
+        "retrieval_search_num_queries": int(eval_res.get("retrieval_search_num_queries", eval_res["n_queries"])),
+        "retrieval_search_avg_sec_per_query": float(eval_res.get("retrieval_search_avg_sec_per_query", 0.0)),
+        "retrieval_search_avg_ms_per_query": float(eval_res.get("retrieval_search_avg_ms_per_query", 0.0)),
+        "retrieval_search_top_k": int(eval_res.get("retrieval_search_top_k", max(int(k) for k in eval_cfg.k_values))),
+        "retrieval_search_gallery_size": int(
+            eval_res.get(
+                "retrieval_search_gallery_size",
+                eval_res.get("runtime_gallery_summary", {}).get("n_points", 0),
+            )
+        ),
         "runtime_gallery_summary": eval_res["runtime_gallery_summary"],
     }
     if bool(eval_cfg.report_rot_error) and "error_rot_deg" in eval_res:
@@ -389,6 +553,16 @@ def _print_final_summary(summary):
         print("[Stage2 Fitness] error_rot_deg={:.3f}".format(summary["error_rot_deg"]))
     if "error_scale_normed" in summary:
         print("[Stage2 Fitness] error_scale_normed={:.6f}".format(summary["error_scale_normed"]))
+    print(
+        "[Stage2 Fitness] retrieval_search({backend}): total={total:.6f}s | "
+        "avg={avg:.6f}ms/query | top_k={top_k} | gallery_size={gallery_size}".format(
+            backend=summary["search_backend"],
+            total=summary["retrieval_search_time_sec_total"],
+            avg=summary["retrieval_search_avg_ms_per_query"],
+            top_k=summary["retrieval_search_top_k"],
+            gallery_size=summary["retrieval_search_gallery_size"],
+        )
+    )
 
 
 def _write_json(path, payload):
@@ -411,10 +585,7 @@ def main(argv=None):
     sys.argv = parser_argv
     opt = get_parse()
 
-    if script_args.stage1_ckpt:
-        opt.load_stage1_ckpt = _resolve_cli_path(script_args.stage1_ckpt)
-        if not os.path.exists(opt.load_stage1_ckpt):
-            raise FileNotFoundError(f"Stage-1 checkpoint not found: {opt.load_stage1_ckpt}")
+    opt.load_stage1_ckpt = _resolve_stage1_ckpt(script_args=script_args, opt=opt)
     opt.load2test = _resolve_stage2_ckpt(script_args, opt)
 
     stage1_ckpt_for_test = getattr(opt, "load_stage1_ckpt", "")
@@ -424,9 +595,10 @@ def main(argv=None):
     trainer._load_checkpoints_for_test()
 
     layout_cfg = _build_layout_cfg(script_args)
-    eval_cfg = _build_eval_cfg(trainer, script_args)
+    eval_thresh_cfg = _resolve_recall_eval_thresh_cfg(trainer, script_args)
+    eval_cfg = _build_eval_cfg(trainer, script_args, eval_thresh_cfg=eval_thresh_cfg)
     feature_cfg = trainer._make_stage2_gallery_feature_cfg()
-    feature_cfg.build_faiss = True
+    feature_cfg.build_faiss = str(script_args.search_backend).strip().lower() == "faiss"
     feature_cfg.show_progress = True
 
     gallery_state = trainer.eval_gallery_bank(

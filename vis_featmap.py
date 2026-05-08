@@ -306,6 +306,13 @@ def vis_griddata_in_3d_surface_interactive(
     p2save: Optional[str] = None,
     colorscale: Union[str, Sequence[str]] = "Viridis",
     show_axis_info: bool = True,
+    width: int = 900,
+    height: int = 700,
+    colorbar_title: str = "Value",
+    hovertemplate: Optional[str] = None,
+    z_aspect: float = 0.45,
+    include_plotlyjs: Union[bool, str] = "cdn",
+    clean_scene: bool = False,
 ):
     """Save a 2D grid as an interactive Plotly 3D surface."""
     import plotly.graph_objects as go
@@ -314,6 +321,8 @@ def vis_griddata_in_3d_surface_interactive(
     n_rows, n_cols = data.shape
     x = np.arange(n_cols)
     y = np.arange(n_rows)
+    if hovertemplate is None:
+        hovertemplate = "col=%{x}<br>row=%{y}<br>value=%{z:.5f}<extra></extra>"
 
     fig = go.Figure(
         data=[
@@ -322,22 +331,34 @@ def vis_griddata_in_3d_surface_interactive(
                 y=y,
                 z=data,
                 colorscale=colorscale,
-                colorbar=dict(title="Value"),
-                hovertemplate="col=%{x}<br>row=%{y}<br>value=%{z:.5f}<extra></extra>",
+                colorbar=dict(title=colorbar_title),
+                hovertemplate=hovertemplate,
             )
         ]
     )
-    axis_cfg = dict(visible=bool(show_axis_info))
+    clean_scene = bool(clean_scene)
+    axis_cfg = dict(visible=bool(show_axis_info) and not clean_scene)
+    if clean_scene:
+        axis_cfg.update(
+            showbackground=False,
+            showgrid=False,
+            showline=False,
+            showticklabels=False,
+            zeroline=False,
+        )
     fig.update_layout(
-        width=900,
-        height=700,
-        margin=dict(l=0, r=0, b=0, t=30),
+        width=int(width),
+        height=int(height),
+        paper_bgcolor="rgba(0,0,0,0)" if clean_scene else None,
+        plot_bgcolor="rgba(0,0,0,0)" if clean_scene else None,
+        margin=dict(l=0, r=0, b=0, t=0 if clean_scene else 30),
         scene=dict(
-            xaxis=dict(title="NC", **axis_cfg),
-            yaxis=dict(title="NR", autorange="reversed", **axis_cfg),
-            zaxis=dict(title="Value", **axis_cfg),
+            xaxis=dict(title="" if clean_scene else "NC", **axis_cfg),
+            yaxis=dict(title="" if clean_scene else "NR", autorange="reversed", **axis_cfg),
+            zaxis=dict(title="" if clean_scene else "Value", **axis_cfg),
+            bgcolor="rgba(0,0,0,0)" if clean_scene else None,
             aspectmode="manual",
-            aspectratio=dict(x=1, y=max(n_rows / max(n_cols, 1), 0.2), z=0.45),
+            aspectratio=dict(x=1, y=max(n_rows / max(n_cols, 1), 0.2), z=float(z_aspect)),
         ),
     )
 
@@ -345,7 +366,7 @@ def vis_griddata_in_3d_surface_interactive(
         path = Path(p2save)
         if path.parent:
             path.parent.mkdir(parents=True, exist_ok=True)
-        fig.write_html(str(path), include_plotlyjs="cdn", full_html=True)
+        fig.write_html(str(path), include_plotlyjs=include_plotlyjs, full_html=True)
     return fig
 
 

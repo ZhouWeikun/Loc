@@ -83,3 +83,5 @@ network_setting:
   posenc_multires_scale: 4
   grid_mlp_hidden_dim: 512
   grid_mlp_num_blocks: 1
+  grid_mlp_arch: residual_cond
+  grid_mlp_use_coord_condition: true

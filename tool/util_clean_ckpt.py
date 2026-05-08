@@ -262,7 +262,7 @@ if __name__ == "__main__":
             "interval_after_seg": 5,
         }
     clean_checkpoints(
-        directory = '/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_infonce_dinov2_adF4_salad',
+        directory = '/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/visloc_stage1_tripleLoss_singleEdge_hardest_fm_mask_splitInterval82',
         k = 10,
         dry_run=False,
         segmented_cfg=None,

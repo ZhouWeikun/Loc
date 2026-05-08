@@ -102,6 +102,7 @@
 #grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2;
 
 
+
 #salad with msloss:
 #exp_name=stage2_zurich_interval91_wRejectSampling_msloss_dinov2_adF4_salad_codebookW18_mlpH1024B2_PN1cubie,
 #selected_scene_name=zurich,
@@ -111,11 +112,43 @@
 #num_epochs=1000;
 
 #salad with msloss + hash_agg:
-exp_name=stage2_zurich_interval91_wRejectSampling_msloss_dinov2_adF4_salad_codebookW18_mlpH512B1_PN1cubie_hash_agg,
+#exp_name=stage2_zurich_interval91_wRejectSampling_msloss_dinov2_adF4_salad_codebookW18_mlpH512B1_PN1cubie_hash_agg,
+#selected_scene_name=zurich,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_msLoss_dinov2_adF4_salad_2/epoch016_zurich_R1=72.27_MedErr=27.5m_zuchwil_R1=66.44_MedErr=32.8m.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_msLoss_dinov2_adF4_salad_2/opts.yaml,
+#network_setting.p_grid_config_yaml=trainer_depends/configs/nerf_hash_wingtra_lodagg1024.yaml,
+#network_setting.hash_lod_aggregator.enabled=true,
+#grid_mlp_hidden_dim=512,grid_mlp_num_blocks=1,
+#num_epochs=1000;
+
+
+
+# Stage2 grid_mlp ablation switches:
+#grid_mlp_arch=residual_cond,grid_mlp_use_coord_condition=true;
+#grid_mlp_arch=plain_mlp,grid_mlp_use_coord_condition=true;
+#grid_mlp_arch=residual_cond,grid_mlp_use_coord_condition=false;
+#grid_mlp_arch=plain_mlp,grid_mlp_use_coord_condition=false;
+
+## ablation-1: no pose modulation
+#exp_name=stage2_zurich_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_mlpH1024B2_noPoseCond,
+#selected_scene_name=zurich,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/epoch004_zurichR1=82MedErr23m_zuchwilR1=76MedErr=25m.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2,
+#grid_mlp_arch=residual_cond,grid_mlp_use_coord_condition=false;
+
+## ablation-2: no pose modulation + plain mlp
+#exp_name=stage2_zurich_interval91_wRejectSampling_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW18_plainMLPH1024L2_noPoseCond,
+#selected_scene_name=zurich,
+#load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/epoch004_zurichR1=82MedErr23m_zuchwilR1=76MedErr=25m.pth,
+#inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/opts.yaml,
+#grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2,
+#grid_mlp_arch=plain_mlp,grid_mlp_use_coord_condition=false;
+
+## ablation-3: no pose modulation + plain mlp + ms_loss
+exp_name=stage2_zurich_interval91_wRejectSampling_msloss_fmMask_dinov2_adF4_codebookW18_plainMLPH1024L2_noPoseCond,
 selected_scene_name=zurich,
 load_stage1_ckpt=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_msLoss_dinov2_adF4_salad_2/epoch016_zurich_R1=72.27_MedErr=27.5m_zuchwil_R1=66.44_MedErr=32.8m.pth,
 inherit_stage1_yaml=/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_msLoss_dinov2_adF4_salad_2/opts.yaml,
-network_setting.p_grid_config_yaml=trainer_depends/configs/nerf_hash_wingtra_lodagg1024.yaml,
-network_setting.hash_lod_aggregator.enabled=true,
-grid_mlp_hidden_dim=512,grid_mlp_num_blocks=1,
-num_epochs=1000;
+grid_mlp_hidden_dim=1024,grid_mlp_num_blocks=2,
+grid_mlp_arch=plain_mlp,grid_mlp_use_coord_condition=false;

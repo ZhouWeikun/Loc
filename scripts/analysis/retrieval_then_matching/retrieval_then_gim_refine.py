@@ -672,8 +672,10 @@ class RefineEvaluator:
                 if str(k).startswith("top") and str(k).endswith("_acc")
             },
             "progressive_acc_metrics": _to_jsonable(acc_metrics_raw.get("progressive_acc_metrics", {})),
+            "progressive_error_metrics": _to_jsonable(acc_metrics_raw.get("progressive_error_metrics", {})),
             "legacy_acc_metrics_source": str(acc_metrics_raw.get("legacy_acc_metrics_source", "")),
             "progressive_acc_metric_sources": _to_jsonable(acc_metrics_raw.get("progressive_acc_metric_sources", {})),
+            "progressive_error_metric_sources": _to_jsonable(acc_metrics_raw.get("progressive_error_metric_sources", {})),
             "err_stats": _to_jsonable(err_stats),
         }
 
@@ -990,6 +992,60 @@ class RetrievalThenGIMRefinePipeline:
                 return 0.0
             return float(group_metrics.get(key, 0.0))
 
+        def _maybe_float(value: object) -> object:
+            if value is None:
+                return ""
+            try:
+                return float(value)
+            except Exception:
+                return ""
+
+        def _err_stat(eval_payload: Dict[str, object], key: str) -> object:
+            err_stats = eval_payload.get("err_stats", {})
+            if not isinstance(err_stats, dict):
+                return ""
+            return _maybe_float(err_stats.get(key))
+
+        def _progressive_err(eval_payload: Dict[str, object], group: str, key: str) -> object:
+            progressive = eval_payload.get("progressive_error_metrics", {})
+            if not isinstance(progressive, dict):
+                return ""
+            group_metrics = progressive.get(group, {})
+            if not isinstance(group_metrics, dict):
+                return ""
+            return _maybe_float(group_metrics.get(key))
+
+        def _add_error_summary_fields(
+            row: Dict[str, object],
+            prefix: str,
+            eval_payload: Dict[str, object],
+            nrc2meter: float,
+        ) -> None:
+            dist_median = _err_stat(eval_payload, "median_dist_err_top1")
+            row[f"{prefix}_dist_median"] = dist_median
+            row[f"{prefix}_dist_median_meter"] = (
+                "" if dist_median == "" else float(dist_median) * float(nrc2meter)
+            )
+            row[f"{prefix}_rot_median"] = _err_stat(eval_payload, "median_rot_err_top1")
+            row[f"{prefix}_scale_median"] = _err_stat(eval_payload, "median_scale_ratio_top1")
+
+            for group in ("dist_recall", "dist_rot_recall", "dist_rot_scale_recall"):
+                base = f"{prefix}_{group}_success"
+                cond_dist = _progressive_err(eval_payload, group, "median_dist_err_top1_given_success")
+                row[f"{base}_n_top1"] = _progressive_err(eval_payload, group, "n_success_top1")
+                row[f"{base}_median_dist"] = cond_dist
+                row[f"{base}_median_dist_meter"] = (
+                    "" if cond_dist == "" else float(cond_dist) * float(nrc2meter)
+                )
+                row[f"{base}_median_rot"] = _progressive_err(
+                    eval_payload, group, "median_rot_err_top1_given_success"
+                )
+                row[f"{base}_median_scale"] = _progressive_err(
+                    eval_payload, group, "median_scale_ratio_top1_given_success"
+                )
+
+        nrc2meter = _to_float(thresholds.get("nrc2meter", None), default=1.0)
+
         summary_row = {
             "scene": spec.scene_name,
             "scene_tag": export_paths["scene_tag"],
@@ -1045,10 +1101,16 @@ class RetrievalThenGIMRefinePipeline:
             "baseline_progressive_acc_metrics": _json_dump(baseline_eval["progressive_acc_metrics"]),
             "rerank_progressive_acc_metrics": _json_dump(rerank_eval["progressive_acc_metrics"]),
             "refine_progressive_acc_metrics": _json_dump(refine_eval["progressive_acc_metrics"]),
+            "baseline_progressive_error_metrics": _json_dump(baseline_eval["progressive_error_metrics"]),
+            "rerank_progressive_error_metrics": _json_dump(rerank_eval["progressive_error_metrics"]),
+            "refine_progressive_error_metrics": _json_dump(refine_eval["progressive_error_metrics"]),
             "report_path": export_paths["report_path"],
             "details_path": export_paths["details_path"],
             "bundle_path": str(spec.bundle_path),
         }
+        _add_error_summary_fields(summary_row, "baseline", baseline_eval, nrc2meter)
+        _add_error_summary_fields(summary_row, "rerank", rerank_eval, nrc2meter)
+        _add_error_summary_fields(summary_row, "refine", refine_eval, nrc2meter)
         self.exporter.append_summary_row(self.summary_csv_out, summary_row)
 
         return {

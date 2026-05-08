@@ -525,7 +525,7 @@ class GridHashFitTrainer(BaseTrainer):
             self._init_datasets(create_train_loader=False)
 
         if not hasattr(self, 'coord_normer') or self.coord_normer is None:
-            from trainer_depends.datasets.util_coords_4d_to_euc5d import CoordsNormProcessor
+            from trainer_depends.utils.util_core_coords_translater import CoordsNormProcessor
             self.coord_normer = CoordsNormProcessor(self.sat_dataset)
 
 
@@ -1271,7 +1271,7 @@ class GridHashFitTrainer(BaseTrainer):
         )
 
         # 4.5 初始化4d坐标归一化器
-        from trainer_depends.datasets.util_coords_4d_to_euc5d import CoordsNormProcessor
+        from trainer_depends.utils.util_core_coords_translater import CoordsNormProcessor
         self.coord_normer = CoordsNormProcessor(self.sat_dataset)
         from trainer_depends.utils.util_udf_computer_euc5d import UDFComputer
         self.udf_compter_5d = UDFComputer(norm_processor=self.coord_normer)
@@ -1430,7 +1430,7 @@ class GridHashFitTrainer(BaseTrainer):
 
         # 1. 初始化数据集和坐标归一化器 (test模式下也需要)
         self._init_datasets(create_train_loader=False)
-        from trainer_depends.datasets.util_coords_4d_to_euc5d import CoordsNormProcessor
+        from trainer_depends.utils.util_core_coords_translater import CoordsNormProcessor
         self.coord_normer = CoordsNormProcessor(self.sat_dataset)
         self.uav_dataloader_test = torch.utils.data.DataLoader(
             self.uav_dataset_test,

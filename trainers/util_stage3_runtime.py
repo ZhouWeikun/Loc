@@ -139,10 +139,10 @@ def _init_stage3_test_runtime(self, use_train_uav=False):
     self._init_datasets(create_train_loader=False)
     self._resolve_stage3_sampling_config()
 
-    from trainer_depends.datasets.util_core_coords_translater import CoordsNormProcessor
+    from trainer_depends.utils.util_core_coords_translater import CoordsNormProcessor
     self.coord_normer = CoordsNormProcessor(self.sat_dataset)
 
-    from trainer_depends.datasets.util_core_subspace_sampler import SubspaceSampler
+    from trainer_depends.utils.util_core_subspace_sampler import SubspaceSampler
     self.subspace_sampler = SubspaceSampler(
         sat_dataset=self.sat_dataset,
         n_coarse=self.n_coarse,
@@ -205,7 +205,7 @@ def _init_stage3_train_runtime(self):
         persistent_workers=(opt.num_worker > 0),
     )
 
-    from trainer_depends.datasets.util_core_coords_translater import CoordsNormProcessor
+    from trainer_depends.utils.util_core_coords_translater import CoordsNormProcessor
     self.coord_normer = CoordsNormProcessor(self.sat_dataset)
 
     from trainer_depends.utils.util_gaussian_importance_sampler import NormalizedGaussianSampler
@@ -216,7 +216,7 @@ def _init_stage3_train_runtime(self):
     )
     self.gs_sampler = NormalizedGaussianSampler(self.normed_sigmas, device=self.device)
 
-    from trainer_depends.datasets.util_core_subspace_sampler import SubspaceSampler
+    from trainer_depends.utils.util_core_subspace_sampler import SubspaceSampler
     self.n_points_per_subspace = getattr(opt, 'n_points_per_subspace', 1)
     self.subspace_sampler = SubspaceSampler(
         sat_dataset=self.sat_dataset,

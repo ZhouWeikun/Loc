@@ -63,7 +63,7 @@ sys.path.insert(0, project_root)
 
 from trainer_depends.base.trainer_base import BaseTrainer
 from trainer_depends.base.components import NetworkComponents
-from trainers.util_core_eval import compute_topk_acc_from_coords
+from trainer_depends.utils.util_core_eval import compute_topk_acc_from_coords
 from trainers.util_stage1_ance import Stage1ANCEHelper
 from trainers.util_stage1_gallery_manager import (
     Stage1ReferenceGalleryBank,
@@ -234,7 +234,7 @@ class VisualEncoderTrainer(BaseTrainer):
     def _init_multi_scene_dataloader(self):
         """初始化多场景训练数据加载器"""
         from trainer_depends.datasets.dataset_neuloc_4d_uav_sat_pair import UAVSatPairDataset, collate_uav_sat_pair
-        from trainer_depends.datasets.util_core_coords_translater import CoordsNormProcessor
+        from trainer_depends.utils.util_core_coords_translater import CoordsNormProcessor
 
         opt = self.opt
         scenes = opt.scenes_setting['scenes']

@@ -314,7 +314,6 @@ def _render_energy_field_local(
             show_plot,
             argmode,
     ):
-        import numpy as np
         import os
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
@@ -445,7 +444,6 @@ def visualize_energy_field_local(self, query_feat=None, gt_coord_4d=None, scale_
         """
         能量场综合可视化：拆分为生成场与绘制两个子步骤。
         """
-        import torch
 
         for model in self.param2optimize.values():
             model.eval()
@@ -553,7 +551,7 @@ def analyze_feat_freq_band(self, n_points_per_subspace=1, use_fine=False,vis=Fal
                 feats_ingpg_2d.view(-1, feats_ingpg_2d.shape[-1])
             ).reshape(*coords_2d_fine.shape[:2], -1)
 
-        from scripts.analysis.util_fft_analyse import analyse_feature_frequency
+        from trainer_depends.utils.util_fft_analysis import analyse_feature_frequency
         res = analyse_feature_frequency(
             feats_ingpg_2d, feats_projector_2d,
             cdf_tau=0.95, hf_frac=0.33, eps=1e-12,
@@ -759,7 +757,7 @@ def analyze_energy_field(self, n_nr=128, n_nc=128, use_train_uav=True, local_zoo
             dir2save, epoch = _resolve_analyze_energy_save_context(self, plot_mode=plot_mode)
             suffix = f'hw{local_zoom_wh[0]:.2f}' if local_zoom_wh != 'global' else local_zoom_wh
 
-            from vis_featmap import plot_contour, vis_griddata_in_3d_surface_interactive
+            from scripts.visualization.vis_featmap import plot_contour, vis_griddata_in_3d_surface_interactive
 
             if energy_ingp is not None and plot_mode == 'ingp':
                 contour_p2save = os.path.join(dir2save, f'contour_{set_name}_id{idx}_ns{n_nr}_{suffix}_ingp.png')
@@ -817,7 +815,7 @@ def analyze_energy_field(self, n_nr=128, n_nc=128, use_train_uav=True, local_zoo
                 print(f"⚠️  analyse_fft requires both INGP and projector fields; skip for plot_mode='{plot_mode}' or use_vis_ref={use_vis_ref}.")
                 return
 
-            from scripts.analysis.util_fft_analyse import analyse_feature_frequency
+            from trainer_depends.utils.util_fft_analysis import analyse_feature_frequency
             res = analyse_feature_frequency(
                 energy_ingp[..., None], energy_projector[..., None],
                 cdf_tau=0.95, hf_frac=0.33, eps=1e-12, wo_DC=True,

@@ -16,12 +16,10 @@ Stage 3: MetricNet Trainer
 """
 
 import torch
-import torch.nn.functional as TF
 import tqdm
 import time
 import sys
 import os
-import numpy as np
 import yaml
 from collections.abc import Sequence
 
@@ -29,32 +27,14 @@ from collections.abc import Sequence
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from losses.CL_losses_w_weight import pairLoss_multiEdge_logSum
-from trainers.util_stage3_loc_manager import Stage3FineLocManager
-from trainers.util_stage3_multi_stage_refiner import (
-    EvoTorchFinalModeOptimizer,
-    GradientTopKOptimizer,
-    IterativeSeedCloudRefiner,
-    LocalSeedCloudBuilder,
-    ModeState,
-    PassthroughModeDeduper,
-    SeedModeSearchConfig,
-    SeedModeSearchPipeline,
-    SeedRegionConfig,
-    Stage3CMAConfig,
-    Stage4GradConfig,
-    TopNSeedScreening,
-)
-
 from trainers.stage2_INGP import GridHashFitTrainer
 # from trainer_depends.base.components import NetworkComponents
-import torch.nn.functional as F
 from trainer_depends.config.parser import (
     _expand_selected_scene_config,
     get_parse,
     print_config_summary,
 )
-from trainers.util_core_eval import compute_progressive_topk_acc_from_coords
+from trainer_depends.utils.util_core_eval import compute_progressive_topk_acc_from_coords
 
 from trainers.util_stage3_ckpt import (
     _apply_inherit_stage2_yaml as util_apply_inherit_stage2_yaml,
@@ -489,7 +469,6 @@ class MetricNetTrainer(GridHashFitTrainer):
         return recall_report
 
     def _init_projector(self):
-        from models.projector_mlp_sample import Projector
         """初始化Projector"""
         print("\n" + "=" * 80)
         print("初始化 Projector ")
@@ -971,7 +950,7 @@ class MetricNetTrainer(GridHashFitTrainer):
 
             stage3_analysis_export_root = getattr(self.opt, "stage3_analysis_export_root", "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis")
             if stage3_analysis_export_root:
-                from scripts.analysis.util_stage3_export_triplets import (
+                from trainers.leggacy_stage.util_stage3_export_triplets import (
                     export_stage3_retrieval_triplets_from_results,
                 )
                 t_export0 = time.perf_counter()

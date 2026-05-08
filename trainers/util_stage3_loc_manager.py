@@ -325,7 +325,7 @@ class Stage3FineLocManager:
         scale_select_mode=None,
         return_details=False,
     ):
-        from scripts.analysis.util_stage3_analyze_pred3d import (
+        from trainers.leggacy_stage.util_stage3_analyze_pred3d import (
             compute_topN_acc_given_threshold,
             print_topN_acc_results,
         )
@@ -437,7 +437,7 @@ class Stage3FineLocManager:
         return acc_metrics
 
     def report_spatial_classification(self, pred_pdf_3d_all, q_label_3d_all, title):
-        from scripts.analysis.util_stage3_analyze_pred3d import (
+        from trainers.leggacy_stage.util_stage3_analyze_pred3d import (
             compute_top_k_accuracy,
             print_accuracy_results,
         )

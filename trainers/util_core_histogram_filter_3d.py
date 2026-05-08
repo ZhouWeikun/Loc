@@ -4,7 +4,6 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
-import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
@@ -229,6 +228,8 @@ class HistogramFilter3D(nn.Module):
         return k.view(1, 1, size, size)
 
 
+
+"""#####################################################################"""
 def visualize_trans_kernel(trans_kernel, move_xy=(0, 0), sigma=1.0, resolution=1.0,
                            save_path=None, show_directions=None):
     """

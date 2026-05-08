@@ -328,7 +328,7 @@ class Stage3EnergyFieldAnalyzer:
         }
 
     def render_default_outputs(self, result, plot_mode="both", plot_contour_setting=None, surface_plot_setting=None):
-        from vis_featmap import plot_contour, vis_griddata_in_3d_surface_interactive
+        from scripts.visualization.vis_featmap import plot_contour, vis_griddata_in_3d_surface_interactive
 
         plot_mode = str(plot_mode or "both").strip().lower()
         contour_kwargs = self._merge_contour_kwargs(plot_contour_setting)
@@ -523,7 +523,7 @@ class Stage3EnergyFieldAnalyzer:
             print(f"WARNING: analyse_fft requires both INGP and projector fields; skip for plot_mode='{plot_mode}'.")
             return None
 
-        from scripts.analysis.util_fft_analyse import analyse_feature_frequency
+        from trainer_depends.utils.util_fft_analysis import analyse_feature_frequency
 
         res = analyse_feature_frequency(
             energy_ingp[..., None], energy_projector[..., None],

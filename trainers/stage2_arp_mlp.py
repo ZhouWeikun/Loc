@@ -30,7 +30,7 @@ from models.multi_mlp import create_mlp, init_weights
 from trainer_depends.base.trainer_base import BaseTrainer
 from trainer_depends.base.components import NetworkComponents
 from trainer_depends.config.parser import get_parse, print_config_summary
-from trainer_depends.datasets.util_coords_4d_to_euc5d import CoordsNormProcessor
+from trainer_depends.utils.util_core_coords_translater import CoordsNormProcessor
 from trainers.stage2_INGP import GridHashFitTrainer, _find_latest_epoch_ckpt
 
 

@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import tqdm
 
-from trainers.util_core_eval import _compute_coord_error_tensors
+from trainer_depends.utils.util_core_eval import _compute_coord_error_tensors
 from trainers.util_stage3_loc_manager import Stage3FineLocManager
 from trainers.util_stage3_multi_start_CMAES_by_evotorch import MultiStartCMAESEvoTorchRefiner
 

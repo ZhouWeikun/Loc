@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as TF
 import tqdm
 
-from trainer_depends.datasets.util_core_subspace_sampler import SubspaceSampler
+from trainer_depends.utils.util_core_subspace_sampler import SubspaceSampler
 
 
 @dataclass

@@ -506,7 +506,7 @@ if __name__ == "__main__":
         print("⚠️  未找到数据集路径，请先修改 p_satinfo_json / p_uav_geocsv 后再运行。")
     else:
         from trainer_depends.datasets.dataset_wingtra_4d import SatDataset
-        from trainer_depends.datasets.util_coords_4d_to_euc5d import CoordsNormProcessor
+        from trainer_depends.utils.util_core_coords_translater import CoordsNormProcessor
 
         sat_dataset = SatDataset(
             p_satinfo_json=p_satinfo_json,

@@ -4,8 +4,8 @@ import time
 import torch
 import torch.nn.functional as TF
 
-from trainers.util_core_eval import compute_progressive_topk_acc_from_coords, print_progressive_topk_eval_results
-from trainers.util_stage1_others import warp_uav_imgs
+from trainer_depends.utils.util_core_eval import compute_progressive_topk_acc_from_coords, print_progressive_topk_eval_results
+from trainer_depends.utils.util_uav_image_transform import warp_uav_imgs
 
 
 @dataclass

@@ -1,26 +1,26 @@
 # segment / overlap000
-#python /home/data/zwk/pyproj_neuloc_v0/scripts/analysis/run_stage1_gallery_plan.py \
+#python /home/data/zwk/pyproj_neuloc_v0/scripts/analysis/run_stage1_gallery_fm_plan.py \
 #    --plan-yaml "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis/stage1_crtl_ckpts2exps/exps_segment_netvlad&salad&selavpr_gallery_overlap000/stage1_segment_eval_plan_overlap000.yaml" \
 #    --output-csv "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis/stage1_crtl_ckpts2exps/exps_segment_netvlad&salad&selavpr_gallery_overlap000/stage1_segment_gallery_overlap000.csv" \
 #    --scale-ratio-th 1.2 \
 #    --skip-existing
 #
 ## interval / overlap000
-#python /home/data/zwk/pyproj_neuloc_v0/scripts/analysis/run_stage1_gallery_plan.py \
+#python /home/data/zwk/pyproj_neuloc_v0/scripts/analysis/run_stage1_gallery_fm_plan.py \
 #    --plan-yaml "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis/stage1_crtl_ckpts2exps/exps_interval_netvlad&salad&selavpr_gallery_overlap000/stage1_interval_eval_plan_overlap000.yaml" \
 #    --output-csv "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis/stage1_crtl_ckpts2exps/exps_interval_netvlad&salad&selavpr_gallery_overlap000/stage1_interval_gallery_overlap000.csv" \
 #    --scale-ratio-th 1.2 \
 #    --skip-existing
 
 #  1. interval / overlap025
-#python /home/data/zwk/pyproj_neuloc_v0/scripts/analysis/run_stage1_gallery_plan.py \
+#python /home/data/zwk/pyproj_neuloc_v0/scripts/analysis/run_stage1_gallery_fm_plan.py \
 #    --plan-yaml "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis/stage1_crtl_ckpts2exps/exps_interval_netvlad&salad&selavpr_gallery_overlap025/stage1_interval_eval_plan_overlap025.yaml" \
 #    --output-csv "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis/stage1_crtl_ckpts2exps/exps_interval_netvlad&salad&selavpr_gallery_overlap025/stage1_interval_gallery_overlap025.csv" \
 #    --scale-ratio-th 1.2 \
 #    --skip-existing
 
 ##  2. segment / overlap050
-#python /home/data/zwk/pyproj_neuloc_v0/scripts/analysis/run_stage1_gallery_plan.py \
+#python /home/data/zwk/pyproj_neuloc_v0/scripts/analysis/run_stage1_gallery_fm_plan.py \
 #    --plan-yaml "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis/stage1_crtl_ckpts2exps/exps_segment_netvlad&salad&selavpr_gallery_overlap050/stage1_segment_eval_plan_overlap050.yaml" \
 #    --output-csv "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/analysis/stage1_crtl_ckpts2exps/exps_segment_netvlad&salad&selavpr_gallery_overlap050/stage1_segment_gallery_overlap050.csv" \
 #    --scale-ratio-th 1.2 \

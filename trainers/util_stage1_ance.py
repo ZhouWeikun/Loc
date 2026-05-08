@@ -5,7 +5,7 @@ import torch
 import tqdm
 
 from trainer_depends.miners import MultiSceneANCEMiner, SatGalleryProvider, SceneNegMasker
-from trainers.util_stage1_others import warp_uav_imgs
+from trainer_depends.utils.util_uav_image_transform import warp_uav_imgs
 
 
 @dataclass

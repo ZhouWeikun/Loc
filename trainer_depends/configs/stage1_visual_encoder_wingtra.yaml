@@ -49,17 +49,6 @@ scenes_setting:
       p_uavinfo_json: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info/uavimgs_metainfo.json
       p_uav_geocsv: /home/data/zwk/data_uavimgs_wingtra/Zuchwil/uavimgs_info/uavimgs_geo_corrected_v1.csv
     # 添加更多场景（如果需要），只需继续添加列表项即可
-#  dataset_name: visloc
-#  scenes:
-#    - name: "visloc_03"
-#      p_satinfo_json: /home/data/zwk/dataset_UAV-VisLoc/03/satellite03_epsg32650_res03m_multi_tifs.json
-#      p_uavinfo_json: /home/data/zwk/dataset_UAV-VisLoc/03/uavimgs_metainfo.json
-#      p_uav_geocsv:  /home/data/zwk/dataset_UAV-VisLoc/03/uavimgs_geo_corrected.csv
-#    - name: "visloc_04"
-#      p_satinfo_json: /home/data/zwk/dataset_UAV-VisLoc/04/satellite04_epsg32650_res03m_multi_tifs.json
-#      p_uavinfo_json: /home/data/zwk/dataset_UAV-VisLoc/04/uavimgs_metainfo.json
-#      p_uav_geocsv: /home/data/zwk/dataset_UAV-VisLoc/04/uavimgs_geo_corrected.csv
-
 hardware_setting:
 #  batchsize_sat: 768 #batchsize_uav的整数倍
 #  batchsize_uav: 64
@@ -72,7 +61,7 @@ hardware_setting:
   num_worker: 8
 
 learning_setting:
-  loss_type: tripleLoss_singleEdge_hardest_fm_mask
+  loss_type: tripleLoss_singleEdge_hardest_fm_mask #tripleLoss_singleEdge_hardest_fm_mask or infonce
   num_epochs: 100
   #when evaluating
   val_overlap: 0.5

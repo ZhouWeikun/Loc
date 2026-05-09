@@ -146,10 +146,17 @@ class MinimalStage1VisualEncoderTrainer(BaseTrainer):
             ).to(self.device)
             return
 
-        from losses.WeightedSoftTripletLoss_fm_mat import SWTLoss_fm_mat
+        if loss_type == "tripleloss_singleedge_hardest_fm_mask":
+            from losses.CL_losses_wo_weight import tripleLoss_singleEdge_hardest_fm_mask
 
-        self.loss_type = "swt_mask"
-        self.loss_fn = SWTLoss_fm_mat(decoupling=False).to(self.device)
+            self.loss_type = "tripleloss_singleedge_hardest_fm_mask"
+            self.loss_fn = tripleLoss_singleEdge_hardest_fm_mask().to(self.device)
+            return
+
+        raise ValueError(
+            f"Unsupported stage1 minimal loss_type={getattr(self.opt, 'loss_type', None)!r}. "
+            "Supported values: infonce, tripleLoss_singleEdge_hardest_fm_mask."
+        )
 
     def _extract_batch(self, batch):
         uavimgs = batch["uavimgs"].to(self.device)

@@ -416,7 +416,7 @@
       <recent name="$PROJECT_DIR$/trainers/leggacy_stage" />
     </key>
   </component>
-  <component name="RunManager" selected="Python.stage3_ingp_inferencer_minimal">
+  <component name="RunManager" selected="Python.stage1_visual_encoder_minimal">
     <configuration default="true" type="DjangoTestsConfigurationType">
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -472,8 +472,9 @@
         <env name="PYTHONUNBUFFERED" value="1" />
       </envs>
       <option name="SDK_HOME" value="" />
+      <option name="SDK_NAME" value="neuloc_wisp" />
       <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/trainers" />
-      <option name="IS_MODULE_SDK" value="true" />
+      <option name="IS_MODULE_SDK" value="false" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
@@ -781,9 +782,9 @@
     </list>
     <recent_temporary>
       <list>
+        <item itemvalue="Python.stage1_visual_encoder_minimal" />
         <item itemvalue="Python.stage3_ingp_inferencer_minimal" />
         <item itemvalue="Python.stage2_INGP_minimal" />
-        <item itemvalue="Python.stage1_visual_encoder_minimal" />
         <item itemvalue="Python.stage1_visual_encoder_wANCE" />
         <item itemvalue="Python.util_clean_ckpt" />
       </list>

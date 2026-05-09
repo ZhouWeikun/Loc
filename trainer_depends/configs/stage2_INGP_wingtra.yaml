@@ -20,14 +20,6 @@ exp_setting:
   # load2test: 测试当前Stage时加载的checkpoint（字符串路径）
   load2test:  ""
 
-# ==================== 数据加载配置 ====================
-#data_setting:
-#  imgsize2net: 224
-#  satimgsize2crop: 244   #satimgsize2crop：res02m:zuchwil=540,zurich=614; res03m:zuchwil=400; res05m:zurich=224
-#  n_rand2sample_per_pos: 256 #16
-#  split_train_ratio: 0.9
-#  split_mode: segment
-
 # ==================== 场景配置 ====================
 # 场景列表（支持任意数量）：
 # - 当列表只有1个场景时，程序自动使用单场景模式
@@ -77,12 +69,3 @@ network_setting:
   grid_mlp_num_blocks: 2
   grid_mlp_use_coord_condition: true
 
-#  p_grid_config_yaml: trainer_depends/configs/nerf_hash_wingtra_lodagg1024.yaml
-  hash_lod_aggregator:
-    enabled: false
-    mode: scale_softmax
-    coord_source: scale
-    scale_source: norm_log_scale
-    num_lods: 4
-    per_lod_dim: 1024
-    output_dim: 1024

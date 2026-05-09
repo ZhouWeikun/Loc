@@ -17,13 +17,6 @@ exp_setting:
   # load2test: 测试当前Stage时加载的checkpoint（字符串路径）
   load2test:  "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage2_visloc03_segment82_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_codebookW19_mlpH1024B2_PN1cubie_5/epoch990_R1=86_MeanErr189m_MidErr73m.pth"
 
-# ==================== 数据加载配置 ====================
-#data_setting:
-#  imgsize2net: 224
-#  satimgsize2crop: 244   #satimgsize2crop：res02m:zuchwil=540,zurich=614; res03m:zuchwil=400; res05m:zurich=224
-#  n_rand2sample_per_pos: 256 #16
-#  split_train_ratio: 0.9
-#  split_mode: segment
 
 # ==================== 场景配置 ====================
 # 场景列表（支持任意数量）：

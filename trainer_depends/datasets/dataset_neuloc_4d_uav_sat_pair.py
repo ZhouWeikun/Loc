@@ -263,15 +263,6 @@ class UAVSatPairDataset(Dataset):
             satimg_pos2satimg_query = self.sat_dataset.crop_satimg_by_4d_coords_fast(
                 coords_sat_query, id_satmap2sample=pos_id,
             ).squeeze()
-        
-        # debug
-        # img2vis_uav = self.uav_dataset.denormalize_img(uavimg)
-        # img2vis_sat = self.sat_dataset.denormalize_img(satimgs_pos)
-        # from matplotlib import pyplot as plt
-        # fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(10, 4))
-        # ax1.imshow(img2vis_uav)
-        # ax2.imshow(img2vis_sat)
-        # plt.show()
 
         # 3. 采样负样本（如果需要）
         satimgs_neg = None

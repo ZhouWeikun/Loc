@@ -1,6 +1,18 @@
 import os
+import sys
 import json
+from pathlib import Path
 from fractions import Fraction
+
+if __package__ in (None, ""):
+    project_root = str(Path(__file__).resolve().parents[2])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+from trainer_depends.utils.compat_runtime import preload_conda_libstdcpp
+
+preload_conda_libstdcpp()
+
 os.environ["OPENCV_IO_MAX_IMAGE_PIXELS"] = pow(2,40).__str__()
 # from torchvision.transforms import InterpolationMode
 from PIL import Image
@@ -12,7 +24,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 import random
 import  torchvision.transforms as T
-#
+
 from trainer_depends.utils.util_mk_data_transform import mk_pil_transform,mk_tensor_transform
 from trainer_depends.utils.util_data_transform_with_params import mk_pil_transform_with_params, apply_augment_to_coords
 from trainer_depends.utils.util_batch_rotation import batch_rotate_images_per_sample
@@ -94,11 +106,149 @@ def get_valid_range_iqr(data, k=1.5):
     upper = q3 + k * iqr
     return lower, upper
 
+def _series_to_bool_numpy(series):
+    if pd.api.types.is_bool_dtype(series):
+        return series.to_numpy(dtype=bool, copy=False)
+
+    normalized = series.fillna("").astype(str).str.strip().str.lower()
+    true_values = {"1", "true", "t", "yes", "y"}
+    false_values = {"0", "false", "f", "no", "n", "", "nan", "none", "null"}
+    invalid_mask = ~normalized.isin(true_values | false_values)
+    if invalid_mask.any():
+        invalid_values = sorted(set(normalized[invalid_mask].tolist()))
+        raise ValueError(f"Boolean column contains unsupported values: {invalid_values}")
+    return normalized.isin(true_values).to_numpy(dtype=bool)
+
+def _infer_split_suffix(train_ratio):
+    train_ratio = float(train_ratio)
+    test_ratio = 1.0 - train_ratio
+
+    train_digit = int(round(train_ratio * 10))
+    test_digit = int(round(test_ratio * 10))
+    if (
+        abs(train_ratio * 10 - train_digit) < 1e-8
+        and abs(test_ratio * 10 - test_digit) < 1e-8
+        and 0 <= train_digit <= 9
+        and 0 <= test_digit <= 9
+    ):
+        return f"{train_digit}{test_digit}"
+
+    return f"{int(round(train_ratio * 100)):02d}"
+
+def _build_split_column_name(split_mode, train_ratio):
+    split_mode = str(split_mode).strip().lower()
+    if split_mode not in ("segment", "interval", "random"):
+        raise ValueError(f"Unsupported split_mode for split column naming: {split_mode!r}")
+    return f"split_{split_mode}{_infer_split_suffix(train_ratio)}"
+
+def _resolve_split_column(df, split_mode, train_ratio):
+    column_name = _build_split_column_name(split_mode, train_ratio)
+    if column_name not in df.columns:
+        return {
+            "has_split_column": False,
+            "column_name": column_name,
+            "split_labels": None,
+            "effective_mask": None,
+            "train_mask": None,
+            "test_mask": None,
+        }
+
+    split_labels = df[column_name].fillna("").astype(str).str.strip().str.lower()
+    split_labels = split_labels.replace({"nan": "", "none": "", "null": ""})
+    valid_values = {"", "train", "test"}
+    invalid_mask = ~split_labels.isin(valid_values)
+    if invalid_mask.any():
+        invalid_values = sorted(set(split_labels[invalid_mask].tolist()))
+        raise ValueError(
+            f"Split column '{column_name}' contains unsupported values: {invalid_values}. "
+            "Only 'train', 'test', or empty values are allowed."
+        )
+
+    train_mask = (split_labels == "train").to_numpy(dtype=bool)
+    test_mask = (split_labels == "test").to_numpy(dtype=bool)
+    effective_mask = train_mask | test_mask
+    if int(train_mask.sum()) == 0 or int(test_mask.sum()) == 0:
+        raise ValueError(
+            f"Split column '{column_name}' must contain at least one 'train' and one 'test' sample."
+        )
+
+    return {
+        "has_split_column": True,
+        "column_name": column_name,
+        "split_labels": split_labels.to_numpy(dtype=object),
+        "effective_mask": effective_mask,
+        "train_mask": train_mask,
+        "test_mask": test_mask,
+    }
+
+def _compute_scale_ref_from_mask(uav_h_cover_m, aff2d_corrected_mask, effective_mask, scale_ref_m=None):
+    if scale_ref_m is not None:
+        return scale_ref_m
+
+    effective_mask = np.asarray(effective_mask, dtype=bool)
+    aff2d_corrected_mask = np.asarray(aff2d_corrected_mask, dtype=bool)
+    corrected_mask = effective_mask & aff2d_corrected_mask
+    if corrected_mask.any():
+        source = uav_h_cover_m[corrected_mask]
+    else:
+        source = uav_h_cover_m[effective_mask]
+    if len(source) == 0:
+        raise ValueError("Cannot infer scale_ref_m from an empty effective sample set.")
+    return np.array(source.mean() // 10 + 1) * 10
+
+def _compute_legacy_scale_mask(uav_h_cover_m, aff2d_corrected_mask, geo_res_m, dataset_name, scale_ref_m=None):
+    dataset_name = str(dataset_name or "")
+    aff2d_corrected_mask = np.asarray(aff2d_corrected_mask, dtype=bool)
+    if "wingtra" in dataset_name.lower():
+        resolved_scale_ref_m = 200
+        uav_h_cover_m_corrected = uav_h_cover_m[aff2d_corrected_mask]
+        satimgsize_scale_to_ref_m_corrected = (
+            np.array(uav_h_cover_m_corrected / geo_res_m) * geo_res_m / resolved_scale_ref_m
+        )
+        lower_bound = np.percentile(satimgsize_scale_to_ref_m_corrected, 2)
+        upper_bound = np.percentile(satimgsize_scale_to_ref_m_corrected, 99)
+        satimgsize_scale_to_ref_m = (
+            np.array(uav_h_cover_m / geo_res_m) * geo_res_m / resolved_scale_ref_m
+        )
+        scale_mask = (
+            (satimgsize_scale_to_ref_m > lower_bound)
+            * (satimgsize_scale_to_ref_m < upper_bound)
+            * aff2d_corrected_mask
+        )
+        return {
+            "scale_ref_m": resolved_scale_ref_m,
+            "scale_mask": np.asarray(scale_mask, dtype=bool),
+        }
+
+    resolved_scale_ref_m = _compute_scale_ref_from_mask(
+        uav_h_cover_m=uav_h_cover_m,
+        aff2d_corrected_mask=aff2d_corrected_mask,
+        effective_mask=np.ones_like(aff2d_corrected_mask, dtype=bool),
+        scale_ref_m=scale_ref_m,
+    )
+    satimgsize_scale_to_ref_m_corrected = np.array(uav_h_cover_m[aff2d_corrected_mask]) / resolved_scale_ref_m
+    satimgsize_scale_to_ref_m = np.array(uav_h_cover_m / geo_res_m) * geo_res_m / resolved_scale_ref_m
+    lower_bound, upper_bound = get_valid_range_mad(satimgsize_scale_to_ref_m_corrected)
+    scale_mask = (
+        (satimgsize_scale_to_ref_m > lower_bound)
+        * (satimgsize_scale_to_ref_m < upper_bound)
+        * aff2d_corrected_mask
+    )
+    return {
+        "scale_ref_m": resolved_scale_ref_m,
+        "scale_mask": np.asarray(scale_mask, dtype=bool),
+    }
+
 def _compute_scale_filter_from_df(df, geo_res_m, scale_ref_m=None):
     uav_h_cover_m = np.array(df['h_cover_m'])
-    aff2d_corrected_mask = np.array(df['aff2d_corrected'])
+    aff2d_corrected_mask = _series_to_bool_numpy(df['aff2d_corrected'])
     uav_h_cover_m_corrected = uav_h_cover_m[aff2d_corrected_mask]
-    scale_ref_m = np.array((uav_h_cover_m_corrected).mean()//10+1) * 10 if scale_ref_m is None else scale_ref_m
+    scale_ref_m = _compute_scale_ref_from_mask(
+        uav_h_cover_m=uav_h_cover_m,
+        aff2d_corrected_mask=aff2d_corrected_mask,
+        effective_mask=np.ones_like(aff2d_corrected_mask, dtype=bool),
+        scale_ref_m=scale_ref_m,
+    )
     satimgsize_scale_to_ref_m_corrected = np.array(uav_h_cover_m_corrected) / scale_ref_m
     satimgsize_scale_to_ref_m = np.array(uav_h_cover_m / geo_res_m) * geo_res_m / scale_ref_m
     lower_bound, upper_bound = get_valid_range_mad(satimgsize_scale_to_ref_m_corrected)
@@ -163,6 +313,8 @@ class SatDataset(object):
                  device='cpu',
                  scale_ref_m=None,
                  p_uav_geocsv=None,
+                 split_train_ratio=0.9,
+                 split_mode='segment',
                  return_pair=False,
                  name=None,
                  pad_mode=None,
@@ -210,26 +362,44 @@ class SatDataset(object):
 
         # for defining the scale to sample
         self.p_uav_geocsv = p_uav_geocsv
+        self.split_train_ratio = float(split_train_ratio)
+        self.split_mode = str(split_mode).strip().lower()
         df = pd.read_csv(p_uav_geocsv)
-        # filtering by the scale
-        # old verison for wingtra:
-        if 'wingtra'in name.lower():
-            self.scale_ref_m=200
-            uav_h_cover_m = df['h_cover_m']
-            aff2d_corrected_mask = df['aff2d_corrected']
-            uav_h_cover_m_corrected = uav_h_cover_m[aff2d_corrected_mask]
-            satimgsize_scale_to_ref_m_corrected = np.array(uav_h_cover_m_corrected/ self.geo_res_m)* self.geo_res_m/self.scale_ref_m
-            lower_bound = np.percentile( satimgsize_scale_to_ref_m_corrected, 2)
-            upper_bound = np.percentile( satimgsize_scale_to_ref_m_corrected, 99)
-            satimgsize_scale_to_ref_m = np.array(uav_h_cover_m /  self.geo_res_m) *  self.geo_res_m / self.scale_ref_m
-            scale_mask = (satimgsize_scale_to_ref_m > lower_bound) * (satimgsize_scale_to_ref_m < upper_bound) * aff2d_corrected_mask
+        split_info = _resolve_split_column(df, self.split_mode, self.split_train_ratio)
+        self.has_split_column = bool(split_info["has_split_column"])
+        self.active_split_column = split_info["column_name"]
+        self.split_source = "csv_column" if self.has_split_column else "legacy_filter"
+        uav_h_cover_m = np.asarray(df['h_cover_m'], dtype=float)
+        aff2d_corrected_mask = _series_to_bool_numpy(df['aff2d_corrected'])
+
+        if self.has_split_column:
+            scale_mask = np.asarray(split_info["effective_mask"], dtype=bool)
+            self.scale_ref_m = _compute_scale_ref_from_mask(
+                uav_h_cover_m=uav_h_cover_m,
+                aff2d_corrected_mask=aff2d_corrected_mask,
+                effective_mask=scale_mask,
+                scale_ref_m=scale_ref_m,
+            )
+            n_train = int(split_info["train_mask"].sum())
+            n_test = int(split_info["test_mask"].sum())
+            n_dropped = int(len(df) - scale_mask.sum())
+            print(
+                f"[{self.name}] SatDataset using split column '{self.active_split_column}' "
+                f"(train={n_train}, test={n_test}, dropped={n_dropped})."
+            )
         else:
-            scale_info = _compute_scale_filter_from_df(df, self.geo_res_m, scale_ref_m)
-            uav_h_cover_m = scale_info["uav_h_cover_m"]
-            self.scale_ref_m = scale_info["scale_ref_m"]
-            scale_mask = scale_info["scale_mask"]
-            # without filtering:
-            # scale_mask = aff2d_corrected_mask
+            legacy_scale = _compute_legacy_scale_mask(
+                uav_h_cover_m=uav_h_cover_m,
+                aff2d_corrected_mask=aff2d_corrected_mask,
+                geo_res_m=self.geo_res_m,
+                dataset_name=self.name,
+                scale_ref_m=scale_ref_m,
+            )
+            self.scale_ref_m = legacy_scale["scale_ref_m"]
+            scale_mask = legacy_scale["scale_mask"]
+        # filtering by the scale
+        # without filtering:
+        # scale_mask = aff2d_corrected_mask
         # debug: visualize scale distribution (optional)
         # if kwargs.get("debug_scale_hist", False):
         # debug_plot_scale_hist(
@@ -240,6 +410,7 @@ class SatDataset(object):
         #     title=f"satimgsize_scale_to_ref_m ({self.name})",
         #     save_path=kwargs.get("debug_scale_hist_path", None),
         # )
+
         # config the satimgsize2crop
         self.satimgsize_correspond2uav_list = uav_h_cover_m[scale_mask] / self.geo_res_m
         self.satimgsize2crop_mean = self.satimgsize_correspond2uav_list.mean()
@@ -887,31 +1058,51 @@ class UAVDataset(object):
             raise ValueError("UAVDataset requires p_uav_geocsv; do not read UAV geo CSV from p_uavinfo_json anymore.")
         df = pd.read_csv(p_uav_geocsv)
         self.uav_df = df
+        split_info = _resolve_split_column(df, self.split_mode, self.split_train_ratio)
+        self.has_split_column = bool(split_info["has_split_column"])
+        self.active_split_column = split_info["column_name"]
+        self.split_source = "csv_column" if self.has_split_column else "legacy_filter"
 
         if sat_dataset is not None:
             self.geo_res_m = sat_dataset.geo_res_m
 
+        uav_h_cover_m = np.asarray(df['h_cover_m'], dtype=float)
+        aff2d_corrected_mask = _series_to_bool_numpy(df['aff2d_corrected'])
+
         # filtering by the scale
-        # old verison for wingtra:
-        if 'wingtra'in name.lower():
-            self.scale_ref_m=200
-            uav_h_cover_m = df['h_cover_m']
-            aff2d_corrected_mask = df['aff2d_corrected']
-            uav_h_cover_m_corrected = uav_h_cover_m[aff2d_corrected_mask]
-            satimgsize_scale_to_ref_m_corrected = np.array(uav_h_cover_m_corrected/ self.geo_res_m)* self.geo_res_m/self.scale_ref_m
-            lower_bound = np.percentile( satimgsize_scale_to_ref_m_corrected, 2)
-            upper_bound = np.percentile( satimgsize_scale_to_ref_m_corrected, 99)
-            satimgsize_scale_to_ref_m = np.array(uav_h_cover_m /  self.geo_res_m) *  self.geo_res_m / self.scale_ref_m
-            scale_mask = (satimgsize_scale_to_ref_m > lower_bound) * (satimgsize_scale_to_ref_m < upper_bound) * aff2d_corrected_mask
+        if self.has_split_column:
+            scale_mask = np.asarray(split_info["effective_mask"], dtype=bool)
+            self.scale_ref_m = _compute_scale_ref_from_mask(
+                uav_h_cover_m=uav_h_cover_m,
+                aff2d_corrected_mask=aff2d_corrected_mask,
+                effective_mask=scale_mask,
+                scale_ref_m=scale_ref_m,
+            )
+            n_train = int(split_info["train_mask"].sum())
+            n_test = int(split_info["test_mask"].sum())
+            n_dropped = int(len(df) - scale_mask.sum())
+            print(
+                f"[{self.name}] UAVDataset using split column '{self.active_split_column}' "
+                f"(train={n_train}, test={n_test}, dropped={n_dropped})."
+            )
         else:
-            scale_info = _compute_scale_filter_from_df(df, self.geo_res_m, scale_ref_m)
-            uav_h_cover_m = scale_info["uav_h_cover_m"]
-            self.scale_ref_m = scale_info["scale_ref_m"]
-            scale_mask = scale_info["scale_mask"]
+            legacy_scale = _compute_legacy_scale_mask(
+                uav_h_cover_m=uav_h_cover_m,
+                aff2d_corrected_mask=aff2d_corrected_mask,
+                geo_res_m=self.geo_res_m,
+                dataset_name=self.name,
+                scale_ref_m=scale_ref_m,
+            )
+            self.scale_ref_m = legacy_scale["scale_ref_m"]
+            scale_mask = legacy_scale["scale_mask"]
 
         scale_mask = np.asarray(scale_mask, dtype=bool)
         self.uav_row_indices = np.flatnonzero(scale_mask).astype(np.int64)
         self.uav_df_filtered = self.uav_df.iloc[self.uav_row_indices].copy().reset_index(drop=True)
+        if self.has_split_column:
+            self.uav_split_labels = np.asarray(split_info["split_labels"], dtype=object)[scale_mask]
+        else:
+            self.uav_split_labels = None
 
         uav_names = self.uav_df['filename'][scale_mask]
         uavimgs_dir = self.uavinfo_dict['uavimgs_dir']
@@ -934,7 +1125,8 @@ class UAVDataset(object):
         if sat_dataset is not None:
             self.sat_dataset = sat_dataset
             self.uav_nrcs = sat_dataset.transfrom_georc_to_nrc(self.uav_georcs,dtype=np.float32,source_epsg_code=self.epsg_code)
-            self.filter_by_sat_sampling_range(sat_dataset=sat_dataset)
+            if not self.has_split_column:
+                self.filter_by_sat_sampling_range(sat_dataset=sat_dataset)
 
         self.uav_nrcs_torch = torch.from_numpy(self.uav_nrcs).to(device=self.device, dtype=torch.float32)
         self.uav_rots_torch = torch.from_numpy(self.uav_rots).to(device=self.device, dtype=torch.float32)[...,None]
@@ -973,9 +1165,14 @@ class UAVDataset(object):
 
     """funcs about handling uavings:"""
     def split_uav_dataset(self, train_ratio=0.9, split_mode='segment'):
-        train_indices, test_indices = _compute_split_indices(
-            len(self.uavimg_paths), train_ratio=train_ratio, split_mode=split_mode
-        )
+        if self.has_split_column:
+            split_labels = np.asarray(self.uav_split_labels, dtype=object)
+            train_indices = np.flatnonzero(split_labels == "train").astype(np.int64)
+            test_indices = np.flatnonzero(split_labels == "test").astype(np.int64)
+        else:
+            train_indices, test_indices = _compute_split_indices(
+                len(self.uavimg_paths), train_ratio=train_ratio, split_mode=split_mode
+            )
         self.n_train = int(len(train_indices))
         self.train_ratio = float(train_ratio)
         self.split_mode = str(split_mode).strip().lower()
@@ -1092,6 +1289,8 @@ class UAVDataset(object):
         self.uavimg_paths = _mask_list(self.uavimg_paths)
         self.uav_row_indices = self.uav_row_indices[mask]
         self.uav_df_filtered = self.uav_df.iloc[self.uav_row_indices].copy().reset_index(drop=True)
+        if hasattr(self, 'uav_split_labels') and self.uav_split_labels is not None:
+            self.uav_split_labels = self.uav_split_labels[mask]
         self.uav_latlons = self.uav_latlons[mask]
         if hasattr(self, 'uav_georcs'):
             self.uav_georcs = self.uav_georcs[mask]

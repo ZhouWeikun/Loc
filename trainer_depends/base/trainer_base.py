@@ -172,6 +172,8 @@ class BaseTrainer:
                 p_satinfo_json=scene['p_satinfo_json'],
                 p_uav_geocsv=scene['p_uav_geocsv'],
                 imgsize2net=opt.imgsize2net,
+                split_train_ratio=opt.split_train_ratio,
+                split_mode=opt.split_mode,
                 name=scene_name,
                 device=sat_device,
                 pad_mode=pad_mode,

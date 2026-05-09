@@ -25,7 +25,7 @@ data_setting:
   n_rand2sample_per_pos: 256 #16
   sat_as_query: False #sat_as_query数量=batchsize_uav
   split_train_ratio: 0.9
-  split_mode: segment
+  split_mode: interval
 
 # ==================== 场景配置 ====================
 # 场景列表（支持任意数量）：

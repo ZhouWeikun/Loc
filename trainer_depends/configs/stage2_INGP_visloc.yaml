@@ -1,11 +1,11 @@
 exp_setting:
   dir2save_log: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/logs  # 绝对路径
   dir2save_ckpt: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts  # 绝对路径
-  exp_name: stage2_visloc04_interval82_tripleLoss_singleEdge_hardest_fm_mask_dinov2B2_codebookW19_mlpB2
+  exp_name: stage2_visloc_debug
   save_freq: 10
   tensorboard: True
-  val: False
-  val_freq: 1
+  val: True
+  val_freq: 10
 
   # load_stage1_ckpt: Stage 1训练好的checkpoint路径（用于初始化训练）
   load_stage1_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_segment82_tripleLoss_singleEdge_hardest_fmMask_dinov2_adF4_6/opts.yaml"
@@ -70,15 +70,5 @@ network_setting:
   posenc_multires_scale: 4
   grid_mlp_hidden_dim: 1024 #org=512
   grid_mlp_num_blocks: 2
-  grid_mlp_arch: residual_cond
   grid_mlp_use_coord_condition: true
 
-#  p_grid_config_yaml: trainer_depends/configs/nerf_hash_visloc_lodagg1024.yaml
-  hash_lod_aggregator:
-    enabled: false
-    mode: scale_softmax
-    coord_source: scale
-    scale_source: norm_log_scale
-    num_lods: 4
-    per_lod_dim: 1024
-    output_dim: 1024

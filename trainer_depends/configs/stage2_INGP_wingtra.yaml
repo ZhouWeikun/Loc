@@ -1,16 +1,16 @@
 exp_setting:
   dir2save_log: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/logs  # 绝对路径
   dir2save_ckpt: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts  # 绝对路径
-  exp_name: stage2_visloc03
+  exp_name: stage2_wingtra_debug
   save_freq: 10
   tensorboard: True
-  val: False
-  val_freq: 1
+  val: True
+  val_freq: 10
 
   # load_stage1_ckpt: Stage 1训练好的checkpoint路径（用于初始化训练）
   # 例如: .exps/stage1_visual_encoder/checkpoint_epoch99.pth
-  load_stage1_ckpt: "/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/multiscene_12km2_cl_salad_ep100/epoch095.pth"
-  inherit_stage1_yaml: "/home/data/zwk/pyproj_neuloc_v0/train_img_encoder/exps/multiscene_12km2_cl_salad_ep100/opts.yaml"
+  load_stage1_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/epoch004_zurichR1=82MedErr23m_zuchwilR1=76MedErr=25m.pth"
+  inherit_stage1_yaml: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_wingtra_interval91_wRejectSampling_tripleLossSingleEdgeHardestFmMask_dinov2_adF4_salad_1/opts.yaml"
   inherit_stage1_scope: "network,data"
 #  load_stage1_ckpt: "/home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts/stage1_visloc_pairLoss_singleEdge_hardest_woSatQuery/epoch090_best.pth"
 
@@ -73,9 +73,8 @@ network_setting:
   posenc_multires_rc: 8
   posenc_multires_rot: 6
   posenc_multires_scale: 4
-  grid_mlp_hidden_dim: 512
-  grid_mlp_num_blocks: 1
-  grid_mlp_arch: residual_cond
+  grid_mlp_hidden_dim: 1024
+  grid_mlp_num_blocks: 2
   grid_mlp_use_coord_condition: true
 
 #  p_grid_config_yaml: trainer_depends/configs/nerf_hash_wingtra_lodagg1024.yaml

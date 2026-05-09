@@ -485,7 +485,7 @@ class MinimalStage3INGPInferencer(MinimalStage2INGPTrainer):
             return
 
         print("\n" + "=" * 96)
-        print("INGP Seed-Mode Progressive Recall")
+        print("INGP Population Contraction Progressive Recall")
         print("=" * 96)
         thresholds = recall_report.get("thresholds", {})
         dist_msg = f"{float(thresholds['dist_th']):.6f} nrc"
@@ -556,7 +556,7 @@ class MinimalStage3INGPInferencer(MinimalStage2INGPTrainer):
         recall_report = self.compute_seed_mode_recall_from_dict_res(
             results,
             eval_thresh_cfg=eval_thresh_cfg,
-            print_report=True,
+            print_report=bool(getattr(self.opt, "stage3_print_progressive_recall", False)),
         )
         results["progressive_recall_report"] = recall_report
         self._save_progressive_recall_report(recall_report)
@@ -587,7 +587,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(
         "--stage3_yaml",
-        default=os.path.join(PROJECT_ROOT, "trainer_depends/configs/stage3_ingp_minimal_wingtra.yaml"),
+        default=os.path.join(PROJECT_ROOT, "trainer_depends/configs/stage3_ingp_minimal.yaml"),
     )
     parser.add_argument("--stage2_opts_yaml", default=None)
     parser.add_argument("--use_train_uav", action="store_true")

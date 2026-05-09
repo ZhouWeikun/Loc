@@ -215,6 +215,10 @@ class Stage3FineLocManager:
 
     def make_test_loader(self, use_train_uav=False, n_samples=256, shuffle=False):
         dataset = self.trainer.uav_dataset_train if use_train_uav else self.trainer.uav_dataset_test
+        if isinstance(n_samples, str):
+            n_samples = n_samples.strip()
+            if n_samples.lower() in {"", "none", "null"}:
+                n_samples = None
         if n_samples is None:
             n_samples = len(dataset)
         else:
@@ -329,6 +333,7 @@ class Stage3FineLocManager:
         save_pred_pdf=False,
         save_tag="prefilter",
         report_title="Spatial Classification Results (wo eval scale)",
+        print_spatial_classification=False,
         show_progress=False,
         progress_desc="L0 coarse retrieval",
     ):
@@ -429,6 +434,7 @@ class Stage3FineLocManager:
             pred_pdf_3d_all=pred_pdf_3d_all,
             q_label_3d_all=q_label_3d_all,
             title=report_title,
+            print_report=print_spatial_classification,
         )
 
         return {
@@ -567,14 +573,15 @@ class Stage3FineLocManager:
             }
         return acc_metrics
 
-    def report_spatial_classification(self, pred_pdf_3d_all, q_label_3d_all, title):
+    def report_spatial_classification(self, pred_pdf_3d_all, q_label_3d_all, title, print_report=False):
         single_frame_results = compute_top_k_accuracy(
             pred_pdf_3d_all.cpu().numpy(),
             q_label_3d_all,
             k_values=[1, 8, 27, 64, 128, 256, 512, 1024],
             dim_order="HWO",
         )
-        print_accuracy_results(single_frame_results, title=title)
+        if print_report:
+            print_accuracy_results(single_frame_results, title=title)
         return single_frame_results
 
     def maybe_save_pred_pdf(

@@ -366,23 +366,23 @@
       <window_info id="Commit_Guest" show_stripe_button="false" />
       <window_info id="Pull Requests" />
       <window_info id="Learn" show_stripe_button="false" />
-      <window_info active="true" content_ui="combo" id="Project" order="0" sideWeight="0.6472701" visible="true" weight="0.28515625" />
+      <window_info active="true" content_ui="combo" id="Project" order="0" sideWeight="0.64862204" visible="true" weight="0.28515625" />
       <window_info id="Commit" order="1" sideWeight="0.5009091" weight="0.29453126" />
-      <window_info active="true" id="Structure" order="2" sideWeight="0.3527299" side_tool="true" visible="true" weight="0.28515625" />
+      <window_info active="true" id="Structure" order="2" sideWeight="0.35137796" side_tool="true" visible="true" weight="0.28515625" />
       <window_info anchor="bottom" id="Database Changes" />
       <window_info anchor="bottom" id="TypeScript" />
       <window_info anchor="bottom" id="TODO" />
       <window_info anchor="bottom" id="HfCacheToolWindow" />
       <window_info anchor="bottom" id="File Transfer" />
       <window_info anchor="bottom" id="PythonProcessOutput" order="0" weight="0.32740384" />
-      <window_info anchor="bottom" x="-1610" y="139" width="1608" height="1009" id="Terminal" order="1" type="WINDOWED" visible="true" weight="0.2639423" />
-      <window_info anchor="bottom" id="Version Control" order="2" />
+      <window_info active="true" anchor="bottom" x="-1606" y="166" width="1608" height="1009" id="Terminal" order="1" type="WINDOWED" visible="true" weight="0.44471154" />
+      <window_info anchor="bottom" id="Version Control" order="2" weight="0.39759615" />
       <window_info anchor="bottom" id="Problems" order="3" />
       <window_info anchor="bottom" id="Problems View" order="4" weight="0.39951923" />
       <window_info anchor="bottom" id="Services" order="5" />
       <window_info anchor="bottom" id="Python Packages" order="6" weight="0.45729366" />
       <window_info anchor="bottom" id="Python Console" order="7" weight="0.3985577" />
-      <window_info active="true" anchor="bottom" id="Debug" order="8" visible="true" weight="0.2639423" />
+      <window_info active="true" anchor="bottom" id="Debug" order="8" visible="true" weight="0.44471154" />
       <window_info anchor="bottom" id="Messages" order="9" weight="0.32218993" />
       <window_info anchor="bottom" id="Run" order="9" weight="0.43125" />
       <window_info anchor="bottom" id="Find" order="10" weight="0.43028846" />
@@ -545,8 +545,9 @@
         <env name="PYTHONUNBUFFERED" value="1" />
       </envs>
       <option name="SDK_HOME" value="" />
+      <option name="SDK_NAME" value="neuloc_wisp" />
       <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/trainers" />
-      <option name="IS_MODULE_SDK" value="true" />
+      <option name="IS_MODULE_SDK" value="false" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
@@ -569,8 +570,9 @@
         <env name="PYTHONUNBUFFERED" value="1" />
       </envs>
       <option name="SDK_HOME" value="" />
+      <option name="SDK_NAME" value="neuloc_wisp" />
       <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/trainers" />
-      <option name="IS_MODULE_SDK" value="true" />
+      <option name="IS_MODULE_SDK" value="false" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
@@ -1284,12 +1286,12 @@
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/trainer_depends/utils/util_gaussian_importance_sampler.py</url>
-          <line>64</line>
+          <line>40</line>
           <option name="timeStamp" value="2715" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/trainer_depends/utils/util_gaussian_importance_sampler.py</url>
-          <line>113</line>
+          <line>64</line>
           <option name="timeStamp" value="2717" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
@@ -1456,10 +1458,10 @@
     <SUITE FILE_PATH="coverage/pyproj_RCL$train_v1.coverage" NAME="train_v1 Coverage Results" MODIFIED="1741946740701" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$mission_create_onxx.coverage" NAME="mission_create_onxx Coverage Results" MODIFIED="1751638298894" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$make_dataloader_wingtra.coverage" NAME="make_dataloader_wingtra Coverage Results" MODIFIED="1755873414034" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/datasets_custom" />
-    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage3_ingp_inferencer_minimal.coverage" NAME="stage3_ingp_inferencer_minimal Coverage Results" MODIFIED="1778252167452" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage3_ingp_inferencer_minimal.coverage" NAME="stage3_ingp_inferencer_minimal Coverage Results" MODIFIED="1778311525766" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$utils.coverage" NAME="utils Coverage Results" MODIFIED="1751643137983" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/tool" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$demo_ance.coverage" NAME="demo_ance Coverage Results" MODIFIED="1769661418682" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/miners" />
-    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage1_visual_encoder_minimal.coverage" NAME="stage1_visual_encoder_minimal Coverage Results" MODIFIED="1778247977023" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage1_visual_encoder_minimal.coverage" NAME="stage1_visual_encoder_minimal Coverage Results" MODIFIED="1778311645373" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage1_visual_encoder_w_ANCE.coverage" NAME="stage1_visual_encoder_w_ANCE Coverage Results" MODIFIED="1775315673833" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage3_proxy_linearProjector_wANCE_evotorch.coverage" NAME="stage3_proxy_linearProjector_wANCE_evotorch Coverage Results" MODIFIED="1778142709178" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$dataloader.coverage" NAME="dataloader Coverage Results" MODIFIED="1751895331607" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$USER_HOME$/miniconda3/envs/denseuav_gdal_py39_onxx/lib/python3.9/site-packages/torch/utils/data" />
@@ -1468,7 +1470,7 @@
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad$make_dataloader_dsalad.coverage" NAME="make_dataloader_dsalad Coverage Results" MODIFIED="1743659940197" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/datasets_custom" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_clean_ckpt.coverage" NAME="util_clean_ckpt Coverage Results" MODIFIED="1778210623237" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/tool" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$downsample_raster.coverage" NAME="downsample_raster Coverage Results" MODIFIED="1757910853497" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/../pyproj_pylib_zwk/raster_handler" />
-    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage2_INGP_minimal.coverage" NAME="stage2_INGP_minimal Coverage Results" MODIFIED="1778249953490" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage2_INGP_minimal.coverage" NAME="stage2_INGP_minimal Coverage Results" MODIFIED="1778309261366" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$vis_opt_particles.coverage" NAME="vis_opt_particles Coverage Results" MODIFIED="1776332236666" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/fine_vis4paper" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$make_dataloader_game4loc.coverage" NAME="make_dataloader_game4loc Coverage Results" MODIFIED="1752571189240" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/datasets_custom" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage1_visual_encoder.coverage" NAME="stage1_visual_encoder Coverage Results" MODIFIED="1769658692051" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />

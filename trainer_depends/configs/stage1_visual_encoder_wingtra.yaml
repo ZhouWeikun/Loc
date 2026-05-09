@@ -61,7 +61,7 @@ hardware_setting:
   num_worker: 8
 
 learning_setting:
-  loss_type: tripleLoss_singleEdge_hardest_fm_mask #tripleLoss_singleEdge_hardest_fm_mask or infonce
+  loss_type: triplet_loss #triplet_loss or infonce
   num_epochs: 100
   #when evaluating
   val_overlap: 0.5

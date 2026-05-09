@@ -135,27 +135,27 @@ class MinimalStage1VisualEncoderTrainer(BaseTrainer):
         )
 
     def _init_loss(self):
-        loss_type = str(getattr(self.opt, "loss_type", "tripleLoss_singleEdge_hardest_fm_mask")).lower()
+        loss_type = str(getattr(self.opt, "loss_type", "triplet_loss")).lower()
         if loss_type == "infonce":
-            from losses.stage1_infonce_loss import Stage1InfoNCELoss
+            from losses.stage1_infonce_loss import InfoNCELoss
 
             self.loss_type = "infonce"
-            self.loss_fn = Stage1InfoNCELoss(
+            self.loss_fn = InfoNCELoss(
                 temperature=float(getattr(self.opt, "infonce_temperature", 0.1)),
                 negative_mode=str(getattr(self.opt, "infonce_negative_mode", "batch_and_explicit")),
             ).to(self.device)
             return
 
-        if loss_type == "tripleloss_singleedge_hardest_fm_mask":
-            from losses.CL_losses_wo_weight import tripleLoss_singleEdge_hardest_fm_mask
+        if loss_type == "triplet_loss":
+            from losses.stage1_triplet_loss import tripletLoss_singleEdge_hardest_fm_mask
 
-            self.loss_type = "tripleloss_singleedge_hardest_fm_mask"
-            self.loss_fn = tripleLoss_singleEdge_hardest_fm_mask().to(self.device)
+            self.loss_type = "triplet_loss"
+            self.loss_fn = tripletLoss_singleEdge_hardest_fm_mask().to(self.device)
             return
 
         raise ValueError(
             f"Unsupported stage1 minimal loss_type={getattr(self.opt, 'loss_type', None)!r}. "
-            "Supported values: infonce, tripleLoss_singleEdge_hardest_fm_mask."
+            "Supported values: infonce, tripletLoss_singleEdge_hardest_fm_mask."
         )
 
     def _extract_batch(self, batch):

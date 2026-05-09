@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class Stage1InfoNCELoss(nn.Module):
+class InfoNCELoss(nn.Module):
     """InfoNCE for Stage-1 UAV query to satellite reference matching."""
 
     def __init__(self, temperature=0.1, negative_mode="batch_and_explicit"):

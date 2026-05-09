@@ -20,6 +20,14 @@ from trainers.util_stage3_multi_stage_refiner import (
     TopNSeedScreening,
 )
 
+
+def _normalize_optional_n_samples(n_samples):
+        if isinstance(n_samples, str):
+            n_samples = n_samples.strip()
+            if n_samples.lower() in {"", "none", "null"}:
+                return None
+        return None if n_samples is None else int(n_samples)
+
 def _opt_coords_topN(self, coords_topN, feat_q, n_step=200,lr=1e-5):
         """
         对TopN候选坐标进行梯度优化重排序
@@ -499,9 +507,9 @@ def _build_progressive_recall_delta_report(stage_reports):
         )
         stage_names = ("coarse_retrieval", "seed_mode_init", "seed_mode_final")
         stage_labels = {
-            "coarse_retrieval": "Coarse",
-            "seed_mode_init": "SeedInit",
-            "seed_mode_final": "Final",
+            "coarse_retrieval": "Coarse Exploation",
+            "seed_mode_init": "Population Contraction",
+            "seed_mode_final": "Local Refine",
         }
 
         def _progressive(stage_name, criterion_key):
@@ -522,9 +530,13 @@ def _build_progressive_recall_delta_report(stage_reports):
         }
 
         print("\n" + "=" * 96)
-        print("Threshold Progressive Recall Delta (baseline: Coarse-Retrieval)")
+        print("Threshold Progressive Recall Delta (baseline: Coarse Exploation)")
         print("=" * 96)
-        print(f"{'Criterion':<16} {'K':>8} {'Coarse':>10} {'SeedInit':>10} {'DeltaInit':>10} {'Final':>10} {'DeltaFinal':>10}")
+        print(
+            f"{'Criterion':<16} {'K':>8} "
+            f"{'CoarseExp':>10} {'PopContr':>10} {'DeltaInit':>10} "
+            f"{'LocalRef':>10} {'DeltaFinal':>10}"
+        )
         print("-" * 96)
 
         any_row = False
@@ -973,6 +985,8 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
         if stage1_move_stand not in ("best", "elite_sum"):
             raise ValueError(f"stage1_move_stand must be 'best' or 'elite_sum', got {stage1_move_stand}")
 
+        n_samples = _normalize_optional_n_samples(n_samples)
+
         print(f"\n{'=' * 60}")
         print("3D细粒度定位测试 (Seed-Mode Search + Optional CMA-ES + Optional Grad)")
         print(f"测试样本数: {n_samples if n_samples is not None else '全部'}")
@@ -1004,11 +1018,16 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
             save_pred_pdf=save_pred_pdf,
             save_tag="seed_mode_pipeline",
             report_title="Spatial Classification Results (Seed-Mode Pipeline, wo eval scale)",
+            print_spatial_classification=False,
             show_progress=not bool(debug_stage_timing),
             progress_desc="SeedMode L0 coarse retrieval",
         )
         if bool(debug_stage_timing):
-            print(f"[SeedMode] Stage0-CoarseRetrieval done | n_query={int(coarse['coords_gt_all'].shape[0])} | {time.perf_counter() - t_stage0:.3f}s")
+            print(
+                f"[SeedMode] Coarse Exploation done | "
+                f"n_query={int(coarse['coords_gt_all'].shape[0])} | "
+                f"{time.perf_counter() - t_stage0:.3f}s"
+            )
         pred_pdf_3d_all = coarse["pred_pdf_3d_all"]
         q_label_3d_all = coarse["q_label_3d_all"]
         coords_gt_all = coarse["coords_gt_all"]
@@ -1030,6 +1049,7 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
                 pred_pdf_3d_all=preds_filtered.reshape(preds_filtered.shape[0], -1),
                 q_label_3d_all=q_label_3d_all,
                 title="Spatial Classification Results, Filtered (Seed-Mode Pipeline)",
+                print_report=False,
             )
             filtered_spatial_classification_report = {
                 "report_title": "Spatial Classification Results, Filtered (Seed-Mode Pipeline)",
@@ -1287,7 +1307,7 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
         coarse_retrieval_report = evaluator.evaluate_and_report(
             coords_grid_all,
             coords_gt_all,
-            tag="Coarse-Retrieval",
+            tag="Coarse Exploation",
             dist_lambda=evaluator.final_eval_cfg["dist_lambda"],
             rot_th=evaluator.final_eval_cfg["rot_th"],
             scale_ratio_th=evaluator.final_eval_cfg["scale_ratio_th"],
@@ -1297,7 +1317,7 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
         seed_mode_init_report = evaluator.evaluate_and_report(
             coords_mode_all,
             coords_gt_all,
-            tag="Seed-Mode-Init",
+            tag="Population Contraction",
             dist_lambda=evaluator.final_eval_cfg["dist_lambda"],
             rot_th=evaluator.final_eval_cfg["rot_th"],
             scale_ratio_th=evaluator.final_eval_cfg["scale_ratio_th"],
@@ -1307,7 +1327,7 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
         seed_mode_final_report = evaluator.evaluate_and_report(
             coords_evo_all,
             coords_gt_all,
-            tag="Seed-Mode-Final",
+            tag="Local Refine",
             dist_lambda=evaluator.final_eval_cfg["dist_lambda"],
             rot_th=evaluator.final_eval_cfg["rot_th"],
             scale_ratio_th=evaluator.final_eval_cfg["scale_ratio_th"],
@@ -1351,7 +1371,7 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
 
         seed_mode_eval_config = {
             "source_function": "_test_3d_fine_accuracy_seed_mode_CMA_ES",
-            "n_samples": None if n_samples is None else int(n_samples),
+            "n_samples": n_samples,
             "use_train_uav": bool(use_train_uav),
             "temperature": float(temperature),
             "shuffle": bool(shuffle),

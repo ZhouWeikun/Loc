@@ -103,6 +103,12 @@ def get_parse(print_summary=True):
     parser.add_argument('--stage3_analysis_export_root', default="", type=str, help='Stage 3测试分析结果导出目录')
     parser.add_argument('--stage3_recall_cfg', default="per_scene", type=str, help='Stage 3 recall阈值配置名；per_scene表示按场景映射')
     parser.add_argument('--stage3_recall_cfg_yaml', default="trainer_depends/configs/stage3_recall_thresholds.yaml", type=str, help='Stage 3 recall阈值配置YAML')
+    parser.add_argument(
+        '--stage3_print_progressive_recall',
+        default=False,
+        type=lambda x: str(x).strip().lower() in {'1', 'true', 'yes', 'y'},
+        help='是否打印 Stage 3 progressive recall 报告；默认关闭，仅保存结果',
+    )
     parser.add_argument('--stage3_basin_enable', default=False, type=lambda x: str(x).strip().lower() in {'1', 'true', 'yes', 'y'}, help='是否在Stage 3 test中运行CMA-ES吸引盆分析')
     parser.add_argument('--stage3_basin_output_root', default="", type=str, help='Stage 3吸引盆分析输出目录；为空时使用stage3_analysis_export_root/stage3_basin')
     parser.add_argument('--stage3_basin_n_samples', default=256, type=int, help='Stage 3吸引盆分析测试样本数')

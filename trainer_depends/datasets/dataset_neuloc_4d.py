@@ -1023,7 +1023,7 @@ class UAVDataset(object):
         # uav_scale = self.uav_scales_torch_train[index]
         # return uavimg_q,uav_rc,uav_rot,uav_scale
 
-    def _getitem_test(self,index):#todo:N从dataset_wingtra_4d.pyeeds to be refined according to external needs -> the test_func()
+    def _getitem_test(self,index):
         #1.select uavimg
         uavimg = Image.open(self.uavimg_paths_test[index])
         uavimg_q = self.uav_transform_test(uavimg)

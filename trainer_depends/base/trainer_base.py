@@ -16,7 +16,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 from trainer_depends.config.parser import get_parse
 from trainer_depends.utils.logger_utils import get_logger
-# from trainer_depends.datasets.dataset_wingtra_4d import UAVDataset, SatDataset
 from trainer_depends.datasets.dataset_neuloc_4d import UAVDataset, SatDataset
 
 

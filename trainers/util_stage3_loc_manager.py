@@ -2,6 +2,142 @@ import numpy as np
 import torch
 import tqdm
 
+from trainer_depends.utils.util_core_eval import compute_topk_acc_from_coords, print_topk_eval_results
+
+
+def compute_topN_acc_given_threshold(
+    coords_pred,
+    coords_gt,
+    dist_th,
+    rot_th_deg=None,
+    scale_ratio_th=None,
+    k_values=None,
+):
+    if k_values is None:
+        k_values = [1, 3, 5, 10]
+
+    dist_metrics, errors = compute_topk_acc_from_coords(
+        coords_pred,
+        coords_gt,
+        dist_th=dist_th,
+        rot_th_deg=None,
+        scale_ratio_th=None,
+        k_values=k_values,
+    )
+    progressive_acc_metrics = {"dist_recall": {str(k): float(v) for k, v in dist_metrics.items()}}
+    progressive_acc_metric_sources = {"dist_recall": "computed"}
+
+    if rot_th_deg is None:
+        progressive_acc_metrics["dist_rot_recall"] = dict(progressive_acc_metrics["dist_recall"])
+        progressive_acc_metric_sources["dist_rot_recall"] = "alias_of_dist_recall"
+    else:
+        dist_rot_metrics, _ = compute_topk_acc_from_coords(
+            coords_pred,
+            coords_gt,
+            dist_th=dist_th,
+            rot_th_deg=rot_th_deg,
+            scale_ratio_th=None,
+            k_values=k_values,
+        )
+        progressive_acc_metrics["dist_rot_recall"] = {str(k): float(v) for k, v in dist_rot_metrics.items()}
+        progressive_acc_metric_sources["dist_rot_recall"] = "computed"
+
+    if scale_ratio_th is None:
+        progressive_acc_metrics["dist_rot_scale_recall"] = dict(progressive_acc_metrics["dist_rot_recall"])
+        progressive_acc_metric_sources["dist_rot_scale_recall"] = "alias_of_dist_rot_recall"
+    else:
+        dist_rot_scale_metrics, _ = compute_topk_acc_from_coords(
+            coords_pred,
+            coords_gt,
+            dist_th=dist_th,
+            rot_th_deg=rot_th_deg,
+            scale_ratio_th=scale_ratio_th,
+            k_values=k_values,
+        )
+        progressive_acc_metrics["dist_rot_scale_recall"] = {
+            str(k): float(v) for k, v in dist_rot_scale_metrics.items()
+        }
+        progressive_acc_metric_sources["dist_rot_scale_recall"] = "computed"
+
+    if scale_ratio_th is not None:
+        legacy_acc_metrics_source = "dist_rot_scale_recall"
+    elif rot_th_deg is not None:
+        legacy_acc_metrics_source = "dist_rot_recall"
+    else:
+        legacy_acc_metrics_source = "dist_recall"
+
+    legacy_metrics = dict(progressive_acc_metrics[legacy_acc_metrics_source])
+    legacy_metrics["progressive_acc_metrics"] = progressive_acc_metrics
+    legacy_metrics["legacy_acc_metrics_source"] = legacy_acc_metrics_source
+    legacy_metrics["progressive_acc_metric_sources"] = progressive_acc_metric_sources
+    return legacy_metrics, errors
+
+
+def print_topN_acc_results(metrics, errors, thresholds, report_meta=None, report_title="Fine Accuracy Report"):
+    report_meta = dict(report_meta or {})
+    progressive_acc_metrics = metrics.get("progressive_acc_metrics", None) if isinstance(metrics, dict) else None
+    if not isinstance(progressive_acc_metrics, dict):
+        print_topk_eval_results(metrics, errors, thresholds, report_title=report_title, report_meta=report_meta)
+        return
+
+    sections = [
+        ("dist_recall", "Dist Recall", {"norm_dist": thresholds.get("norm_dist"), "rot": None, "scale_ratio": None}),
+        ("dist_rot_recall", "Dist+Rot Recall", {"norm_dist": thresholds.get("norm_dist"), "rot": thresholds.get("rot"), "scale_ratio": None}),
+        ("dist_rot_scale_recall", "Dist+Rot+Scale Recall", thresholds),
+    ]
+    for group_key, section_title, section_thresholds in sections:
+        section_metrics = progressive_acc_metrics.get(group_key, None)
+        if isinstance(section_metrics, dict):
+            section_meta = dict(report_meta)
+            section_meta["integrate_scale"] = section_thresholds.get("scale_ratio") is not None
+            print_topk_eval_results(
+                section_metrics,
+                errors,
+                section_thresholds,
+                report_title=f"{report_title} | {section_title}",
+                report_meta=section_meta,
+            )
+
+
+def compute_top_k_accuracy(pred_pdf, gt_labels, k_values=None, dim_order="HWO"):
+    if k_values is None:
+        k_values = [1, 4, 9, 16, 50]
+    if isinstance(pred_pdf, torch.Tensor):
+        pred_pdf = pred_pdf.detach().cpu().numpy()
+    if isinstance(gt_labels, torch.Tensor):
+        gt_labels = gt_labels.detach().cpu().numpy()
+
+    n_samples = pred_pdf.shape[0]
+    if pred_pdf.ndim == 4:
+        target_order = "HWO"
+        if dim_order != target_order:
+            idx_map = {char: i + 1 for i, char in enumerate(dim_order)}
+            pred_pdf = np.transpose(pred_pdf, [0] + [idx_map[c] for c in target_order])
+        pred_pdf_flat = pred_pdf.reshape(n_samples, -1)
+    elif pred_pdf.ndim == 2:
+        pred_pdf_flat = pred_pdf
+    else:
+        raise ValueError(f"pred_pdf must be [N,D1,D2,D3] or [N,C], got shape {pred_pdf.shape}")
+
+    gt_labels = np.asarray(gt_labels).reshape(-1).astype(np.int64)[:n_samples]
+    pred_pdf_flat = pred_pdf_flat[: len(gt_labels)]
+    order = np.argsort(-pred_pdf_flat, axis=1)
+    results = {}
+    for k in k_values:
+        k = min(int(k), pred_pdf_flat.shape[1])
+        hits = (order[:, :k] == gt_labels[:, None]).any(axis=1)
+        results[f"top{k}_acc"] = float(hits.mean() * 100.0) if len(hits) else 0.0
+    return results
+
+
+def print_accuracy_results(results, title="3D定位准确率"):
+    print(f"\n{'=' * 60}")
+    print(title)
+    print(f"{'=' * 60}")
+    for key, value in results.items():
+        print(f"{key}: {float(value):.2f}")
+    print(f"{'=' * 60}\n")
+
 
 class Stage3FineLocManager:
     """
@@ -325,11 +461,6 @@ class Stage3FineLocManager:
         scale_select_mode=None,
         return_details=False,
     ):
-        from trainers.leggacy_stage.util_stage3_analyze_pred3d import (
-            compute_topN_acc_given_threshold,
-            print_topN_acc_results,
-        )
-
         if isinstance(coords_gt_source, list):
             if len(coords_gt_source) > 0:
                 coords_gt_all = torch.cat(coords_gt_source, dim=0).to(coords_pred.device)
@@ -437,11 +568,6 @@ class Stage3FineLocManager:
         return acc_metrics
 
     def report_spatial_classification(self, pred_pdf_3d_all, q_label_3d_all, title):
-        from trainers.leggacy_stage.util_stage3_analyze_pred3d import (
-            compute_top_k_accuracy,
-            print_accuracy_results,
-        )
-
         single_frame_results = compute_top_k_accuracy(
             pred_pdf_3d_all.cpu().numpy(),
             q_label_3d_all,

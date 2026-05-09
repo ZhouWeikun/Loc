@@ -587,7 +587,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument(
         "--stage3_yaml",
-        default=os.path.join(PROJECT_ROOT, "trainer_depends/configs/stage3_ingp_minimal_visloc.yaml"),
+        default=os.path.join(PROJECT_ROOT, "trainer_depends/configs/stage3_ingp_minimal_wingtra.yaml"),
     )
     parser.add_argument("--stage2_opts_yaml", default=None)
     parser.add_argument("--use_train_uav", action="store_true")

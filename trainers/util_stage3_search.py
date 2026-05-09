@@ -9,7 +9,6 @@ from trainers.util_stage3_multi_stage_refiner import (
     BatchedMultiStartEvolutionSeedCloudRefiner,
     EvoTorchFinalModeOptimizer,
     GradientTopKOptimizer,
-    IterativeSeedCloudRefiner,
     LocalSeedCloudBuilder,
     ModeState,
     PassthroughModeDeduper,
@@ -569,6 +568,149 @@ def _build_progressive_recall_delta_report(stage_reports):
         return payload
 
 
+def _test_3d_fine_accuracy_hds(
+            self,
+            n_samples=256,
+            use_train_uav=False,
+            temperature=0.5,
+            shuffle=False,
+            save_pred_pdf=False,
+            enable_filter=False,
+            chunk_size=2048,
+            n_bins_4d=None,
+            n_bins_scale_mode="linear",
+            eval_thresh_cfg=None,
+            scale_select_mode="log_expectation",
+
+            ge_prob_mode="ingp",
+            ge_top_ratio_rho0=None,
+            ge_topk_seed=None,
+            ge_max_anchors_k0=None,
+            ge_seed_selection_space="3d",
+
+            pc_score_mode="ingp",
+            pc_particles_per_round=(32,),
+            pc_radius_scale_per_round=(1.0,),
+            pc_local_sample_method="sobol_deterministic",
+            pc_elite_ratio_rho=0.25,
+            pc_population_survival_ratio_per_round=(1.0,),
+            pc_min_surviving_populations=1,
+            pc_enable_scale_sampling=True,
+            pc_survive_stand="best",
+            pc_move_stand="elite_sum",
+
+            lr_score_mode="ingp",
+            lr_enable=True,
+            lr_variant="Sep-CMA",
+            lr_init_sigma=None,
+            lr_popsize=32,
+            lr_iters=8,
+            lr_enable_early_stop=False,
+            lr_early_stop_patience=3,
+            lr_max_input_modes=16,
+            lr_optimize_scale=True,
+            lr_enable_competition=False,
+            lr_competition_interval=2,
+            lr_survival_ratio=0.5,
+            lr_min_surviving_modes=1,
+            lr_elite_ratio=0.25,
+            rerank_per_mode_after_lr=False,
+            debug_stage_timing=True,
+    ):
+        """Hierarchical Evolutionary Search interface using paper-stage names.
+
+        Naming:
+        - GE: Global Exploration
+        - PC: Population Contraction
+        - LR: Local Refinement
+        """
+        dict_res = _test_3d_fine_accuracy_seed_mode_CMA_ES(
+            self,
+            n_samples=n_samples,
+            use_train_uav=use_train_uav,
+            temperature=temperature,
+            shuffle=shuffle,
+            save_pred_pdf=save_pred_pdf,
+            enable_filter=enable_filter,
+            chunk_size=chunk_size,
+            n_bins_4d=n_bins_4d,
+            n_bins_scale_mode=n_bins_scale_mode,
+            l0_prob_mode=ge_prob_mode,
+            l0_topN=ge_topk_seed,
+            l0_ratio=ge_top_ratio_rho0,
+            stage1_mode_input_max=ge_max_anchors_k0,
+            eval_thresh_cfg=eval_thresh_cfg,
+            scale_select_mode=scale_select_mode,
+            l0_seed_selection_space=ge_seed_selection_space,
+            stage1_alpha=1.0,
+            stage1_prob_mode=pc_score_mode,
+            stage1_samples_per_round=pc_particles_per_round,
+            stage1_radius_scale_per_round=pc_radius_scale_per_round,
+            stage1_local_sample_method=pc_local_sample_method,
+            stage1_elite_ratio=pc_elite_ratio_rho,
+            stage1_survival_ratio_per_round=pc_population_survival_ratio_per_round,
+            stage1_min_surviving_clouds=pc_min_surviving_populations,
+            stage1_enable_scale_sampling=pc_enable_scale_sampling,
+            stage1_5_refiner_mode="multi_start_es",
+            stage1_survive_stand=pc_survive_stand,
+            stage1_move_stand=pc_move_stand,
+            cma_prob_mode=lr_score_mode,
+            cma_optimize_scale=lr_optimize_scale,
+            cma_variant=lr_variant,
+            cma_init_sigma_manual=lr_init_sigma,
+            cma_popsize=lr_popsize,
+            cma_iters=lr_iters,
+            cma_enable_early_stop=lr_enable_early_stop,
+            cma_early_stop_patience=lr_early_stop_patience,
+            cma_enable_competition=lr_enable_competition,
+            cma_competition_interval=lr_competition_interval,
+            cma_survival_ratio=lr_survival_ratio,
+            cma_min_surviving_modes=lr_min_surviving_modes,
+            cma_elite_ratio=lr_elite_ratio,
+            cma_max_input_mode=lr_max_input_modes,
+            rerank_per_mode_after_stage3=rerank_per_mode_after_lr,
+            stage3_enable=lr_enable,
+            stage4_enable=False,
+            debug_stage_timing=debug_stage_timing,
+            refine_loc=lr_enable,
+        )
+        dict_res["hds_interface_config"] = {
+            "ge_prob_mode": str(ge_prob_mode),
+            "ge_top_ratio_rho0": None if ge_top_ratio_rho0 is None else float(ge_top_ratio_rho0),
+            "ge_topk_seed": None if ge_topk_seed is None else int(ge_topk_seed),
+            "ge_max_anchors_k0": None if ge_max_anchors_k0 is None else int(ge_max_anchors_k0),
+            "ge_seed_selection_space": str(ge_seed_selection_space),
+            "pc_score_mode": str(pc_score_mode),
+            "pc_particles_per_round": [int(x) for x in self._ensure_param_sequence(pc_particles_per_round, int)],
+            "pc_radius_scale_per_round": [float(x) for x in self._ensure_param_sequence(pc_radius_scale_per_round, float)],
+            "pc_local_sample_method": str(pc_local_sample_method),
+            "pc_elite_ratio_rho": float(pc_elite_ratio_rho),
+            "pc_population_survival_ratio_per_round": [
+                float(x) for x in self._ensure_param_sequence(pc_population_survival_ratio_per_round, float)
+            ],
+            "pc_min_surviving_populations": int(pc_min_surviving_populations),
+            "pc_enable_scale_sampling": bool(pc_enable_scale_sampling),
+            "pc_survive_stand": str(pc_survive_stand),
+            "pc_move_stand": str(pc_move_stand),
+            "lr_score_mode": str(lr_score_mode),
+            "lr_enable": bool(lr_enable),
+            "lr_variant": str(lr_variant),
+            "lr_init_sigma": None if lr_init_sigma is None else float(lr_init_sigma),
+            "lr_popsize": int(lr_popsize),
+            "lr_iters": int(lr_iters),
+            "lr_enable_early_stop": bool(lr_enable_early_stop),
+            "lr_early_stop_patience": int(lr_early_stop_patience),
+            "lr_max_input_modes": int(lr_max_input_modes),
+            "lr_optimize_scale": bool(lr_optimize_scale),
+            "lr_enable_competition": bool(lr_enable_competition),
+            "lr_competition_interval": int(lr_competition_interval),
+            "lr_survival_ratio": float(lr_survival_ratio),
+            "lr_min_surviving_modes": int(lr_min_surviving_modes),
+            "lr_elite_ratio": float(lr_elite_ratio),
+        }
+        return dict_res
+
+
 def _test_3d_fine_accuracy_seed_mode_CMA_ES(
             self,
             n_samples=256,
@@ -698,7 +840,7 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
             stage1_enable_scale_sampling (bool):
                 若为 True，则 Stage 1 重采样包含 scale 维；False 时固定当前中心的 scale。
             stage1_5_refiner_mode (str):
-                Stage 1.5 refiner，可选 {'multi_start_es','iterative'}。
+                Stage 1.5 refiner. Only 'multi_start_es' is kept in the clean pipeline.
                 multi_start_es 为 batched 多启动进化策略，不更新协方差/sigma。
             stage1_survive_stand (str):
                 multi_start_es 中 mode survival 排序标准，可选 {'best','elite_sum'}。
@@ -822,10 +964,8 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
         stage1_5_refiner_mode = str(stage1_5_refiner_mode).strip().lower()
         if stage1_5_refiner_mode in ("batched_fixed_step_es", "fixed_step", "fixed-step-es", "fixed_step_es", "batched_multi_start_es", "ms_es"):
             stage1_5_refiner_mode = "multi_start_es"
-        if stage1_5_refiner_mode in ("legacy", "iterative_seed_cloud"):
-            stage1_5_refiner_mode = "iterative"
-        if stage1_5_refiner_mode not in ("multi_start_es", "iterative"):
-            raise ValueError(f"stage1_5_refiner_mode must be 'multi_start_es' or 'iterative', got {stage1_5_refiner_mode}")
+        if stage1_5_refiner_mode != "multi_start_es":
+            raise ValueError(f"stage1_5_refiner_mode must be 'multi_start_es', got {stage1_5_refiner_mode}")
         stage1_survive_stand = str(stage1_survive_stand).strip().lower()
         stage1_move_stand = str(stage1_move_stand).strip().lower()
         if stage1_survive_stand not in ("best", "elite_sum"):
@@ -981,14 +1121,10 @@ def _test_3d_fine_accuracy_seed_mode_CMA_ES(
                 "stage1_move_stand": stage1_move_stand,
             },
         )
-        if stage1_5_refiner_mode == "multi_start_es":
-            seed_cloud_relocator = BatchedMultiStartEvolutionSeedCloudRefiner()
-        else:
-            seed_cloud_relocator = IterativeSeedCloudRefiner()
         pipeline = SeedModeSearchPipeline(
             seed_screening=TopNSeedScreening(),
             seed_cloud_builder=LocalSeedCloudBuilder(),
-            seed_cloud_relocator=seed_cloud_relocator,
+            seed_cloud_relocator=BatchedMultiStartEvolutionSeedCloudRefiner(),
             mode_deduper=PassthroughModeDeduper(),
             final_mode_optimizer=EvoTorchFinalModeOptimizer() if bool(stage3_enable) else None,
             stage4_optimizer=GradientTopKOptimizer() if bool(stage4_enable) else None,

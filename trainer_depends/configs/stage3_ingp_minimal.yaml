@@ -1,0 +1,35 @@
+exp_setting:
+  exp_name: stage3_ingp_minimal
+  tensorboard: false
+  val: false
+
+inference_setting:
+  # Stage I: Coarse Exploration
+  hds_stage1_overlap: 0.0
+  hds_stage1_n_rot: 36
+  hds_stage1_n_scale: 4
+  hds_stage1_top_ratio_rho0: 0.1
+  hds_stage1_max_anchors_k0: 1024
+
+  # Stage II: Particle based Population Contraction
+  hds_stage2_rounds_t: 2
+  hds_stage2_particles_m: 8
+  hds_stage2_initial_radius_eta: 1.0
+  hds_stage2_radius_decay_alpha: 0.5
+  hds_stage2_elite_ratio_rho: 0.125
+  hds_stage2_population_survival_ratio_rho_pop: [0.25, 0.125]
+  hds_stage2_enable_scale_sampling: false
+
+  # Stage III: Parametric Local Refinement
+  hds_stage3_max_modes_k2: 5
+  hds_stage3_cma_variant: Sep-CMA
+  hds_stage3_cma_sigma_factor: 1.05
+  hds_stage3_cma_popsize: 32
+  hds_stage3_cma_iters: 12
+  hds_stage3_cma_early_stop_patience: 5
+  hds_stage3_optimize_scale: false
+
+  # Runtime and evaluation
+  hds_score_chunk_size: 32768
+  hds_eval_n_samples: None
+  hds_scale_select_mode: log_expectation

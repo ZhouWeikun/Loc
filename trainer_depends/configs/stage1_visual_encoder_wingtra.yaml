@@ -1,7 +1,7 @@
 exp_setting:
   dir2save_log: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/logs  # 绝对路径
   dir2save_ckpt: /home/data/zwk/pyproj_neuloc_v0/gen_fm_exps/ckpts  # 绝对路径
-  exp_name: stage1_wingtra_CLsms_woANCE
+  exp_name: stage1_wingtra_debug
   save_freq: 1
   tensorboard: True
   val: True
@@ -83,7 +83,7 @@ learning_setting:
 
 
 network_setting:
-  backbone: dinov3
+  backbone: dinov2
   freeze_backbone: True
   backbone_config:
     num_trainable_blocks: 2
@@ -97,7 +97,7 @@ network_setting:
     with_dustbin: True
 
   adapter_config:
-    enabled: False
+    enabled: True
     normalize_before_aggregator: False
     n_last_blocks_with_adapter: 4 #dinov2_vitb14 一共 12 个 blocks
     bottleneck_dim: 64

@@ -125,6 +125,10 @@
   <component name="HighlightingSettingsPerFile">
     <setting file="file://$USER_HOME$/miniconda3/envs/denseuav_gdal_py39_onxx/lib/python3.9/site-packages/torch/nn/modules/conv.py" root0="SKIP_INSPECTION" />
   </component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
   <component name="ProblemsViewState">
     <option name="selectedTabId" value="CurrentFile" />
   </component>
@@ -136,221 +140,221 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "Python tests.Doctests in analyze_pred3d.executor": "Run",
-    "Python tests.Python tests for util_visualize_hierarchical_sampler_with_real_data.test_multiple_samples.executor": "Debug",
-    "Python tests.Python tests in stage3_bpf_proxy_linearProjector.py.executor": "Debug",
-    "Python tests.Python tests in stage3_metric_net_dual_rankloss.py.executor": "Debug",
-    "Python tests.Python tests in util_sample_neg_nrcs.py.executor": "Debug",
-    "Python tests.Python tests in util_visualize_hierarchical_sampler_with_real_data.py.executor": "Run",
-    "Python tests.Python tests in visualize_hierarchical_sampler_with_real_data.py.executor": "Run",
-    "Python.WeightedSoftTripletLoss.executor": "Debug",
-    "Python.WeightedSoftTripletLoss_fm_mat.executor": "Debug",
-    "Python._utils.executor": "Debug",
-    "Python.analyze_feature_rotation_sensitivity.executor": "Run",
-    "Python.analyze_feature_translation_sensitivity.executor": "Run",
-    "Python.analyze_grid_rotation_sensitivity.executor": "Run",
-    "Python.analyze_pred3d.executor": "Run",
-    "Python.analyze_raster.executor": "Run",
-    "Python.analyze_raster_v1.executor": "Run",
-    "Python.analyze_response_field.executor": "Run",
-    "Python.analyze_translation_sensitivity.executor": "Debug",
-    "Python.ance_core.executor": "Debug",
-    "Python.backbone.executor": "Debug",
-    "Python.batch_draw_gt_arrow_on_stage3_results.executor": "Run",
-    "Python.clip_raster_by_extent.executor": "Run",
-    "Python.compute_imgs_mean_std.executor": "Run",
-    "Python.cond_modulator_shallow_serial.executor": "Debug",
-    "Python.convnext.executor": "Debug",
-    "Python.dataloader.executor": "Debug",
-    "Python.dataset_gta_eval.executor": "Debug",
-    "Python.dataset_map_learner_nrc_topleft.executor": "Debug",
-    "Python.dataset_map_learner_skzm.executor": "Debug",
-    "Python.dataset_neuloc_4d.executor": "Debug",
-    "Python.dataset_satmap_wingtra.executor": "Debug",
-    "Python.dataset_visloc_4d.executor": "Debug",
-    "Python.dataset_visloc_4d_uav_sat_pair.executor": "Debug",
-    "Python.dataset_wingtra_4d.executor": "Debug",
-    "Python.dataset_wingtra_4d_uav_sat_pair.executor": "Debug",
-    "Python.demo_ance.executor": "Debug",
-    "Python.downsample_raster.executor": "Run",
-    "Python.eval_gta.executor": "Debug",
-    "Python.evaluate_dslad (1).executor": "Run",
-    "Python.evaluate_dslad.executor": "Debug",
-    "Python.evaluate_filter_inference.executor": "Debug",
-    "Python.evaluate_filter_inference_wo_rot.executor": "Debug",
-    "Python.evaluate_filter_inference_wo_sg.executor": "Debug",
-    "Python.evaluate_retrieval.executor": "Debug",
-    "Python.evaluate_xy_relrot.executor": "Debug",
-    "Python.example_use_async_sampler.executor": "Run",
-    "Python.export_stage2_progressive_gallery_metrics.executor": "Run",
-    "Python.gen_pose_samples.executor": "Run",
-    "Python.get_img_encoder.executor": "Debug",
-    "Python.histogram_filter_3d.executor": "Debug",
-    "Python.infer_w_histFilter_fm_3dpdf.executor": "Debug",
-    "Python.main_infer_w_histFilter_fm_3dpdf.executor": "Debug",
-    "Python.make_dataloader_dsalad.executor": "Run",
-    "Python.make_dataloader_dsalad_v1.executor": "Debug",
-    "Python.make_dataloader_game4loc.executor": "Debug",
-    "Python.make_dataloader_gta.executor": "Debug",
-    "Python.make_dataloader_wingtra.executor": "Debug",
-    "Python.make_dataloader_xmu_nrc_topleft.executor": "Debug",
-    "Python.make_dataloder_dsalad.executor": "Debug",
-    "Python.make_dataloder_rcl.executor": "Debug",
-    "Python.make_optimizer.executor": "Debug",
-    "Python.merge_rasters.executor": "Run",
-    "Python.metirc_net.executor": "Debug",
-    "Python.metric_net_dual.executor": "Debug",
-    "Python.mission_create_onxx.executor": "Debug",
-    "Python.mk_dataloader_skzm.executor": "Debug",
-    "Python.mk_gta_transform.executor": "Debug",
-    "Python.phone_uavimgs_handler.executor": "Run",
-    "Python.plot_acc_vs_store.executor": "Run",
-    "Python.plt_sin.executor": "Run",
-    "Python.projector_coord_modulation.executor": "Run",
-    "Python.read_droneimg.executor": "Debug",
-    "Python.read_satimg.executor": "Debug",
-    "Python.run_stage1_with_overrides.executor": "Run",
-    "Python.run_stage2_with_overrides.executor": "Debug",
-    "Python.salad.executor": "Debug",
-    "Python.save_raster_info.executor": "Run",
-    "Python.stage1_visual_encoder.executor": "Debug",
-    "Python.stage1_visual_encoder_controlexps.executor": "Debug",
-    "Python.stage1_visual_encoder_minimal.executor": "Debug",
-    "Python.stage1_visual_encoder_wANCE.executor": "Debug",
-    "Python.stage1_visual_encoder_w_ANCE.executor": "Debug",
-    "Python.stage1_visual_encoder_w_bank.executor": "Debug",
-    "Python.stage2_INGP.executor": "Debug",
-    "Python.stage2_INGP_minimal.executor": "Debug",
-    "Python.stage2_grid_hashfit.executor": "Debug",
-    "Python.stage2_grid_hashfit_v1.executor": "Debug",
-    "Python.stage3_bpf_proxy.executor": "Debug",
-    "Python.stage3_bpf_proxy_linearProjector.executor": "Debug",
-    "Python.stage3_bpf_proxy_linearProjector_wANCE.executor": "Debug",
-    "Python.stage3_bpf_proxy_linearProjector_wANCE_evotorch.executor": "Debug",
-    "Python.stage3_bpf_proxy_manifold.executor": "Debug",
-    "Python.stage3_ingp_inferencer_minimal.executor": "Debug",
-    "Python.stage3_metric_net.executor": "Debug",
-    "Python.stage3_metric_net_dual.executor": "Debug",
-    "Python.stage3_metric_net_dual_rankloss.executor": "Debug",
-    "Python.stage3_metric_net_dual_rankloss_only.executor": "Debug",
-    "Python.stage3_occ_net_dual.executor": "Debug",
-    "Python.stage3_project_integrateRot_classify.executor": "Debug",
-    "Python.stage3_project_integrateRot_classify_uncertity.executor": "Debug",
-    "Python.stage3_proxy_linearProjector_wANCE_evotorch.executor": "Debug",
-    "Python.taskflow.executor": "Debug",
-    "Python.test_crop.executor": "Debug",
-    "Python.test_crop_cpp.executor": "Debug",
-    "Python.test_relrot.executor": "Debug",
-    "Python.test_retrival_relrot.executor": "Debug",
-    "Python.test_rotation.executor": "Debug",
-    "Python.test_tncc.executor": "Debug",
-    "Python.test_wsg.executor": "Debug",
-    "Python.tif_cliper.executor": "Run",
-    "Python.tif_img_handler.executor": "Debug",
-    "Python.tif_reader.executor": "Debug",
-    "Python.train_dsalad.executor": "Debug",
-    "Python.train_dsalad_v1.executor": "Debug",
-    "Python.train_mlp.executor": "Debug",
-    "Python.train_mlp_classify.executor": "Debug",
-    "Python.train_mlp_classify_skzm.executor": "Debug",
-    "Python.train_mlp_classify_wingtra.executor": "Debug",
-    "Python.train_mlp_classify_wouav.executor": "Debug",
-    "Python.train_mlp_classify_wuav (1).executor": "Debug",
-    "Python.train_mlp_classify_wuav (2).executor": "Debug",
-    "Python.train_mlp_classify_wuav.executor": "Debug",
-    "Python.train_mlp_classify_xmu.executor": "Debug",
-    "Python.train_v1.executor": "Debug",
-    "Python.train_v2.executor": "Debug",
-    "Python.train_v3.executor": "Debug",
-    "Python.trainer_neuloc.executor": "Debug",
-    "Python.trainer_neuloc_CL_INGP_wo_sampling.executor": "Debug",
-    "Python.trainer_neuloc_CL_multi_scene.executor": "Debug",
-    "Python.trainer_neuloc_CL_multi_scene_hashfit.executor": "Debug",
-    "Python.trainer_neuloc_CL_multi_scene_hashfit_metricnet (1).executor": "Debug",
-    "Python.trainer_neuloc_CL_multi_scene_hashfit_metricnet.executor": "Debug",
-    "Python.trainer_neuloc_CL_single_scene.executor": "Debug",
-    "Python.trainer_neuloc_CL_wo_sampling.executor": "Debug",
-    "Python.trainer_neuloc_INGP_MetricNet.executor": "Debug",
-    "Python.trainer_neuloc_INGP_TUDF.executor": "Debug",
-    "Python.trainer_neuloc_INGP_TUDF_resort.executor": "Debug",
-    "Python.trainer_neuloc_INGP_TUDF_samplingReinforce.executor": "Debug",
-    "Python.trainer_neuloc_INGP_fit_agg.executor": "Debug",
-    "Python.trainer_neuloc_ingp.executor": "Debug",
-    "Python.trainer_neuloc_ingp_CL.executor": "Debug",
-    "Python.trainer_neuloc_ingp_CL_wo_sampling.executor": "Debug",
-    "Python.trainer_neuloc_ingp_hashfit.executor": "Debug",
-    "Python.trainer_occloc.executor": "Debug",
-    "Python.trainer_retrival_relrot.executor": "Debug",
-    "Python.trainer_retrival_relrot_wingtra.executor": "Run",
-    "Python.trainer_skzm.executor": "Debug",
-    "Python.transform_raster_coords.executor": "Debug",
-    "Python.transfrom_raster_proj.executor": "Run",
-    "Python.util_analyze_pred3d.executor": "Debug",
-    "Python.util_analyze_stage2_training.executor": "Run",
-    "Python.util_async_sampler.executor": "Run",
-    "Python.util_clean_ckpt (1).executor": "Run",
-    "Python.util_clean_ckpt.executor": "Run",
-    "Python.util_clean_logs.executor": "Run",
-    "Python.util_empty_ckpt.executor": "Run",
-    "Python.util_gaussian_importance_sampler.executor": "Debug",
-    "Python.util_gen_pose_samples.executor": "Run",
-    "Python.util_hierarchical_coord_sampler.executor": "Run",
-    "Python.util_hierarchical_coord_sampler2.executor": "Run",
-    "Python.util_histogram_filter_3d.executor": "Debug",
-    "Python.util_mk_optimizer.executor": "Debug",
-    "Python.util_sample_neg_nrcs.executor": "Debug",
-    "Python.util_stage3_multi_start_CMAES_by_evotorch.executor": "Debug",
-    "Python.util_verify_dataset_4d_coords_range (1).executor": "Run",
-    "Python.util_verify_dataset_4d_coords_range.executor": "Run",
-    "Python.util_vis_4d_fields.executor": "Run",
-    "Python.util_vis_4d_fields_in_3dp.executor": "Debug",
-    "Python.util_vis_dataset_rot.executor": "Run",
-    "Python.util_vis_feat_diffrot.executor": "Run",
-    "Python.util_visualize_grid_and_uav_points.executor": "Debug",
-    "Python.util_visualize_hierarchical_sampler_with_real_data.executor": "Debug",
-    "Python.util_weight_annealing.executor": "Run",
-    "Python.utils.executor": "Run",
-    "Python.utils_multscale_crop.executor": "Run",
-    "Python.verify_4d_coords_range.executor": "Debug",
-    "Python.video_fm_pred3d.executor": "Run",
-    "Python.vis_imgs.executor": "Debug",
-    "Python.vis_loc_res.executor": "Debug",
-    "Python.vis_opt.executor": "Run",
-    "Python.vis_opt_paritcles_v2.executor": "Run",
-    "Python.vis_opt_particles.executor": "Run",
-    "Python.vis_opt_plot.executor": "Run",
-    "Python.vision_transformer.executor": "Run",
-    "Python.visualize_grid_and_uav_points.executor": "Run",
-    "Python.weight_annealing.executor": "Run",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "SHELLCHECK.PATH": "/root/.local/share/JetBrains/PyCharm2024.2/Shell Script/shellcheck",
-    "Shell Script.eval_stage2_galllery_batch.sh.executor": "Run",
-    "Shell Script.eval_stage2_galllery_batch_visloc03.sh.executor": "Run",
-    "Shell Script.mk_split.sh.executor": "Run",
-    "Shell Script.run_multi_stages.sh.executor": "Run",
-    "Shell Script.run_same_stage.sh.executor": "Run",
-    "Shell Script.run_stage.sh.executor": "Run",
-    "Shell Script.run_stage1_test.sh.executor": "Run",
-    "Shell Script.run_stage1_visual_encoder_w_ANCE.sh.executor": "Run",
-    "Shell Script.run_stage3_batch.sh.executor": "Run",
-    "Shell Script.run_stage3_test_best_stage2_wreject.sh.executor": "Run",
-    "ai.playground.ignore.import.keys.banner.in.settings": "true",
-    "git-widget-placeholder": "master",
-    "last_opened_file_path": "/home/data/zwk/pyproj_neuloc_v0/trainer_depends/configs",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "com.android.studio.ml.bot.mainConfigurable",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Python tests.Doctests in analyze_pred3d.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests for util_visualize_hierarchical_sampler_with_real_data.test_multiple_samples.executor&quot;: &quot;Debug&quot;,
+    &quot;Python tests.Python tests in stage3_bpf_proxy_linearProjector.py.executor&quot;: &quot;Debug&quot;,
+    &quot;Python tests.Python tests in stage3_metric_net_dual_rankloss.py.executor&quot;: &quot;Debug&quot;,
+    &quot;Python tests.Python tests in util_sample_neg_nrcs.py.executor&quot;: &quot;Debug&quot;,
+    &quot;Python tests.Python tests in util_visualize_hierarchical_sampler_with_real_data.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python tests.Python tests in visualize_hierarchical_sampler_with_real_data.py.executor&quot;: &quot;Run&quot;,
+    &quot;Python.WeightedSoftTripletLoss.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.WeightedSoftTripletLoss_fm_mat.executor&quot;: &quot;Debug&quot;,
+    &quot;Python._utils.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.analyze_feature_rotation_sensitivity.executor&quot;: &quot;Run&quot;,
+    &quot;Python.analyze_feature_translation_sensitivity.executor&quot;: &quot;Run&quot;,
+    &quot;Python.analyze_grid_rotation_sensitivity.executor&quot;: &quot;Run&quot;,
+    &quot;Python.analyze_pred3d.executor&quot;: &quot;Run&quot;,
+    &quot;Python.analyze_raster.executor&quot;: &quot;Run&quot;,
+    &quot;Python.analyze_raster_v1.executor&quot;: &quot;Run&quot;,
+    &quot;Python.analyze_response_field.executor&quot;: &quot;Run&quot;,
+    &quot;Python.analyze_translation_sensitivity.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.ance_core.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.backbone.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.batch_draw_gt_arrow_on_stage3_results.executor&quot;: &quot;Run&quot;,
+    &quot;Python.clip_raster_by_extent.executor&quot;: &quot;Run&quot;,
+    &quot;Python.compute_imgs_mean_std.executor&quot;: &quot;Run&quot;,
+    &quot;Python.cond_modulator_shallow_serial.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.convnext.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.dataloader.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.dataset_gta_eval.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.dataset_map_learner_nrc_topleft.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.dataset_map_learner_skzm.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.dataset_neuloc_4d.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.dataset_satmap_wingtra.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.dataset_visloc_4d.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.dataset_visloc_4d_uav_sat_pair.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.dataset_wingtra_4d.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.dataset_wingtra_4d_uav_sat_pair.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.demo_ance.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.downsample_raster.executor&quot;: &quot;Run&quot;,
+    &quot;Python.eval_gta.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.evaluate_dslad (1).executor&quot;: &quot;Run&quot;,
+    &quot;Python.evaluate_dslad.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.evaluate_filter_inference.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.evaluate_filter_inference_wo_rot.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.evaluate_filter_inference_wo_sg.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.evaluate_retrieval.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.evaluate_xy_relrot.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.example_use_async_sampler.executor&quot;: &quot;Run&quot;,
+    &quot;Python.export_stage2_progressive_gallery_metrics.executor&quot;: &quot;Run&quot;,
+    &quot;Python.gen_pose_samples.executor&quot;: &quot;Run&quot;,
+    &quot;Python.get_img_encoder.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.histogram_filter_3d.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.infer_w_histFilter_fm_3dpdf.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.main_infer_w_histFilter_fm_3dpdf.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.make_dataloader_dsalad.executor&quot;: &quot;Run&quot;,
+    &quot;Python.make_dataloader_dsalad_v1.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.make_dataloader_game4loc.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.make_dataloader_gta.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.make_dataloader_wingtra.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.make_dataloader_xmu_nrc_topleft.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.make_dataloder_dsalad.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.make_dataloder_rcl.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.make_optimizer.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.merge_rasters.executor&quot;: &quot;Run&quot;,
+    &quot;Python.metirc_net.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.metric_net_dual.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.mission_create_onxx.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.mk_dataloader_skzm.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.mk_gta_transform.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.phone_uavimgs_handler.executor&quot;: &quot;Run&quot;,
+    &quot;Python.plot_acc_vs_store.executor&quot;: &quot;Run&quot;,
+    &quot;Python.plt_sin.executor&quot;: &quot;Run&quot;,
+    &quot;Python.projector_coord_modulation.executor&quot;: &quot;Run&quot;,
+    &quot;Python.read_droneimg.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.read_satimg.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.run_stage1_with_overrides.executor&quot;: &quot;Run&quot;,
+    &quot;Python.run_stage2_with_overrides.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.salad.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.save_raster_info.executor&quot;: &quot;Run&quot;,
+    &quot;Python.stage1_visual_encoder.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage1_visual_encoder_controlexps.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage1_visual_encoder_minimal.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage1_visual_encoder_wANCE.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage1_visual_encoder_w_ANCE.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage1_visual_encoder_w_bank.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage2_INGP.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage2_INGP_minimal.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage2_grid_hashfit.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage2_grid_hashfit_v1.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_bpf_proxy.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_bpf_proxy_linearProjector.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_bpf_proxy_linearProjector_wANCE.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_bpf_proxy_linearProjector_wANCE_evotorch.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_bpf_proxy_manifold.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_ingp_inferencer_minimal.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_metric_net.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_metric_net_dual.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_metric_net_dual_rankloss.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_metric_net_dual_rankloss_only.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_occ_net_dual.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_project_integrateRot_classify.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_project_integrateRot_classify_uncertity.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.stage3_proxy_linearProjector_wANCE_evotorch.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.taskflow.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.test_crop.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.test_crop_cpp.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.test_relrot.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.test_retrival_relrot.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.test_rotation.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.test_tncc.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.test_wsg.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.tif_cliper.executor&quot;: &quot;Run&quot;,
+    &quot;Python.tif_img_handler.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.tif_reader.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_dsalad.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_dsalad_v1.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_mlp.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_mlp_classify.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_mlp_classify_skzm.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_mlp_classify_wingtra.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_mlp_classify_wouav.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_mlp_classify_wuav (1).executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_mlp_classify_wuav (2).executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_mlp_classify_wuav.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_mlp_classify_xmu.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_v1.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_v2.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.train_v3.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_CL_INGP_wo_sampling.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_CL_multi_scene.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_CL_multi_scene_hashfit.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_CL_multi_scene_hashfit_metricnet (1).executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_CL_multi_scene_hashfit_metricnet.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_CL_single_scene.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_CL_wo_sampling.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_INGP_MetricNet.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_INGP_TUDF.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_INGP_TUDF_resort.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_INGP_TUDF_samplingReinforce.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_INGP_fit_agg.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_ingp.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_ingp_CL.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_ingp_CL_wo_sampling.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_neuloc_ingp_hashfit.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_occloc.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_retrival_relrot.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.trainer_retrival_relrot_wingtra.executor&quot;: &quot;Run&quot;,
+    &quot;Python.trainer_skzm.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.transform_raster_coords.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.transfrom_raster_proj.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_analyze_pred3d.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.util_analyze_stage2_training.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_async_sampler.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_clean_ckpt (1).executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_clean_ckpt.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_clean_logs.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_empty_ckpt.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_gaussian_importance_sampler.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.util_gen_pose_samples.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_hierarchical_coord_sampler.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_hierarchical_coord_sampler2.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_histogram_filter_3d.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.util_mk_optimizer.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.util_sample_neg_nrcs.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.util_stage3_multi_start_CMAES_by_evotorch.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.util_verify_dataset_4d_coords_range (1).executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_verify_dataset_4d_coords_range.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_vis_4d_fields.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_vis_4d_fields_in_3dp.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.util_vis_dataset_rot.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_vis_feat_diffrot.executor&quot;: &quot;Run&quot;,
+    &quot;Python.util_visualize_grid_and_uav_points.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.util_visualize_hierarchical_sampler_with_real_data.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.util_weight_annealing.executor&quot;: &quot;Run&quot;,
+    &quot;Python.utils.executor&quot;: &quot;Run&quot;,
+    &quot;Python.utils_multscale_crop.executor&quot;: &quot;Run&quot;,
+    &quot;Python.verify_4d_coords_range.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.video_fm_pred3d.executor&quot;: &quot;Run&quot;,
+    &quot;Python.vis_imgs.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.vis_loc_res.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.vis_opt.executor&quot;: &quot;Run&quot;,
+    &quot;Python.vis_opt_paritcles_v2.executor&quot;: &quot;Run&quot;,
+    &quot;Python.vis_opt_particles.executor&quot;: &quot;Run&quot;,
+    &quot;Python.vis_opt_plot.executor&quot;: &quot;Run&quot;,
+    &quot;Python.vision_transformer.executor&quot;: &quot;Run&quot;,
+    &quot;Python.visualize_grid_and_uav_points.executor&quot;: &quot;Run&quot;,
+    &quot;Python.weight_annealing.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;SHELLCHECK.PATH&quot;: &quot;/root/.local/share/JetBrains/PyCharm2024.2/Shell Script/shellcheck&quot;,
+    &quot;Shell Script.eval_stage2_galllery_batch.sh.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.eval_stage2_galllery_batch_visloc03.sh.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.mk_split.sh.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.run_multi_stages.sh.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.run_same_stage.sh.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.run_stage.sh.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.run_stage1_test.sh.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.run_stage1_visual_encoder_w_ANCE.sh.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.run_stage3_batch.sh.executor&quot;: &quot;Run&quot;,
+    &quot;Shell Script.run_stage3_test_best_stage2_wreject.sh.executor&quot;: &quot;Run&quot;,
+    &quot;ai.playground.ignore.import.keys.banner.in.settings&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/home/data/zwk/pyproj_neuloc_v0/trainer_depends/configs&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;com.android.studio.ml.bot.mainConfigurable&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="PyConsoleOptionsProvider">
     <option name="myPythonConsoleState">
       <console-settings>
@@ -367,7 +371,7 @@
       <window_info id="Commit_Guest" show_stripe_button="false" />
       <window_info id="Pull Requests" />
       <window_info id="Learn" show_stripe_button="false" />
-      <window_info active="true" content_ui="combo" id="Project" order="0" sideWeight="0.6479501" visible="true" weight="0.28515625" />
+      <window_info active="true" content_ui="combo" id="Project" order="0" sideWeight="0.7087629" visible="true" weight="0.27578124" />
       <window_info id="Commit" order="1" sideWeight="0.5009091" weight="0.29453126" />
       <window_info active="true" id="Structure" order="2" sideWeight="0.35204992" side_tool="true" visible="true" weight="0.28515625" />
       <window_info anchor="bottom" id="Database Changes" />
@@ -376,7 +380,7 @@
       <window_info anchor="bottom" id="HfCacheToolWindow" />
       <window_info anchor="bottom" id="File Transfer" />
       <window_info anchor="bottom" id="PythonProcessOutput" order="0" weight="0.32740384" />
-      <window_info active="true" anchor="bottom" x="-1350" y="136" width="1345" height="1039" id="Terminal" order="1" type="WINDOWED" visible="true" weight="0.39375" />
+      <window_info anchor="bottom" x="-1505" y="137" width="1503" height="1025" id="Terminal" order="1" type="WINDOWED" visible="true" weight="0.41490385" />
       <window_info anchor="bottom" id="Version Control" order="2" weight="0.39759615" />
       <window_info anchor="bottom" id="Problems" order="3" />
       <window_info anchor="bottom" id="Problems View" order="4" weight="0.39951923" />
@@ -385,8 +389,9 @@
       <window_info anchor="bottom" id="Python Console" order="7" weight="0.3985577" />
       <window_info active="true" anchor="bottom" id="Debug" order="8" visible="true" weight="0.39375" />
       <window_info anchor="bottom" id="Messages" order="9" weight="0.32218993" />
-      <window_info anchor="bottom" id="Run" order="9" weight="0.43125" />
-      <window_info anchor="bottom" id="Find" order="10" weight="0.43028846" />
+      <window_info anchor="bottom" id="Run" order="10" weight="0.43125" />
+      <window_info anchor="bottom" id="Find" order="11" weight="0.43028846" />
+      <window_info anchor="right" id="PR AI Assistant" />
       <window_info anchor="right" id="Endpoints" />
       <window_info anchor="right" id="StudioBot" />
       <window_info anchor="right" id="documentation.v2" show_stripe_button="false" side_tool="true" />
@@ -1333,6 +1338,7 @@
     </breakpoint-manager>
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$analyze_stage3_coarse_alias_metrics.coverage" NAME="analyze_stage3_coarse_alias_metrics Coverage Results" MODIFIED="1778473546508" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/scripts/eval_analysis" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_gaussian_importance_sampler.coverage" NAME="util_gaussian_importance_sampler Coverage Results" MODIFIED="1768484777568" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/utils" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_analyze_pred3d.coverage" NAME="util_analyze_pred3d Coverage Results" MODIFIED="1770022854604" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_vis_feat_diffrot.coverage" NAME="util_vis_feat_diffrot Coverage Results" MODIFIED="1766138359560" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/datasets" />
@@ -1348,6 +1354,7 @@
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$train_mlp_classify.coverage" NAME="train_mlp_classify_wouav Coverage Results" MODIFIED="1751115811279" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_mlp_map" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$trainer_neuloc_INGP_fit_agg.coverage" NAME="trainer_neuloc_INGP_fit_agg Coverage Results" MODIFIED="1764746176793" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_img_encoder/legacy" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad$taskflow.coverage" NAME="taskflow Coverage Results" MODIFIED="1747578358443" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/models" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$analyze_stage3_basin_metrics.coverage" NAME="analyze_stage3_basin_metrics Coverage Results" MODIFIED="1778483747178" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/scripts/eval_analysis" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$trainer_neuloc_ingp.coverage" NAME="trainer_neuloc_ingp Coverage Results" MODIFIED="1758877661454" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_img_encoder" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$trainer_retrival_relrot_wingtra.coverage" NAME="trainer_retrival_relrot_wingtra Coverage Results" MODIFIED="1757493015693" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage3_metric_net_dual_rankloss_only.coverage" NAME="stage3_metric_net_dual_rankloss_only Coverage Results" MODIFIED="1766133034411" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
@@ -1364,6 +1371,7 @@
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$dataset_map_learner_nrc_topleft.coverage" NAME="dataset_map_learner_nrc_topleft Coverage Results" MODIFIED="1751791296541" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_mlp_map" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$trainer_neuloc_ingp_CL_wo_sampling.coverage" NAME="trainer_neuloc_ingp_CL_wo_sampling Coverage Results" MODIFIED="1759903760375" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_img_encoder" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$compute_imgs_mean_std.coverage" NAME="compute_imgs_mean_std Coverage Results" MODIFIED="1766503228722" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/../pyproj_pylib_zwk/uavloc_datahandler" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_analyze_stage3_coarse_alias_metrics_runner.coverage" NAME="util_analyze_stage3_coarse_alias_metrics_runner Coverage Results" MODIFIED="1778852737933" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_vis_dataset_rot.coverage" NAME="util_vis_dataset_rot Coverage Results" MODIFIED="1766119777004" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/datasets" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$make_dataloader_gta.coverage" NAME="make_dataloader_gta Coverage Results" MODIFIED="1752654134296" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/datasets_custom" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$trainer_neuloc.coverage" NAME="trainer_neuloc Coverage Results" MODIFIED="1758730349064" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_img_encoder" />
@@ -1379,7 +1387,7 @@
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad$make_dataloader_dsalad_v1.coverage" NAME="make_dataloader_dsalad_v1 Coverage Results" MODIFIED="1743495552136" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/datasets_custom" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$visualize_grid_and_uav_points.coverage" NAME="visualize_grid_and_uav_points Coverage Results" MODIFIED="1767519044267" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/tool" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$trainer_neuloc_CL_multi_scene_hashfit_metricnet.coverage" NAME="trainer_neuloc_CL_multi_scene_hashfit_metricnet Coverage Results" MODIFIED="1764926317963" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_img_encoder/legacy" />
-    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$dataset_neuloc_4d.coverage" NAME="dataset_neuloc_4d Coverage Results" MODIFIED="1778312781215" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/datasets" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$dataset_neuloc_4d.coverage" NAME="dataset_neuloc_4d Coverage Results" MODIFIED="1778321751740" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/datasets" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$WeightedSoftTripletLoss_fm_mat.coverage" NAME="WeightedSoftTripletLoss_fm_mat Coverage Results" MODIFIED="1759415903687" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/losses" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$weight_annealing.coverage" NAME="util_weight_annealing Coverage Results" MODIFIED="1765178133736" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/utils" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$plt_sin.coverage" NAME="plt_sin Coverage Results" MODIFIED="1776176372732" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/fine_vis4paper" />
@@ -1409,6 +1417,7 @@
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_async_sampler.coverage" NAME="util_async_sampler Coverage Results" MODIFIED="1761210031235" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_img_encoder" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$merge_rasters.coverage" NAME="merge_rasters Coverage Results" MODIFIED="1757910721070" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/../pyproj_pylib_zwk/raster_handler" />
     <SUITE FILE_PATH="coverage/pyproj_RCL$make_dataloder_rcl.coverage" NAME="make_dataloder_rcl Coverage Results" MODIFIED="1742376701887" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/datasets_custom" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$analyze_stage3_landscape_correctness_binding.coverage" NAME="analyze_stage3_landscape_correctness_binding Coverage Results" MODIFIED="1779014444626" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/scripts/eval_analysis" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$tif_reader.coverage" NAME="tif_reader Coverage Results" MODIFIED="1752389607489" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/../pyproj_pylib_zwk/uavloc_datahandler" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$dataset_visloc_4d.coverage" NAME="dataset_visloc_4d Coverage Results" MODIFIED="1769674990456" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/datasets" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage3_metric_net_dual_rankloss.coverage" NAME="stage3_metric_net_dual_rankloss Coverage Results" MODIFIED="1766127694734" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
@@ -1421,6 +1430,7 @@
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$train_mlp_classify_wuav__2_.coverage" NAME="train_mlp_classify_wuav (2) Coverage Results" MODIFIED="1753264033238" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_map_mutimlp_skzm" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$save_raster_info.coverage" NAME="save_raster_info Coverage Results" MODIFIED="1754406488648" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/../pyproj_pylib_zwk/uavloc_datahandler" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$trainer_neuloc_CL_multi_scene_hashfit.coverage" NAME="trainer_neuloc_CL_multi_scene_hashfit Coverage Results" MODIFIED="1761753815257" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_img_encoder" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_stage1_landscape_analyzer_runner.coverage" NAME="util_stage1_landscape_analyzer_runner Coverage Results" MODIFIED="1779347200559" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$histogram_filter_3d.coverage" NAME="histogram_filter_3d Coverage Results" MODIFIED="1768812987855" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$ance_core.coverage" NAME="ance_core Coverage Results" MODIFIED="1769742923390" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/miners" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$analyze_feature_rotation_sensitivity.coverage" NAME="analyze_feature_rotation_sensitivity Coverage Results" MODIFIED="1766247269980" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
@@ -1464,16 +1474,16 @@
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage3_ingp_inferencer_minimal.coverage" NAME="stage3_ingp_inferencer_minimal Coverage Results" MODIFIED="1778311525766" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$utils.coverage" NAME="utils Coverage Results" MODIFIED="1751643137983" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/tool" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$demo_ance.coverage" NAME="demo_ance Coverage Results" MODIFIED="1769661418682" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/miners" />
-    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage1_visual_encoder_minimal.coverage" NAME="stage1_visual_encoder_minimal Coverage Results" MODIFIED="1778312001122" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage1_visual_encoder_minimal.coverage" NAME="stage1_visual_encoder_minimal Coverage Results" MODIFIED="1778321897436" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage1_visual_encoder_w_ANCE.coverage" NAME="stage1_visual_encoder_w_ANCE Coverage Results" MODIFIED="1775315673833" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage3_proxy_linearProjector_wANCE_evotorch.coverage" NAME="stage3_proxy_linearProjector_wANCE_evotorch Coverage Results" MODIFIED="1778142709178" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$dataloader.coverage" NAME="dataloader Coverage Results" MODIFIED="1751895331607" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$USER_HOME$/miniconda3/envs/denseuav_gdal_py39_onxx/lib/python3.9/site-packages/torch/utils/data" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$clip_raster_by_extent.coverage" NAME="clip_raster_by_extent Coverage Results" MODIFIED="1757911000394" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/../pyproj_pylib_zwk/raster_handler" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$transform_raster_coords.coverage" NAME="transform_raster_coords Coverage Results" MODIFIED="1755676744706" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/../pyproj_pylib_zwk/uavloc_datahandler" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad$make_dataloader_dsalad.coverage" NAME="make_dataloader_dsalad Coverage Results" MODIFIED="1743659940197" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/datasets_custom" />
-    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_clean_ckpt.coverage" NAME="util_clean_ckpt Coverage Results" MODIFIED="1778210623237" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/tool" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_clean_ckpt.coverage" NAME="util_clean_ckpt Coverage Results" MODIFIED="1779346252680" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/tool" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$downsample_raster.coverage" NAME="downsample_raster Coverage Results" MODIFIED="1757910853497" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/../pyproj_pylib_zwk/raster_handler" />
-    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage2_INGP_minimal.coverage" NAME="stage2_INGP_minimal Coverage Results" MODIFIED="1778309261366" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage2_INGP_minimal.coverage" NAME="stage2_INGP_minimal Coverage Results" MODIFIED="1778323287054" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$vis_opt_particles.coverage" NAME="vis_opt_particles Coverage Results" MODIFIED="1776332236666" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/fine_vis4paper" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$make_dataloader_game4loc.coverage" NAME="make_dataloader_game4loc Coverage Results" MODIFIED="1752571189240" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/datasets_custom" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage1_visual_encoder.coverage" NAME="stage1_visual_encoder Coverage Results" MODIFIED="1769658692051" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
@@ -1493,6 +1503,7 @@
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$get_img_encoder.coverage" NAME="get_img_encoder Coverage Results" MODIFIED="1751961989826" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_mlp_map" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$make_dataloader_xmu_nrc_topleft.coverage" NAME="make_dataloader_xmu_nrc_topleft Coverage Results" MODIFIED="1752649463277" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/datasets_custom" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$trainer_neuloc_INGP_MetricNet.coverage" NAME="trainer_neuloc_INGP_MetricNet Coverage Results" MODIFIED="1761190229003" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_img_encoder" />
+    <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage3_ingp_inferencer.coverage" NAME="stage3_ingp_inferencer Coverage Results" MODIFIED="1779014283171" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$stage3_bpf_proxy_manifold.coverage" NAME="stage3_bpf_proxy_manifold Coverage Results" MODIFIED="1768716699460" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainers" />
     <SUITE FILE_PATH="coverage/pyproj_DUAV_salad_6_4$dataset_map_learner_skzm.coverage" NAME="dataset_map_learner_skzm Coverage Results" MODIFIED="1753246765009" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/train_map_mutimlp_skzm" />
     <SUITE FILE_PATH="coverage/pyproj_neuloc_v0$util_verify_dataset_4d_coords_range.coverage" NAME="util_verify_dataset_4d_coords_range Coverage Results" MODIFIED="1773134302016" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/trainer_depends/datasets" />

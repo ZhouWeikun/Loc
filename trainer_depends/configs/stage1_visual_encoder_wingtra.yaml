@@ -1,0 +1,97 @@
+exp_setting:
+  dir2save_log: gen_fm_exps/logs
+  dir2save_ckpt: gen_fm_exps/ckpts
+  exp_name: stage1_wingtra_debug
+  save_freq: 1
+  tensorboard: True
+  val: True
+  val_freq: 1
+
+  # load2test: 继续训练或测试时加载的checkpoint（字符串路径）
+  load2test: ""
+
+  # load2train: 继续训练时加载的checkpoint（字符串路径）
+  load2train: ""
+
+# ==================== 数据加载配置 ====================
+data_setting:
+  pad_mode: "zeros" #"zeros" or
+  imgsize2net: 224
+  satimgsize2crop: 244   #satimgsize2crop：res02m:zuchwil=540,zurich=614; res03m:zuchwil=400; res05m:zurich=224
+  add_random_satimg_negs: True
+  reject_sampling: False
+  reject_batch_aware: False
+  pair_alignment_mode: full_4d
+  n_rand2sample_per_pos: 256 #16
+  sat_as_query: False #sat_as_query数量=batchsize_uav
+  split_train_ratio: 0.9
+  split_mode: interval
+
+# ==================== 场景配置 ====================
+# 场景列表（支持任意数量）：
+# - 当列表只有1个场景时，程序自动使用单场景模式
+# - 当列表有多个场景时，程序自动使用多场景模式
+# 采样策略（仅在多场景时生效）：
+# - "round_robin": 循环轮流采样各场景
+# - "random": 随机选择场景
+# - "weighted": 根据场景权重加权采样
+scenes_setting:
+  sampling_strategy: "weighted"
+  # 场景列表（变长）
+  dataset_name: wingtra
+  scenes:
+    - name: "zurich"
+      p_satinfo_json: /path/to/wingtra/zurich/satellite_info.json
+      p_uavinfo_json: /path/to/wingtra/zurich/uav_metadata.json
+      p_uav_geocsv: /path/to/wingtra/zurich/uav_geo.csv
+    - name: "zuchwil"
+      p_satinfo_json: /path/to/wingtra/zuchwil/satellite_info.json
+      p_uavinfo_json: /path/to/wingtra/zuchwil/uav_metadata.json
+      p_uav_geocsv: /path/to/wingtra/zuchwil/uav_geo.csv
+    # 添加更多场景（如果需要），只需继续添加列表项即可
+hardware_setting:
+#  batchsize_sat: 768 #batchsize_uav的整数倍
+#  batchsize_uav: 64
+  batchsize_sat: 384 #batchsize_uav的整数倍
+  batchsize_uav: 32
+  sat_as_query: False #sat_as_query数量=batchsize_uav
+  ance_enabled: False
+  autocast: True
+  gpu_ids: '0'
+  num_worker: 8
+
+learning_setting:
+  loss_type: triplet_loss #triplet_loss or infonce
+  num_epochs: 100
+  #when evaluating
+  val_overlap: 0.5
+  val_ref_wo_rot_var: True
+  val_ref_wo_scale_var: True
+  val_query_rot2uniform: True
+  val_query_scale2uniform: False
+
+
+network_setting:
+  backbone: dinov2
+  freeze_backbone: True
+  backbone_config:
+    num_trainable_blocks: 2
+
+  aggregator_type: salad
+  aggregator_config:
+    output_dim: 1024
+    cluster_dim: 64
+    hidden_layer_dim: 512
+    use_residual: True
+    with_dustbin: True
+
+  adapter_config:
+    enabled: True
+    normalize_before_aggregator: False
+    n_last_blocks_with_adapter: 4 #dinov2_vitb14 一共 12 个 blocks
+    bottleneck_dim: 64
+    attn_adapter: False
+    ffn_parallel_adapter: True
+    scale: 0.2
+    dropout: 0.0
+    init: zero_up

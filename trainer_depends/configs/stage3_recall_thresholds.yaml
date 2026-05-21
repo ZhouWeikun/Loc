@@ -1,0 +1,25 @@
+configs:
+  cfg01:
+    dist_lambda: 0.55
+    rot_th: 5.5
+    scale_ratio_th: 1.2
+  cfg02:
+    dist_th_meter: 100
+    rot_th: 10
+    scale_ratio_th: 1.2
+  cfg03:
+    dist_th_meter: 50
+    rot_th: 10
+    scale_ratio_th: 1.2
+  cfg04:
+    dist_th_meter: 25
+    rot_th: 10
+    scale_ratio_th: 1.2
+
+default: cfg01
+
+per_scene:
+  visloc_03: cfg02
+  visloc_04: cfg02
+  zuchwil: cfg03
+  zurich: cfg03

@@ -1,4 +1,7 @@
 # Continuloc Minimal V1 File Set
+<p align="center">
+  <img src="./ContinuLoc.png" width="200">
+</p>
 
 This branch keeps the smallest complete code path for the three-stage INGP
 pipeline. The anchor entrypoints are:

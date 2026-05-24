@@ -71,6 +71,20 @@ python trainers/stage3_ingp_inferencer_minimal.py \
 
 The inference entrypoint reports progressive recall for global exploration, population contraction, and local refinement.
 
+Example inference results:
+
+<p align="center">
+  <img src="./search_taizhou03.png" alt="ContinuLoc inference result on Taizhou" width="100%">
+  <br>
+  <em>Taizhou scene.</em>
+</p>
+
+<p align="center">
+  <img src="./search_zurich.png" alt="ContinuLoc inference result on Zurich" width="100%">
+  <br>
+  <em>Zurich scene.</em>
+</p>
+
 ## Configuration
 
 Common configuration files:
